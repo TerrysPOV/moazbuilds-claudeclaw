@@ -16,6 +16,9 @@
   <a href="https://github.com/moazbuilds/ClaudeClaw/issues">
     <img src="https://img.shields.io/github/issues/moazbuilds/ClaudeClaw?style=flat-square" alt="Open Issues" />
   </a>
+  <a href="https://x.com/moazbuilds">
+    <img src="https://img.shields.io/badge/X-%40moazbuilds-000000?style=flat-square&logo=x" alt="X @moazbuilds" />
+  </a>
 </p>
 
 <p align="center"><b>A lightweight, open-source OpenClaw version built into your Claude Code.</b></p>
