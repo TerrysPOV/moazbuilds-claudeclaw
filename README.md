@@ -59,7 +59,11 @@ The setup wizard walks you through model, heartbeat, Telegram, and security, the
 > **Mega Post:** Help shape the next ClaudeClaw features.
 > Vote, suggest ideas, and discuss priorities in **[this post](https://github.com/moazbuilds/claudeclaw/issues/14)**.
 
-[![Roadmap Discussion](https://img.shields.io/badge/Roadmap-Mega%20Post-blue?style=for-the-badge&logo=github)](https://github.com/moazbuilds/claudeclaw/issues/14)
+<p align="center">
+  <a href="https://github.com/moazbuilds/claudeclaw/issues/14">
+    <img src="https://img.shields.io/badge/Roadmap-Mega%20Post-blue?style=for-the-badge&logo=github" alt="Roadmap Mega Post" />
+  </a>
+</p>
 
 ## Features
 
