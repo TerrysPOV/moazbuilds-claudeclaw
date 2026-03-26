@@ -1011,30 +1011,102 @@ export const pageScript = String.raw`    const $ = (id) => document.getElementBy
       if (chatAbortController) chatAbortController.abort();
     }
 
+    function createChatEmptyState() {
+      var empty = document.createElement("div");
+      empty.className = "chat-empty";
+      empty.textContent = "Send a message to start chatting with the daemon.";
+      return empty;
+    }
+
+    function createChatMessageEl() {
+      var msgEl = document.createElement("div");
+      var roleEl = document.createElement("div");
+      roleEl.className = "chat-msg-role";
+      var textEl = document.createElement("div");
+      textEl.className = "chat-msg-text";
+      msgEl.appendChild(roleEl);
+      msgEl.appendChild(textEl);
+      return msgEl;
+    }
+
+    function syncChatMessageEl(msgEl, msg, elapsedMs) {
+      var roleEl = msgEl.querySelector(".chat-msg-role");
+      var textEl = msgEl.querySelector(".chat-msg-text");
+      if (!roleEl || !textEl) {
+        msgEl.textContent = "";
+        roleEl = document.createElement("div");
+        roleEl.className = "chat-msg-role";
+        textEl = document.createElement("div");
+        textEl.className = "chat-msg-text";
+        msgEl.appendChild(roleEl);
+        msgEl.appendChild(textEl);
+      }
+
+      var cls = "chat-msg " + (msg.role === "user" ? "chat-msg-user" : "chat-msg-assistant");
+      if (msg.streaming) cls += " chat-msg-streaming";
+      msgEl.className = cls;
+      roleEl.textContent = msg.role === "user" ? "You" : "Claude";
+      textEl.textContent = msg.text || "";
+
+      var metaEl = msgEl.querySelector(".chat-msg-elapsed, .chat-msg-background");
+      if (msg.streaming && chatBusy) {
+        if (!metaEl || !metaEl.classList.contains("chat-msg-elapsed")) {
+          if (metaEl) metaEl.remove();
+          metaEl = document.createElement("div");
+          metaEl.className = "chat-msg-elapsed";
+          msgEl.appendChild(metaEl);
+        }
+        metaEl.textContent = fmtElapsed(elapsedMs);
+      } else if (msg.background) {
+        if (!metaEl || !metaEl.classList.contains("chat-msg-background")) {
+          if (metaEl) metaEl.remove();
+          metaEl = document.createElement("div");
+          metaEl.className = "chat-msg-background";
+          msgEl.appendChild(metaEl);
+        }
+        metaEl.textContent = "⚙ working in background...";
+      } else if (metaEl) {
+        metaEl.remove();
+      }
+    }
+
     function renderChatHistory() {
       if (!chatMessages) return;
       if (!chatHistory.length) {
-        chatMessages.innerHTML = '<div class="chat-empty">Send a message to start chatting with the daemon.</div>';
+        if (
+          chatMessages.children.length !== 1 ||
+          !chatMessages.firstElementChild ||
+          !chatMessages.firstElementChild.classList.contains("chat-empty")
+        ) {
+          chatMessages.textContent = "";
+          chatMessages.appendChild(createChatEmptyState());
+        }
         return;
       }
+
+      if (chatMessages.firstElementChild && chatMessages.firstElementChild.classList.contains("chat-empty")) {
+        chatMessages.textContent = "";
+      }
+
       var elapsedMs = Date.now() - chatStartedAt;
-      chatMessages.innerHTML = chatHistory.map(function(msg) {
-        var cls = "chat-msg " + (msg.role === "user" ? "chat-msg-user" : "chat-msg-assistant");
-        if (msg.streaming) cls += " chat-msg-streaming";
-        var meta = "";
-        if (msg.streaming && chatBusy) {
-          meta = '<div class="chat-msg-elapsed">' + fmtElapsed(elapsedMs) + "</div>";
-        } else if (msg.background) {
-          meta = '<div class="chat-msg-background">⚙ working in background...</div>';
+
+      for (var i = 0; i < chatHistory.length; i++) {
+        var msgEl = chatMessages.children[i];
+        if (!msgEl || !msgEl.classList.contains("chat-msg")) {
+          msgEl = createChatMessageEl();
+          if (i >= chatMessages.children.length) {
+            chatMessages.appendChild(msgEl);
+          } else {
+            chatMessages.insertBefore(msgEl, chatMessages.children[i]);
+          }
         }
-        return (
-          '<div class="' + cls + '">' +
-            '<div class="chat-msg-role">' + (msg.role === "user" ? "You" : "Claude") + "</div>" +
-            '<div class="chat-msg-text">' + (msg.text ? esc(msg.text) : "") + "</div>" +
-            meta +
-          "</div>"
-        );
-      }).join("");
+        syncChatMessageEl(msgEl, chatHistory[i], elapsedMs);
+      }
+
+      while (chatMessages.children.length > chatHistory.length) {
+        chatMessages.removeChild(chatMessages.lastElementChild);
+      }
+
       chatMessages.scrollTop = chatMessages.scrollHeight;
     }
 
