@@ -11,7 +11,7 @@
 |-------|------|--------|-------|
 | 0 | Project Initialization | ✅ Complete | 0 |
 | 1 | Event Bus | ✅ Complete | 5 |
-| 2 | Session Gateway | 🔄 In Progress | 1/4 |
+| 2 | Session Gateway | 🔄 In Progress | 2/4 |
 | 3 | Policy Engine | ⏳ Planned | 5 |
 | 4 | Cost Governance | ⏳ Planned | 4 |
 | 5 | Orchestration | ⏳ Planned | 3 |
@@ -49,7 +49,16 @@ None
 - 30 comprehensive unit tests passing
 - File: `.claude/claudeclaw/session-map.json`
 
+### 2026-03-27 — Phase 2 Plan 2 (2-02) Completion
+- NormalizedEvent schema implemented with Channel, Attachment types and type guards
+- seq field excluded from NormalizedEvent (belongs to event log, not normalizer)
+- Telegram channelId format: `telegram:<chat.id>`
+- Discord channelId preserves guild context: `discord:guild:<guild_id>:<channel_id>`
+- System actor userId = "system" for Cron/Webhook events
+- Sensitive webhook headers (authorization, cookie, x-api-key, x-auth) stripped from metadata
+- 44 tests covering all normalizers and edge cases
+
 ## Next Actions
 1. Execute Phase 2: Session Gateway
-2. Next plan: 2-02 — Normalized Event Schema
-3. Future: 2-03 — Resume Logic, 2-04 — Gateway Orchestrator
+2. Next plan: 2-03 — Resume Logic
+3. Future: 2-04 — Gateway Orchestrator
