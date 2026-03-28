@@ -29,7 +29,7 @@ progress:
 | 3 | Policy Engine | ✅ Complete | 1/1 |
 | 4 | Cost Governance | ✅ Complete | 2/2 |
 | 5 | Orchestration | ✅ Complete | 1/1 |
-| 6 | Human Escalation | ✅ Complete | 1/1 |
+| 6 | Human Escalation | ✅ Complete | 2/2 |
 | 7 | Additional Adapters | ✅ Complete | 1/1 |
 
 ## Decisions Log
@@ -129,6 +129,15 @@ progress:
   - status.ts: Read-side status view for operator dashboards
 - 129 unit tests covering all escalation components
 - Key patterns: Durable state persistence, audit logging, policy-driven triggers
+
+### 2026-03-28 — Phase 6 Plan 2 (6-02) Gap Closure
+- Wired escalation functions into gateway and orchestrator:
+  - shouldBlockAdmission() wired to Gateway.processInboundEvent()
+  - shouldBlockScheduling() wired to Orchestrator.executeReadyTasks()
+  - handleWatchdogTrigger() wired to Runner on watchdog kill/suspend
+  - handleOrchestrationFailure() wired to Executor on workflow failure
+- Created 15 integration tests for escalation wiring
+- 354 tests passing (129 escalation + 83 orchestrator + 127 gateway + 15 new integration)
 
 ### 2026-03-28 — Phase 7 Plan 1 (7-01) Completion
 - Adapter architecture package created at src/adapters/:
