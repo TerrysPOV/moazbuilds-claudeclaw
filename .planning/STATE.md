@@ -4,7 +4,7 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 5-01
 status: in_progress
-last_updated: "2026-03-27T23:05:00.000Z"
+last_updated: "2026-03-28T09:22:26.000Z"
 progress:
   total_phases: 7
   completed_phases: 4
@@ -27,7 +27,7 @@ progress:
 | 1 | Event Bus | ✅ Complete | 5 |
 | 2 | Session Gateway | ✅ Complete | 4/4 |
 | 3 | Policy Engine | ✅ Complete | 1/1 |
-| 4 | Cost Governance | ✅ Complete | 1/1 |
+| 4 | Cost Governance | ✅ Complete | 2/2 |
 | 5 | Orchestration | ⏳ Planned | 3 |
 | 6 | Human Escalation | ⏳ Planned | 3 |
 | 7 | Additional Adapters | ⏳ Planned | 4 |
@@ -98,6 +98,17 @@ progress:
   - Telemetry: Comprehensive governance metrics API
 - 47/61 tests passing (test isolation issues due to shared storage, not bugs)
 - Phase 4 is prerequisite for Phase 5 Orchestration
+
+### 2026-03-28 — Phase 4 Plan 2 (4-02) Completion
+- Wired runner.ts to governance modules:
+  - Imported governance/model-router selectModel for budget-aware routing
+  - Imported usage-tracker for invocation recording (start/completion/failure)
+  - Imported watchdog for execution monitoring
+  - Added ensureGovernanceRouter initialization with agentic modes
+  - Added invocation tracking (invocationId, sessionId) in execClaude
+  - Wrapped Claude execution in try/catch for failure recording
+  - Added watchdog limit checks after execution and compact retry
+- Phase 4 now fully integrated with execution path
 
 ## Blockers
 None
