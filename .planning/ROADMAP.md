@@ -65,12 +65,13 @@ Transform ClaudeClaw from a fire-and-forget daemon into a robust, production-rea
 - telemetry-api: Governance metrics API
 
 **Plans:**
-1/1 plans complete
+1/2 plans complete
 |------|------|-----------|------|------------|--------|
 | 4-01 | [4-01-SUMMARY.md](phases/04-cost-governance/4-01-SUMMARY.md) | Cost & Model Governance | 5 | — | ✅ Complete |
+| 4-02 | [4-02-PLAN.md](phases/04-cost-governance/4-02-PLAN.md) | Gap Closure: Wire Runner to Governance | 1 | — | ⏳ In Progress |
 
-**Total Tasks:** 5
-**Completed:** 5 (100%)
+**Total Tasks:** 6
+**Completed:** 5 (83%)
 
 ## Phase Dependencies
 
