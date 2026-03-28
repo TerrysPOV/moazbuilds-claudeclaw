@@ -2,11 +2,22 @@ import { mkdir, readFile, writeFile } from "fs/promises";
 import { join } from "path";
 import { existsSync } from "fs";
 import { getSession, createSession, incrementTurn, markCompactWarned } from "./sessions";
-import { getSettings, type ModelConfig, type SecurityConfig } from "./config";
+import { getSettings, type ModelConfig, type SecurityConfig, type AgenticMode } from "./config";
 import { buildClockPromptPrefix } from "./timezone";
-import { selectModel } from "./model-router";
+import { selectModel as governanceSelectModel, configureRouter as configureGovernanceRouter } from "./governance/model-router";
+import { recordInvocationStart, recordInvocationCompletion, recordInvocationFailure } from "./governance/usage-tracker";
+import { recordExecutionMetric, checkLimits, handleTrigger as watchdogHandleTrigger } from "./governance/watchdog";
 
 const LOGS_DIR = join(process.cwd(), ".claude/claudeclaw/logs");
+
+// Initialize governance router with agentic modes from settings
+let governanceInitialized = false;
+function ensureGovernanceRouter(modes?: AgenticMode[], defaultMode?: string): void {
+  if (!governanceInitialized && modes && defaultMode) {
+    configureGovernanceRouter({ modes, defaultMode, defaultProvider: "anthropic", defaultModel: "claude-3-5-sonnet" });
+    governanceInitialized = true;
+  }
+}
 // Resolve prompts relative to the claudeclaw installation, not the project dir
 const PROMPTS_DIR = join(import.meta.dir, "..", "prompts");
 const HEARTBEAT_PROMPT_FILE = join(PROMPTS_DIR, "heartbeat", "HEARTBEAT.md");
@@ -338,18 +349,39 @@ async function execClaude(name: string, prompt: string): Promise<RunResult> {
 
   const { security, model, api, fallback, agentic } = getSettings();
 
+  // Generate invocation ID for tracking
+  const invocationId = crypto.randomUUID();
+  const invocationSessionId = existing?.sessionId;
+
+  // Initialize watchdog metrics
+  await recordExecutionMetric({ invocationId, sessionId: invocationSessionId }, {});
+
   // Determine which model to use based on agentic routing
   let primaryConfig: ModelConfig;
   let taskType = "unknown";
   let routingReasoning = "";
 
   if (agentic.enabled) {
-    const routing = selectModel(prompt, agentic.modes, agentic.defaultMode);
-    primaryConfig = { model: routing.model, api };
-    taskType = routing.taskType;
-    routingReasoning = routing.reasoning;
+    ensureGovernanceRouter(agentic.modes, agentic.defaultMode);
+    const routing = await governanceSelectModel({
+      prompt,
+      taskType: agentic.defaultMode,
+      sessionId: existing?.sessionId,
+      channelId: undefined,
+      source: name,
+    });
+    primaryConfig = { model: routing.selectedModel, api: routing.selectedProvider === "openai" ? "" : api };
+    taskType = routing.reason;
+    routingReasoning = routing.reason;
+    // Handle budget block
+    if (routing.budgetState === "block") {
+      console.warn(`[${new Date().toLocaleTimeString()}] Execution blocked: budget limit exceeded`);
+      // Record failure and return
+      await recordInvocationFailure(invocationId, { type: "budget-blocked", message: `Budget state: ${routing.budgetState}` });
+      return { stdout: "", stderr: "Execution blocked: budget limit exceeded", exitCode: 0 };
+    }
     console.log(
-      `[${new Date().toLocaleTimeString()}] Agentic routing: ${routing.taskType} → ${routing.model} (${routing.reasoning})`
+      `[${new Date().toLocaleTimeString()}] Agentic routing: ${routing.selectedModel} (${routing.reason})`
     );
   } else {
     primaryConfig = { model, api };
@@ -403,7 +435,27 @@ async function execClaude(name: string, prompt: string): Promise<RunResult> {
   const { CLAUDECODE: _, ...cleanEnv } = process.env;
   const baseEnv = { ...cleanEnv } as Record<string, string>;
 
-  let exec = await runClaudeOnce(args, primaryConfig.model, primaryConfig.api, baseEnv, timeoutMs);
+  // Record invocation start
+  const invocationContext = {
+    sessionId: existing?.sessionId,
+    claudeSessionId: existing?.sessionId ?? null,
+    source: name,
+    channelId: undefined,
+    provider: primaryConfig.api || "anthropic",
+    model: primaryConfig.model,
+    metadata: { taskType, routingReasoning },
+  };
+  await recordInvocationStart(invocationContext);
+
+  let exec: { rawStdout: string; stderr: string; exitCode: number };
+  try {
+    exec = await runClaudeOnce(args, primaryConfig.model, primaryConfig.api, baseEnv, timeoutMs);
+  } catch (err) {
+    // Record failure
+    await recordInvocationFailure(invocationId, { type: "execution-error", message: err instanceof Error ? err.message : String(err) });
+    throw err;
+  }
+
   const primaryRateLimit = extractRateLimitMessage(exec.rawStdout, exec.stderr);
   let usedFallback = false;
 
@@ -413,6 +465,10 @@ async function execClaude(name: string, prompt: string): Promise<RunResult> {
     );
     exec = await runClaudeOnce(args, fallbackConfig.model, fallbackConfig.api, baseEnv, timeoutMs);
     usedFallback = true;
+    // If fallback also fails, record failure
+    if (extractRateLimitMessage(exec.rawStdout, exec.stderr)) {
+      await recordInvocationFailure(invocationId, { type: "rate-limit", message: "Both primary and fallback hit rate limit" });
+    }
   }
 
   const rawStdout = exec.rawStdout;
@@ -445,6 +501,16 @@ async function execClaude(name: string, prompt: string): Promise<RunResult> {
     stderr,
     exitCode,
   };
+
+  // Record successful completion
+  await recordInvocationCompletion(invocationId, undefined, undefined);
+
+  // Check watchdog limits
+  const watchdogDecision = await checkLimits({ invocationId, sessionId: invocationSessionId });
+  if (watchdogDecision.state === "suspend" || watchdogDecision.state === "kill") {
+    console.warn(`[${new Date().toLocaleTimeString()}] Watchdog ${watchdogDecision.state}: ${watchdogDecision.reason}`);
+    await watchdogHandleTrigger({ invocationId, sessionId: invocationSessionId }, watchdogDecision);
+  }
 
   const output = [
     `# ${name}`,
@@ -495,6 +561,12 @@ async function execClaude(name: string, prompt: string): Promise<RunResult> {
       if (retryExec.exitCode === 0) {
         const count = await incrementTurn();
         console.log(`[${new Date().toLocaleTimeString()}] Turn count: ${count} (after compact + retry)`);
+        // Check watchdog after successful retry
+        const retryWatchdogDecision = await checkLimits({ invocationId, sessionId: invocationSessionId });
+        if (retryWatchdogDecision.state === "suspend" || retryWatchdogDecision.state === "kill") {
+          console.warn(`[${new Date().toLocaleTimeString()}] Watchdog ${retryWatchdogDecision.state} after retry: ${retryWatchdogDecision.reason}`);
+          await watchdogHandleTrigger({ invocationId, sessionId: invocationSessionId }, retryWatchdogDecision);
+        }
       }
       return retryResult;
     }
