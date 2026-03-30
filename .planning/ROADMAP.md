@@ -18,7 +18,7 @@ Transform ClaudeClaw from a fire-and-forget daemon into a robust, production-rea
 | 8 | Policy Integration | 4 | ✅ Complete | 2026-03-30 |
 | 9 | Gateway Integration | Complete | 2026-03-30 | 2026-03-30 |
 | 10 | Orchestrator Governance Bridge | Complete    | 2026-03-30 | 2026-03-30 |
-| 11 | Re-verify Phase 3 Policy Engine | 1 | ✅ Complete | 2026-03-30 |
+| 11 | Re-verify Phase 3 Policy Engine | Complete    | 2026-03-30 | 2026-03-30 |
 | 12 | Verify Phase 7 Additional Adapters | 0 | — | — |
 
 ## Phase 2: Session Gateway
@@ -186,7 +186,7 @@ Phase 2 (Gateway) ────────────────────�
 - 03-VERIFICATION.md is stale (claims 0/10 artifacts but implementation exists)
 
 **Plans:**
-1/1 plans pending
+1/1 plans complete
 | 11-01 | [11-01-PLAN.md](phases/11-verify-policy-engine/11-01-PLAN.md) | Re-verify Policy Engine | 1 | — | Pending |
 
 ## Phase 12: Verify Phase 7 Additional Adapters
