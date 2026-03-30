@@ -9,6 +9,7 @@ import { writePidFile, cleanupPidFile, checkExistingDaemon } from "../pid";
 import { initConfig, loadSettings, reloadSettings, resolvePrompt, type HeartbeatConfig, type Settings } from "../config";
 import { getDayAndMinuteAtOffset } from "../timezone";
 import { startWebUi, type WebServerHandle } from "../web";
+import { initializeJobSystem } from "../orchestrator/resumable-jobs";
 import type { Job } from "../jobs";
 
 const CLAUDE_DIR = join(process.cwd(), ".claude");
@@ -311,6 +312,13 @@ export async function start(args: string[] = []) {
   const settings = await loadSettings();
   await ensureProjectClaudeMd();
   const jobs = await loadJobs();
+
+  // Initialize job system: wires governance adapter and resumes any pending workflows
+  const { pendingResumed, pendingFailed } = await initializeJobSystem();
+  if (pendingResumed > 0 || pendingFailed > 0) {
+    console.log(`[${new Date().toLocaleTimeString()}] Job system: ${pendingResumed} resumed, ${pendingFailed} failed`);
+  }
+
   const webEnabled = webFlag || webPortFlag !== null || settings.web.enabled;
   const webPort = webPortFlag ?? settings.web.port;
 
