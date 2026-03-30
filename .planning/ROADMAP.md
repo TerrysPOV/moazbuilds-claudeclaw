@@ -16,7 +16,7 @@ Transform ClaudeClaw from a fire-and-forget daemon into a robust, production-rea
 | 6 | Human Escalation | 6 | ✅ Complete | 2026-03-28 |
 | 7 | Additional Adapters | 7 | ✅ Complete | 2026-03-28 |
 | 8 | Policy Integration | 4 | ✅ Complete | 2026-03-30 |
-| 9 | Gateway Integration | 3 | ✅ Complete | 2026-03-30 |
+| 9 | Gateway Integration | Complete    | 2026-03-30 | 2026-03-30 |
 
 ## Phase 2: Session Gateway
 
@@ -156,7 +156,7 @@ Phase 2 (Gateway) ────────────────────�
 - GATEWAY-01: telegram/discord bypass gateway
 
 **Plans:**
-|------|------|-----------|------|------------|--------|
+1/1 plans complete
 | 9-01 | [9-01-PLAN.md](phases/09-gateway-integration/9-01-PLAN.md) | Wire Adapters to Gateway | 3 | — | ✅ Complete |
 
 ## Milestones
