@@ -4,20 +4,20 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: Not started
 status: completed
-last_updated: "2026-03-30T20:26:05.157Z"
+last_updated: "2026-03-30T21:53:19Z"
 progress:
-  total_phases: 13
-  completed_phases: 10
-  total_plans: 15
-  completed_plans: 19
+  total_phases: 14
+  completed_phases: 11
+  total_plans: 16
+  completed_plans: 20
 ---
 
 # State: ClaudeClaw v2 Upgrade
 
 ## Current Position
-**Phase:** 13 — Gap Closure (Complete)
+**Phase:** 14 — Security Hardening (Plan 1/1 Complete)
 **Current Plan:** Not started
-**Status:** Milestone complete
+**Status:** In progress
 
 ## Phase Overview
 
@@ -37,6 +37,7 @@ progress:
 | 11 | Policy Engine Verification | ✅ Complete | 2/2 |
 | 12 | Verify Adapter Docs | ✅ Complete | 1/1 |
 | 13 | Gap Closure | ✅ Complete | 1/1 |
+| 14 | Security Hardening | ✅ Complete | 1/1 |
 
 ## Decisions Log
 
@@ -214,11 +215,19 @@ progress:
 - DLQ overflow triggers escalation via handleDlqOverflow() when threshold (100) exceeded
 - All 3 remaining integration gaps from v1.0 milestone audit now closed
 
+### 2026-03-30 — Phase 14 Plan 1 (14-01) Security Hardening
+- Rate limiting: 30 msg/min per user on Telegram and Discord (in-memory Map)
+- File size limits: 25MB cap on all attachment downloads
+- Filename sanitization: Removes null bytes, path traversal sequences, unsafe characters
+- CSRF protection: Token validation on all web UI POST endpoints (/api/settings/heartbeat, /api/jobs/quick, /api/chat)
+- Log injection prevention: sanitizeForLog applied to all user-controlled fields in event-log.ts
+- Requirements SEC-01 through SEC-05 completed
+
 ## Blockers
 None
 
 ## Next Actions
-1. ✅ All 12 phases complete — ClaudeClaw v2 architecture fully verified
+1. ✅ All 14 phases complete — ClaudeClaw v2 architecture fully verified
 2. Future: Implement Slack adapter (requires Phase 7 documentation as guide)
 3. Future: Implement GitHub adapter (requires Phase 7 documentation as guide)
 4. Future: Implement Email adapter (requires Phase 7 documentation as guide)
