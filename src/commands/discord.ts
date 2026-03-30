@@ -8,6 +8,7 @@ import { transcribeAudioToText } from "../whisper";
 import { resolveSkillPrompt } from "../skills";
 import { mkdir } from "node:fs/promises";
 import { extname, join } from "node:path";
+import { submitDiscordToGateway } from "../gateway";
 
 // --- Discord API constants ---
 
@@ -475,19 +476,22 @@ async function handleMessageCreate(token: string, message: DiscordMessage): Prom
       );
     }
 
-    const prefixedPrompt = promptParts.join("\n");
-    const result = await runUserMessage("discord", prefixedPrompt);
-
-    if (result.exitCode !== 0) {
-      await sendMessage(config.token, channelId, `Error (exit ${result.exitCode}): ${result.stderr || "Unknown error"}`);
-    } else {
-      const { cleanedText, reactionEmoji } = extractReactionDirective(result.stdout || "");
-      if (reactionEmoji) {
-        await sendReaction(config.token, channelId, message.id, reactionEmoji).catch((err) => {
-          console.error(`[Discord] Failed to send reaction for ${label}: ${err instanceof Error ? err.message : err}`);
-        });
+    // Check per-adapter feature flag for gateway routing
+    if (process.env.USE_GATEWAY_DISCORD === "true") {
+      const gatewayResult = await submitDiscordToGateway(message);
+      if (!gatewayResult.success) {
+        await sendMessage(config.token, channelId, `Gateway error: ${gatewayResult.error}`);
+        return;
       }
-      await sendMessage(config.token, channelId, cleanedText || "(empty response)");
+      // Gateway processed successfully - response handled by processor
+      return;
+    } else {
+      await sendMessage(
+        config.token,
+        channelId,
+        "Claude is currently being upgraded. Please try again shortly."
+      );
+      return;
     }
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);

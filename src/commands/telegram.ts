@@ -8,6 +8,7 @@ import { transcribeAudioToText } from "../whisper";
 import { resolveSkillPrompt, listSkills } from "../skills";
 import { mkdir } from "node:fs/promises";
 import { extname, join } from "node:path";
+import { submitTelegramToGateway } from "../gateway";
 
 // --- Markdown → Telegram HTML conversion (ported from nanobot) ---
 
@@ -831,33 +832,23 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
         "The user attached a document, but downloading it failed. Respond and ask them to resend."
       );
     }
-    const prefixedPrompt = promptParts.join("\n");
-    const result = await runUserMessage("telegram", prefixedPrompt);
-
-    if (result.exitCode !== 0) {
-      await sendMessage(config.token, chatId, `Error (exit ${result.exitCode}): ${result.stderr || "Unknown error"}`, threadId);
+    // Check per-adapter feature flag for gateway routing
+    if (process.env.USE_GATEWAY_TELEGRAM === "true") {
+      const gatewayResult = await submitTelegramToGateway(message);
+      if (!gatewayResult.success) {
+        await sendMessage(config.token, chatId, `Gateway error: ${gatewayResult.error}`, threadId);
+        return;
+      }
+      // Gateway processed successfully - response handled by processor
+      return;
     } else {
-      const { cleanedText: afterReact, reactionEmoji } = extractReactionDirective(result.stdout || "");
-      const { cleanedText, filePaths } = extractSendFileDirectives(afterReact);
-      if (reactionEmoji) {
-        await sendReaction(config.token, chatId, message.message_id, reactionEmoji).catch((err) => {
-          console.error(`[Telegram] Failed to send reaction for ${label}: ${err instanceof Error ? err.message : err}`);
-        });
-      }
-      if (cleanedText) {
-        await sendMessage(config.token, chatId, cleanedText, threadId);
-      }
-      for (const fp of filePaths) {
-        try {
-          await sendDocumentToChat(config.token, chatId, fp, threadId);
-        } catch (err) {
-          console.error(`[Telegram] Failed to send document for ${label}: ${err instanceof Error ? err.message : err}`);
-          await sendMessage(config.token, chatId, `Failed to send file: ${fp.split("/").pop()}`, threadId);
-        }
-      }
-      if (!cleanedText && filePaths.length === 0) {
-        await sendMessage(config.token, chatId, "(empty response)", threadId);
-      }
+      await sendMessage(
+        config.token,
+        chatId,
+        "Claude is currently being upgraded. Please try again shortly.",
+        threadId
+      );
+      return;
     }
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
