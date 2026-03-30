@@ -15,7 +15,7 @@ Transform ClaudeClaw from a fire-and-forget daemon into a robust, production-rea
 | 5 | Orchestration | 5 | ✅ Complete | 2026-03-28 |
 | 6 | Human Escalation | 6 | ✅ Complete | 2026-03-28 |
 | 7 | Additional Adapters | 7 | ✅ Complete | 2026-03-28 |
-| 8 | Policy Integration | 4 | Pending | — |
+| 8 | Policy Integration | 4 | Planned | — |
 | 9 | Gateway Integration | 3 | Pending | — |
 
 ## Phase 2: Session Gateway
@@ -136,7 +136,13 @@ Phase 2 (Gateway) ────────────────────�
 
 **Plans:**
 |------|------|-----------|------|------------|--------|
-| 8-01 | [8-01-PLAN.md](phases/08-policy-integration/8-01-PLAN.md) | Wire Policy to Execution | TBD | — | Pending |
+| 8-01 | [8-01-PLAN.md](phases/08-policy-integration/8-01-PLAN.md) | Wire Policy to Execution | 4 | — | Pending |
+
+**Plan 8-01 Tasks:**
+1. Create GovernanceClient interface (src/governance/client.ts)
+2. Wire evaluate() into gateway (src/gateway/index.ts)
+3. Add policy evaluation wrapper for runner (src/runner.ts)
+4. Add integration tests for policy wiring (src/__tests__/policy/wiring.test.ts)
 
 ## Phase 9: Gateway Integration (Gap Closure)
 
@@ -204,9 +210,9 @@ Phase 2 (Gateway) ────────────────────�
 | 5 | 5 | 5 |
 | 6 | 6 | 6 |
 | 7 | 7 | 7 |
-| 8 | TBD | TBD |
-| 9 | TBD | TBD |
-| **Total** | **38+** | **38 (pending 8-9)** |
+| 8 | 4 | 0 |
+| 9 | 3 | 0 |
+| **Total** | **42** | **38** |
 
 ## Risk Areas
 
