@@ -7,6 +7,7 @@ import { buildClockPromptPrefix } from "./timezone";
 import { selectModel as governanceSelectModel, configureRouter as configureGovernanceRouter } from "./governance/model-router";
 import { recordInvocationStart, recordInvocationCompletion, recordInvocationFailure } from "./governance/usage-tracker";
 import { recordExecutionMetric, checkLimits, handleTrigger as watchdogHandleTrigger } from "./governance/watchdog";
+import { getGovernanceClient, type GovernanceClient } from "./governance/client";
 
 const LOGS_DIR = join(process.cwd(), ".claude/claudeclaw/logs");
 
@@ -339,7 +340,87 @@ export async function compactCurrentSession(): Promise<{ success: boolean; messa
     : { success: false, message: `❌ Compact failed (${existing.sessionId.slice(0, 8)})` };
 }
 
+/**
+ * Policy-aware tool execution wrapper.
+ * Evaluates tool requests against policy before allowing execution.
+ */
+async function evaluateToolForExecution(
+  toolName: string,
+  toolArgs: Record<string, unknown> | undefined,
+  context: {
+    source: string;
+    channelId?: string;
+    userId?: string;
+    skillName?: string;
+    sessionId?: string;
+    claudeSessionId?: string | null;
+    eventId: string;
+  }
+): Promise<{ allowed: boolean; decision: import("./policy/engine").PolicyDecision }> {
+  const gc = getGovernanceClient();
+  const request: import("./policy/engine").ToolRequestContext = {
+    eventId: context.eventId,
+    source: context.source,
+    channelId: context.channelId,
+    userId: context.userId,
+    skillName: context.skillName,
+    toolName,
+    toolArgs,
+    sessionId: context.sessionId,
+    claudeSessionId: context.claudeSessionId,
+    timestamp: new Date().toISOString(),
+  };
+
+  const decision = gc.evaluateToolRequest(request);
+  
+  if (decision.action === "deny") {
+    console.warn(`[policy] Tool ${toolName} denied: ${decision.reason}`);
+    return { allowed: false, decision };
+  }
+  
+  if (decision.action === "require_approval") {
+    console.warn(`[policy] Tool ${toolName} requires approval: ${decision.reason}`);
+    // Enqueue for approval
+    const entry = await gc.requestApproval(request, decision);
+    if (entry) {
+      console.warn(`[policy] Approval request enqueued: ${entry.id}`);
+    }
+    return { allowed: false, decision };
+  }
+  
+  return { allowed: true, decision };
+}
+
+/**
+ * Get context for policy evaluation from current session and settings.
+ */
+async function getPolicyContext(source: string): Promise<{
+  eventId: string;
+  source: string;
+  channelId?: string;
+  userId?: string;
+  skillName?: string;
+  sessionId?: string;
+  claudeSessionId?: string | null;
+}> {
+  const existing = await getSession();
+  const settings = getSettings();
+  return {
+    eventId: crypto.randomUUID(),
+    source,
+    channelId: undefined, // Will be populated from event context
+    userId: settings.userId,
+    skillName: undefined,
+    sessionId: existing?.sessionId,
+    claudeSessionId: existing?.sessionId ?? null,
+  };
+}
+
 async function execClaude(name: string, prompt: string): Promise<RunResult> {
+  await mkdir(LOGS_DIR, { recursive: true });
+
+  // Ensure governance client is initialized
+  const gc = getGovernanceClient();
   await mkdir(LOGS_DIR, { recursive: true });
 
   const existing = await getSession();
