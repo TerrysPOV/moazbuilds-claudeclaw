@@ -7,8 +7,9 @@
 
 import { WorkflowDefinition, TaskDefinition, WorkflowState } from "./types.ts";
 import { createWorkflow, saveDefinition, saveState, loadState, listActive, loadDefinition } from "./workflow-state.ts";
-import { executeWorkflow, resumeWorkflow, registerHandlers } from "./executor.ts";
+import { executeWorkflow, resumeWorkflow, registerHandlers, setGovernanceClient } from "./executor.ts";
 import { validateWorkflow } from "./task-graph.ts";
+import { OrchestratorGovernanceAdapter } from "./governance-adapter.ts";
 
 /**
  * Job definition that can be converted to a workflow
@@ -225,6 +226,9 @@ export async function initializeJobSystem(): Promise<{
   pendingResumed: number;
   pendingFailed: number;
 }> {
+  // Wire governance adapter so task-level governance checks actually run
+  setGovernanceClient(new OrchestratorGovernanceAdapter());
+
   // Resume any workflows that were in progress when daemon stopped
   const result = await resumePending();
   
