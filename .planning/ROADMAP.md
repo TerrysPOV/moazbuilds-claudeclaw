@@ -16,7 +16,10 @@ Transform ClaudeClaw from a fire-and-forget daemon into a robust, production-rea
 | 6 | Human Escalation | 6 | ✅ Complete | 2026-03-28 |
 | 7 | Additional Adapters | 7 | ✅ Complete | 2026-03-28 |
 | 8 | Policy Integration | 4 | ✅ Complete | 2026-03-30 |
-| 9 | Gateway Integration | Complete    | 2026-03-30 | 2026-03-30 |
+| 9 | Gateway Integration | Complete | 2026-03-30 | 2026-03-30 |
+| 10 | Orchestrator Governance Bridge | 0 | — | — |
+| 11 | Re-verify Phase 3 Policy Engine | 0 | — | — |
+| 12 | Verify Phase 7 Additional Adapters | 0 | — | — |
 
 ## Phase 2: Session Gateway
 
@@ -158,6 +161,44 @@ Phase 2 (Gateway) ────────────────────�
 **Plans:**
 1/1 plans complete
 | 9-01 | [9-01-PLAN.md](phases/09-gateway-integration/9-01-PLAN.md) | Wire Adapters to Gateway | 3 | — | ✅ Complete |
+
+## Phase 10: Orchestrator Governance Bridge
+
+**Goal:** Fix interface mismatch between orchestrator's GovernanceClient and actual GovernanceClient class so task-level governance enforcement works.
+
+**Requirements:**
+- orchestrator-governance-interface: Bridge the interface mismatch
+
+**Gap Closure:** Closes gaps from v1.0 audit:
+- orchestrator-governance-interface (partial)
+- governance-client-orchestrator-mismatch (integration)
+- orchestrator-governance-flow (broken)
+
+**Plans:**
+0/1 plans pending
+| 10-01 | TBD | Bridge GovernanceClient Interface | — | Pending |
+
+## Phase 11: Re-verify Phase 3 Policy Engine
+
+**Goal:** Re-run verification for Phase 3 to confirm policy engine implementation is complete.
+
+**Gap Closure:** Closes tech debt from v1.0 audit:
+- 03-VERIFICATION.md is stale (claims 0/10 artifacts but implementation exists)
+
+**Plans:**
+0/1 plans pending
+| 11-01 | TBD | Re-verify Policy Engine | — | Pending |
+
+## Phase 12: Verify Phase 7 Additional Adapters
+
+**Goal:** Create verification for documentation-only phase to confirm completeness.
+
+**Gap Closure:** Closes tech debt from v1.0 audit:
+- Phase 7 has no verification file
+
+**Plans:**
+0/1 plans pending
+| 12-01 | TBD | Verify Adapter Documentation | — | Pending |
 
 ## Milestones
 
