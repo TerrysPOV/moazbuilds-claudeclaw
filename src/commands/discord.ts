@@ -108,13 +108,42 @@ let heartbeatAcked = true;
 let running = true;
 let discordDebug = false;
 
-// Bot identity (populated from READY)
-let botUserId: string | null = null;
-let botUsername: string | null = null;
-let applicationId: string | null = null;
+// --- Security: Rate Limiting ---
+interface DiscordRateLimitEntry {
+  count: number;
+  resetAt: number;
+}
 
-// Track guilds we were already in before this session to avoid duplicate welcome messages
-let readyGuildIds: Set<string> | null = null;
+const DISCORD_RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const DISCORD_RATE_LIMIT_MAX = 30;
+const discordRateLimitMap = new Map<string, DiscordRateLimitEntry>();
+
+function checkDiscordRateLimit(userId: string): boolean {
+  const now = Date.now();
+  const entry = discordRateLimitMap.get(userId);
+
+  if (!entry || now > entry.resetAt) {
+    discordRateLimitMap.set(userId, { count: 1, resetAt: now + DISCORD_RATE_LIMIT_WINDOW_MS });
+    return true;
+  }
+
+  if (entry.count >= DISCORD_RATE_LIMIT_MAX) {
+    return false;
+  }
+
+  entry.count++;
+  return true;
+}
+
+// --- Security: File size limit ---
+const MAX_DISCORD_FILE_SIZE_BYTES = 25 * 1024 * 1024; // 25MB
+
+// --- Security: Filename sanitization ---
+function sanitizeDiscordFilename(name: string): string {
+  const sanitized = name.replace(/\x00/g, "").replace(/\.\./g, "_");
+  const safe = sanitized.replace(/[^a-zA-Z0-9._-]/g, "_");
+  return safe.slice(0, 255);
+}
 
 // --- Debug ---
 
@@ -273,11 +302,14 @@ async function downloadDiscordAttachment(
   const response = await fetch(attachment.url);
   if (!response.ok) throw new Error(`Discord attachment download failed: ${response.status}`);
 
-  const ext = extname(attachment.filename) || (type === "voice" ? ".ogg" : ".jpg");
+  const ext = sanitizeDiscordFilename(extname(attachment.filename)) || (type === "voice" ? ".ogg" : ".jpg");
   const filename = `${attachment.id}-${Date.now()}${ext}`;
   const localPath = join(dir, filename);
 
   const bytes = new Uint8Array(await response.arrayBuffer());
+  if (bytes.length > MAX_DISCORD_FILE_SIZE_BYTES) {
+    throw new Error(`File too large: ${bytes.length} bytes (max: ${MAX_DISCORD_FILE_SIZE_BYTES})`);
+  }
   await Bun.write(localPath, bytes);
   debugLog(`Attachment downloaded: ${localPath} (${bytes.length} bytes)`);
   return localPath;
@@ -367,6 +399,12 @@ async function handleMessageCreate(token: string, message: DiscordMessage): Prom
   debugLog(
     `Handle message channel=${channelId} from=${userId} reason=${triggerReason} text="${content.slice(0, 80)}"`,
   );
+
+  // Security: Rate limit check
+  if (!checkDiscordRateLimit(userId)) {
+    debugLog(`Rate limited: userId=${userId}`);
+    return;
+  }
 
   // Authorization check
   if (config.allowedUserIds.length > 0 && !config.allowedUserIds.includes(userId)) {
