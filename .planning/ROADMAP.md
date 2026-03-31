@@ -22,7 +22,7 @@ Transform ClaudeClaw from a fire-and-forget daemon into a robust, production-rea
 | 12 | 1/1 | Complete    | 2026-03-30 | 2026-03-30 |
 | 13 | Gap Closure | Complete    | 2026-03-30 |
 | 14 | Security Hardening | Complete    | 2026-03-30 | 2026-03-30 |
-| 15 | Test Fix & Simplification | 2/2 | ✅ Complete | 2026-03-31 |
+| 15 | Test Fix & Simplification | Complete    | 2026-03-31 | 2026-03-31 |
 
 ## Phase 2: Session Gateway
 
@@ -340,5 +340,5 @@ Phase 2 (Gateway) ────────────────────�
 - SIMP-06: All simplifications preserve exact functionality
 
 **Plans:**
-- [x] 15-01-PLAN.md — Fix test failures (Wave 1) ✅ Complete
+2/2 plans complete
 - [x] 15-02-PLAN.md — Code simplification (Wave 2, depends on 15-01) ✅ Complete
