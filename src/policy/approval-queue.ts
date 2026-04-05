@@ -15,7 +15,7 @@
  * - Approval must result in controlled continuation path
  */
 
-import { appendFile, readFile, mkdir, stat, rename } from "fs/promises";
+import { appendFile, readFile, mkdir } from "fs/promises";
 import { existsSync } from "fs";
 import { join } from "path";
 import { randomUUID } from "crypto";
@@ -52,7 +52,6 @@ export interface ApprovalEntry extends ApprovalRequest {
 
 const APPROVAL_DIR = join(process.cwd(), ".claude", "claudeclaw");
 const APPROVAL_QUEUE_FILE = join(APPROVAL_DIR, "approval-queue.jsonl");
-const APPROVAL_INDEX_FILE = join(APPROVAL_DIR, "approval-index.json");
 const DEFAULT_EXPIRY_HOURS = 24;
 
 // ============================================================================
@@ -61,6 +60,7 @@ const DEFAULT_EXPIRY_HOURS = 24;
 
 let approvalIndex: Map<string, ApprovalEntry> = new Map();
 let indexLoadedAt: string = "";
+let loadError: Error | null = null;
 
 // ============================================================================
 // Core API
@@ -74,6 +74,9 @@ export async function enqueue(
   request: ToolRequestContext,
   decision: PolicyDecision
 ): Promise<ApprovalEntry> {
+  if (loadError) {
+    throw new Error(`Approval queue failed to initialize: ${loadError.message}`);
+  }
   const now = new Date();
   const expiryDate = new Date(now.getTime() + DEFAULT_EXPIRY_HOURS * 60 * 60 * 1000);
   
@@ -109,6 +112,9 @@ export async function approve(
   actor: string,
   reason?: string
 ): Promise<ApprovalEntry | null> {
+  if (loadError) {
+    throw new Error(`Approval queue failed to initialize: ${loadError.message}`);
+  }
   const entry = await findByEventId(eventId);
   if (!entry) {
     return null;
@@ -120,20 +126,21 @@ export async function approve(
   }
   
   const now = new Date().toISOString();
-  
-  // Update entry
-  entry.status = "approved";
-  entry.approvedBy = actor;
-  entry.approvedAt = now;
-  entry.resolutionReason = reason;
-  
-  // Persist to queue file
-  await appendResolution(entry);
-  
-  // Update index
-  approvalIndex.set(entry.id, entry);
-  
-  return entry;
+
+  // Create new object instead of mutating the shared in-memory entry
+  const updated: ApprovalEntry = {
+    ...entry,
+    status: "approved",
+    approvedBy: actor,
+    approvedAt: now,
+    resolutionReason: reason,
+  };
+
+  // Persist to disk first, then update in-memory index
+  await appendResolution(updated);
+  approvalIndex.set(updated.id, updated);
+
+  return updated;
 }
 
 /**
@@ -144,6 +151,9 @@ export async function deny(
   actor: string,
   reason?: string
 ): Promise<ApprovalEntry | null> {
+  if (loadError) {
+    throw new Error(`Approval queue failed to initialize: ${loadError.message}`);
+  }
   const entry = await findByEventId(eventId);
   if (!entry) {
     return null;
@@ -155,20 +165,21 @@ export async function deny(
   }
   
   const now = new Date().toISOString();
-  
-  // Update entry
-  entry.status = "denied";
-  entry.deniedBy = actor;
-  entry.deniedAt = now;
-  entry.resolutionReason = reason;
-  
-  // Persist to queue file
-  await appendResolution(entry);
-  
-  // Update index
-  approvalIndex.set(entry.id, entry);
-  
-  return entry;
+
+  // Create new object instead of mutating the shared in-memory entry
+  const updated: ApprovalEntry = {
+    ...entry,
+    status: "denied",
+    deniedBy: actor,
+    deniedAt: now,
+    resolutionReason: reason,
+  };
+
+  // Persist to disk first, then update in-memory index
+  await appendResolution(updated);
+  approvalIndex.set(updated.id, updated);
+
+  return updated;
 }
 
 /**
@@ -302,8 +313,12 @@ export function findById(id: string): ApprovalEntry | null {
  * Check if an event is pending approval.
  */
 export function isPending(eventId: string): boolean {
-  const entry = approvalIndex.get(idFromEventId(eventId));
-  return entry?.status === "pending";
+  for (const entry of approvalIndex.values()) {
+    if (entry.eventId === eventId) {
+      return entry.status === "pending";
+    }
+  }
+  return false;
 }
 
 // ============================================================================
@@ -331,5 +346,6 @@ async function appendResolution(entry: ApprovalEntry): Promise<void> {
 
 // Auto-load state on module import
 loadState().catch(err => {
+  loadError = err instanceof Error ? err : new Error(String(err));
   console.error("Failed to load approval queue state:", err);
 });

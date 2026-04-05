@@ -160,34 +160,38 @@ export async function scheduleJob(job: JobDefinition): Promise<{ workflowId: str
 export async function resumePending(): Promise<{ resumed: number; failed: number }> {
   const pendingJobs = await loadPendingJobs();
   const activeJobs = pendingJobs.filter(j => j.status === "pending" || j.status === "active");
-  
+
   let resumed = 0;
   let failed = 0;
-  
+
+  // Collect IDs to remove after iteration (avoids splice-during-iteration corruption)
+  const removeIds = new Set<string>();
+  // Track jobs that should be marked active
+  const activateIds = new Set<string>();
+
   for (const job of activeJobs) {
     try {
       // Load workflow state
       const state = await loadState(job.workflowId);
-      
+
       if (!state) {
-        // Workflow state missing - remove from pending
+        // Workflow state missing - mark for removal
         console.warn(`Workflow state missing for job ${job.jobId}, removing from pending`);
-        pendingJobs.splice(pendingJobs.indexOf(job), 1);
+        removeIds.add(job.workflowId);
         failed++;
         continue;
       }
-      
+
       // Resume workflow execution
       const updatedState = await resumeWorkflow(job.workflowId);
-      
+
       if (updatedState) {
         if (updatedState.status === "completed" || updatedState.status === "failed") {
-          // Workflow finished - remove from pending
-          // Note: job.status stays as-is since we're removing from pendingJobs
-          pendingJobs.splice(pendingJobs.indexOf(job), 1);
+          // Workflow finished - mark for removal
+          removeIds.add(job.workflowId);
         } else {
           // Still running
-          job.status = "active";
+          activateIds.add(job.workflowId);
         }
         resumed++;
       }
@@ -196,10 +200,13 @@ export async function resumePending(): Promise<{ resumed: number; failed: number
       failed++;
     }
   }
-  
-  // Update pending jobs
-  await savePendingJobs(pendingJobs);
-  
+
+  // Build updated list immutably: remove finished jobs, activate running ones
+  const remaining = pendingJobs
+    .filter(j => !removeIds.has(j.workflowId))
+    .map(j => activateIds.has(j.workflowId) ? { ...j, status: "active" as const } : j);
+  await savePendingJobs(remaining);
+
   return { resumed, failed };
 }
 

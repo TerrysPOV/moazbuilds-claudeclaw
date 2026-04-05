@@ -12,6 +12,7 @@
 
 import { join } from "path";
 import { existsSync } from "fs";
+import { appendFile, mkdir } from "fs/promises";
 import { randomUUID } from "crypto";
 import { recordInvocationKilled } from "./usage-tracker";
 
@@ -171,10 +172,8 @@ async function saveWatchdogIndex(): Promise<void> {
 
 async function appendWatchdogEvent(event: WatchdogEventRecord): Promise<void> {
   const line = JSON.stringify(event) + "\n";
-  const existingContent = existsSync(WATCHDOG_EVENTS_FILE)
-    ? await Bun.file(WATCHDOG_EVENTS_FILE).text()
-    : "";
-  await Bun.write(WATCHDOG_EVENTS_FILE, existingContent + line);
+  await mkdir(WATCHDOG_DIR, { recursive: true });
+  await appendFile(WATCHDOG_EVENTS_FILE, line);
 }
 
 /**

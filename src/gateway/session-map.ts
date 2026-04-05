@@ -206,20 +206,25 @@ export async function update(
   patch: Partial<SessionEntry>
 ): Promise<void> {
   await initSessionMap();
-  
-  const existing = await get(channelId, threadId);
-  if (!existing) {
-    throw new Error(`No mapping found for channel=${channelId}, thread=${threadId}`);
-  }
-  
-  const updated: SessionEntry = {
-    ...existing,
-    ...patch,
-    mappingId: existing.mappingId, // Prevent overwriting identity
-    updatedAt: new Date().toISOString(),
-  };
-  
-  await set(channelId, threadId, updated);
+
+  await enqueueWrite(async () => {
+    const existing = sessionMap?.[channelId]?.[threadId] ?? null;
+    if (!existing) {
+      throw new Error(`No mapping found for channel=${channelId}, thread=${threadId}`);
+    }
+
+    const updated: SessionEntry = {
+      ...existing,
+      ...patch,
+      mappingId: existing.mappingId, // Prevent overwriting identity
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (!sessionMap) sessionMap = {};
+    if (!sessionMap[channelId]) sessionMap[channelId] = {};
+    sessionMap[channelId][threadId] = updated;
+    await saveMap(sessionMap);
+  });
 }
 
 /**
@@ -240,12 +245,18 @@ export async function incrementTurnCount(
   channelId: string,
   threadId: string
 ): Promise<void> {
-  const existing = await get(channelId, threadId);
-  if (!existing) {
-    throw new Error(`No mapping found for channel=${channelId}, thread=${threadId}`);
-  }
-  
-  await update(channelId, threadId, { turnCount: existing.turnCount + 1 });
+  await initSessionMap();
+
+  await enqueueWrite(async () => {
+    const existing = sessionMap?.[channelId]?.[threadId] ?? null;
+    if (!existing) {
+      throw new Error(`No mapping found for channel=${channelId}, thread=${threadId}`);
+    }
+
+    existing.turnCount += 1;
+    existing.updatedAt = new Date().toISOString();
+    await saveMap(sessionMap!);
+  });
 }
 
 /**
@@ -258,21 +269,25 @@ export async function attachClaudeSessionId(
   claudeSessionId: string,
   force: boolean = false
 ): Promise<void> {
-  const existing = await get(channelId, threadId);
-  if (!existing) {
-    throw new Error(`No mapping found for channel=${channelId}, thread=${threadId}`);
-  }
-  
-  if (existing.claudeSessionId !== null && !force) {
-    console.warn(
-      `[session-map] Not overwriting existing claudeSessionId for channel=${channelId}, thread=${threadId}`
-    );
-    return;
-  }
-  
-  await update(channelId, threadId, {
-    claudeSessionId,
-    status: "active",
+  await initSessionMap();
+
+  await enqueueWrite(async () => {
+    const existing = sessionMap?.[channelId]?.[threadId] ?? null;
+    if (!existing) {
+      throw new Error(`No mapping found for channel=${channelId}, thread=${threadId}`);
+    }
+
+    if (existing.claudeSessionId !== null && !force) {
+      console.warn(
+        `[session-map] Not overwriting existing claudeSessionId for channel=${channelId}, thread=${threadId}`
+      );
+      return;
+    }
+
+    existing.claudeSessionId = claudeSessionId;
+    existing.status = "active";
+    existing.updatedAt = new Date().toISOString();
+    await saveMap(sessionMap!);
   });
 }
 
@@ -284,30 +299,41 @@ export async function getOrCreateMapping(
   channelId: string,
   threadId: string = DEFAULT_THREAD_ID
 ): Promise<SessionEntry> {
-  const existing = await get(channelId, threadId);
-  
-  if (existing) {
-    // Update lastActiveAt
-    await update(channelId, threadId, {
-      lastActiveAt: new Date().toISOString(),
-    });
-    return existing;
-  }
-  
-  const now = new Date().toISOString();
-  const newEntry: SessionEntry = {
-    mappingId: randomUUID(),
-    claudeSessionId: null,
-    createdAt: now,
-    updatedAt: now,
-    lastActiveAt: now,
-    lastSeq: 0,
-    turnCount: 0,
-    status: "pending",
-  };
-  
-  await set(channelId, threadId, newEntry);
-  return newEntry;
+  await initSessionMap();
+
+  return enqueueWrite(async () => {
+    const existing = sessionMap?.[channelId]?.[threadId] ?? null;
+
+    if (existing) {
+      // Update lastActiveAt inside the write lock
+      existing.lastActiveAt = new Date().toISOString();
+      existing.updatedAt = new Date().toISOString();
+      if (!sessionMap) sessionMap = {};
+      if (!sessionMap[channelId]) sessionMap[channelId] = {};
+      sessionMap[channelId][threadId] = existing;
+      await saveMap(sessionMap);
+      return existing;
+    }
+
+    // Create new entry
+    const now = new Date().toISOString();
+    const newEntry: SessionEntry = {
+      mappingId: randomUUID(),
+      claudeSessionId: null,
+      createdAt: now,
+      updatedAt: now,
+      lastActiveAt: now,
+      lastSeq: 0,
+      turnCount: 0,
+      status: "pending",
+    };
+
+    if (!sessionMap) sessionMap = {};
+    if (!sessionMap[channelId]) sessionMap[channelId] = {};
+    sessionMap[channelId][threadId] = newEntry;
+    await saveMap(sessionMap);
+    return newEntry;
+  });
 }
 
 /**

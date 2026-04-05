@@ -8,8 +8,26 @@
 import { WorkflowDefinition, WorkflowState, TaskDefinition, ExecutionContext } from "./types.ts";
 import { getReadyTasks, advanceWorkflow, getParallelizableTasks } from "./task-graph.ts";
 import { saveState, loadState, loadDefinition, rebuildExecutionView } from "./workflow-state.ts";
-import { shouldBlockScheduling } from "../escalation";
 import { OrchestratorGovernanceAdapter } from "./governance-adapter";
+
+/**
+ * Lazy loader for the escalation module.
+ * The module lives in a separate PR and may not be available on this branch.
+ * Falls back to a no-op (never block) when the module is missing.
+ */
+let _shouldBlockScheduling: (() => boolean) | null = null;
+async function getShouldBlockScheduling(): Promise<() => boolean> {
+  if (_shouldBlockScheduling) return _shouldBlockScheduling;
+  try {
+    const mod = await import("../escalation");
+    _shouldBlockScheduling = mod.shouldBlockScheduling;
+    return _shouldBlockScheduling;
+  } catch {
+    // Escalation module not available - never block
+    _shouldBlockScheduling = () => false;
+    return _shouldBlockScheduling;
+  }
+}
 
 /**
  * Action handler registry - maps actionRef to handler functions
@@ -49,13 +67,14 @@ const DEFAULT_CONFIG: ExecutorConfig = {
   enableBudget: true
 };
 
-// In-memory registry (would be dependency-injected in production)
+// NOTE: These are process-wide singletons. Not safe for concurrent use
+// with different configurations. Tests must reset via beforeEach.
 let handlerRegistry: HandlerRegistry = {
   actions: {},
   compensations: {}
 };
 
-// Configuration
+// Process-wide config singleton (see note above on handlerRegistry)
 let config: ExecutorConfig = { ...DEFAULT_CONFIG };
 
 /**
@@ -181,10 +200,11 @@ export async function executeReadyTasks(workflowId: string): Promise<WorkflowSta
   const rebuiltState = rebuildExecutionView(state, definition);
   
   // Check if scheduling is paused - skip task execution when paused
-  if (await shouldBlockScheduling()) {
+  const shouldBlock = await getShouldBlockScheduling();
+  if (shouldBlock()) {
     return rebuiltState;
   }
-  
+
   // Get tasks ready for execution
   const readyTasks = getReadyTasks(rebuiltState, definition);
   
@@ -205,11 +225,11 @@ export async function executeReadyTasks(workflowId: string): Promise<WorkflowSta
     return rebuiltState;
   }
   
-  // Execute each task
+  // Mark all tasks as running before parallel execution
   let currentState = rebuiltState;
-  
+  const now = new Date().toISOString();
+
   for (const task of tasksToRun) {
-    // Mark task as running
     currentState = {
       ...currentState,
       runningTasks: [...currentState.runningTasks.filter(id => id !== task.id), task.id],
@@ -219,67 +239,92 @@ export async function executeReadyTasks(workflowId: string): Promise<WorkflowSta
         [task.id]: {
           ...currentState.taskStates[task.id],
           status: "running",
-          lastAttemptAt: new Date().toISOString()
+          lastAttemptAt: now
         }
       },
-      updatedAt: new Date().toISOString()
+      updatedAt: now
     };
-    
-    // Persist running state
-    await saveState(currentState);
-    
-    // Execute governance checks
+  }
+
+  // Persist running state for all tasks
+  await saveState(currentState);
+
+  // Execute a single task: governance check, run handler, return result
+  async function executeAndAdvanceTask(
+    task: TaskDefinition,
+    snapshotState: WorkflowState,
+    def: WorkflowDefinition
+  ): Promise<{ taskId: string; result: { success: boolean; result?: unknown; error?: { type?: string; message: string } } }> {
     const context: ExecutionContext = {
-      workflowId: currentState.workflowId,
+      workflowId: snapshotState.workflowId,
       taskId: task.id,
-      sessionId: currentState.sessionId,
-      claudeSessionId: currentState.claudeSessionId,
-      channelId: currentState.channelId,
-      threadId: currentState.threadId,
+      sessionId: snapshotState.sessionId,
+      claudeSessionId: snapshotState.claudeSessionId,
+      channelId: snapshotState.channelId,
+      threadId: snapshotState.threadId,
       input: task.input,
-      previousResults: currentState.results
+      previousResults: snapshotState.results
     };
-    
+
     const governanceResult = await checkGovernance(task, context);
-    
+
     if (!governanceResult.allowed) {
-      // Task blocked by governance - treat as failure
-      currentState = advanceWorkflow(currentState, definition, task.id, {
-        success: false,
-        error: {
-          type: governanceResult.blockedBy || "GovernanceBlocked",
-          message: governanceResult.reason || "Task blocked by governance policy"
+      return {
+        taskId: task.id,
+        result: {
+          success: false,
+          error: {
+            type: governanceResult.blockedBy || "GovernanceBlocked",
+            message: governanceResult.reason || "Task blocked by governance policy"
+          }
         }
-      });
-      await saveState(currentState);
-      continue;
+      };
     }
-    
-    // Execute the task
-    const result = await executeTask(task, currentState, definition);
-    
-    // Advance workflow based on result
-    currentState = advanceWorkflow(currentState, definition, task.id, result);
-    
-    // Handle orchestration failure escalation
-    if (result.error && currentState.status === "failed") {
-      try {
-        const { handleOrchestrationFailure } = await import("../escalation");
-        await handleOrchestrationFailure(currentState.workflowId, result.error.message);
-      } catch (escalationError) {
-        console.error("[escalation] Failed to send orchestration failure notification:", escalationError);
+
+    const result = await executeTask(task, snapshotState, def);
+    return { taskId: task.id, result };
+  }
+
+  // Execute all tasks in parallel.
+  // NOTE: Tasks executing in parallel receive the same state snapshot.
+  // previousResults from concurrent tasks will not be visible to each other.
+  // This is acceptable because parallelized tasks are independent (no shared dependencies).
+  // Tasks sharing a concurrencyKey are already serialized by getParallelizableTasks.
+  const settled = await Promise.allSettled(
+    tasksToRun.map(task => executeAndAdvanceTask(task, currentState, definition))
+  );
+
+  // Merge results back into state sequentially
+  for (const outcome of settled) {
+    if (outcome.status === "fulfilled") {
+      const { taskId, result } = outcome.value;
+      currentState = advanceWorkflow(currentState, definition, taskId, result);
+
+      // Handle orchestration failure escalation
+      if (result.error && currentState.status === "failed") {
+        try {
+          const escalationMod = await import("../escalation");
+          if (escalationMod.handleOrchestrationFailure) {
+            await escalationMod.handleOrchestrationFailure(currentState.workflowId, result.error.message);
+          }
+        } catch {
+          // Escalation module not available on this branch - skip notification
+        }
       }
+    } else {
+      // Promise rejected (unexpected) - should not happen since executeTask catches errors
+      console.error("[executor] Unexpected task rejection:", outcome.reason);
     }
-    
-    // Persist updated state
-    await saveState(currentState);
-    
-    // If workflow reached terminal state, stop
+
+    // If workflow reached terminal state, stop processing remaining results
     if (currentState.status === "completed" || currentState.status === "failed") {
       break;
     }
   }
-  
+
+  // Persist final state
+  await saveState(currentState);
+
   return currentState;
 }
 
@@ -293,7 +338,8 @@ export async function executeWorkflow(workflowId: string): Promise<WorkflowState
   }
   
   // Check if scheduling is paused - skip workflow execution when paused
-  if (await shouldBlockScheduling()) {
+  const shouldBlock = await getShouldBlockScheduling();
+  if (shouldBlock()) {
     return state;
   }
   
@@ -368,7 +414,17 @@ export async function cancelWorkflow(workflowId: string): Promise<WorkflowState 
   
   // Mark all ready/running tasks as cancelled
   const cancelledTasks = [...state.readyTasks, ...state.runningTasks];
-  
+
+  // Build updated task states immutably before constructing final state
+  const updatedTaskStates = { ...state.taskStates };
+  for (const taskId of cancelledTasks) {
+    updatedTaskStates[taskId] = {
+      ...updatedTaskStates[taskId],
+      status: "cancelled",
+      completedAt: now
+    };
+  }
+
   const cancelledState: WorkflowState = {
     ...state,
     status: "cancelled",
@@ -376,20 +432,9 @@ export async function cancelWorkflow(workflowId: string): Promise<WorkflowState 
     updatedAt: now,
     readyTasks: [],
     runningTasks: [],
-    cancelledTasks: cancelledTasks,
-    taskStates: {
-      ...state.taskStates
-    }
+    cancelledTasks,
+    taskStates: updatedTaskStates,
   };
-  
-  // Mark each cancelled task
-  for (const taskId of cancelledTasks) {
-    cancelledState.taskStates[taskId] = {
-      ...cancelledState.taskStates[taskId],
-      status: "cancelled",
-      completedAt: now
-    };
-  }
   
   await saveState(cancelledState);
   return cancelledState;

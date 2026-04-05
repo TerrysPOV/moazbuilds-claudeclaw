@@ -106,9 +106,7 @@ export async function getTelemetry(filters: TelemetryFilters = {}): Promise<Gove
   // Build telemetry response
   const telemetry: GovernanceTelemetry = {
     // Session stats (derived from usage records)
-    totalSessions: new Set(
-      Object.values(aggregates.byChannel).map(() => "")
-    ).size || Object.keys(aggregates.byChannel).length,
+    totalSessions: Object.keys(aggregates.byChannel).length,
     activeSessions: 0, // Would need active session tracking
 
     // Cost stats
@@ -232,6 +230,14 @@ export async function getProviderBreakdown(): Promise<Array<{
   }));
 }
 
+function inferProvider(model: string): string {
+  if (model.startsWith("claude")) return "anthropic";
+  if (model.startsWith("gpt") || model.startsWith("o1") || model.startsWith("o3")) return "openai";
+  if (model.startsWith("gemini") || model.startsWith("glm")) return "google";
+  if (model.startsWith("llama") || model.startsWith("codellama")) return "meta";
+  return "unknown";
+}
+
 /**
  * Get model breakdown.
  */
@@ -246,8 +252,7 @@ export async function getModelBreakdown(): Promise<Array<{
   const aggregates = await getAggregates({});
 
   return Object.entries(aggregates.byModel).map(([model, stats]) => {
-    // Extract provider from model name (heuristic)
-    const provider = model.includes("-") ? model.split("-")[0] : "unknown";
+    const provider = inferProvider(model);
     return {
       model,
       provider,

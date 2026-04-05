@@ -17,6 +17,7 @@
 
 import { join } from "path";
 import { existsSync } from "fs";
+import { appendFile, readdir } from "fs/promises";
 import { randomUUID } from "crypto";
 
 const USAGE_DIR = join(process.cwd(), ".claude", "claudeclaw", "usage");
@@ -181,13 +182,13 @@ function getTodayDate(): string {
 /**
  * Record the start of an invocation.
  */
-export async function recordInvocationStart(context: InvocationContext): Promise<InvocationUsageRecord> {
+export async function recordInvocationStart(context: InvocationContext, invocationId?: string): Promise<InvocationUsageRecord> {
   await initUsageTracker();
 
   return enqueueWrite(async () => {
     const now = new Date().toISOString();
     const record: InvocationUsageRecord = {
-      invocationId: randomUUID(),
+      invocationId: invocationId ?? randomUUID(),
       eventId: context.eventId,
       sessionId: context.sessionId,
       claudeSessionId: context.claudeSessionId ?? null,
@@ -220,10 +221,7 @@ export async function recordInvocationStart(context: InvocationContext): Promise
       type: "start",
     }) + "\n";
     
-    const existingContent = existsSync(dailyLogPath) 
-      ? await Bun.file(dailyLogPath).text() 
-      : "";
-    await Bun.write(dailyLogPath, existingContent + logEntry);
+    await appendFile(dailyLogPath, logEntry);
 
     return record;
   });
@@ -267,10 +265,7 @@ export async function recordInvocationCompletion(
       estimatedCost,
     }) + "\n";
     
-    const existingContent = existsSync(dailyLogPath) 
-      ? await Bun.file(dailyLogPath).text() 
-      : "";
-    await Bun.write(dailyLogPath, existingContent + logEntry);
+    await appendFile(dailyLogPath, logEntry);
 
     return record;
   });
@@ -311,10 +306,7 @@ export async function recordInvocationFailure(
       error,
     }) + "\n";
     
-    const existingContent = existsSync(dailyLogPath) 
-      ? await Bun.file(dailyLogPath).text() 
-      : "";
-    await Bun.write(dailyLogPath, existingContent + logEntry);
+    await appendFile(dailyLogPath, logEntry);
 
     return record;
   });
@@ -355,10 +347,7 @@ export async function recordInvocationKilled(
       reason,
     }) + "\n";
     
-    const existingContent = existsSync(dailyLogPath) 
-      ? await Bun.file(dailyLogPath).text() 
-      : "";
-    await Bun.write(dailyLogPath, existingContent + logEntry);
+    await appendFile(dailyLogPath, logEntry);
 
     return record;
   });
@@ -609,11 +598,11 @@ export async function getUsageStats(): Promise<{
   let directorySizeBytes = 0;
 
   try {
-    const files = await Bun.file(USAGE_DIR).entries();
+    const files = await readdir(USAGE_DIR, { withFileTypes: true });
     for (const file of files) {
-      if (file.kind === "file") {
-        const stats = await Bun.file(join(USAGE_DIR, file.name)).size();
-        directorySizeBytes += stats;
+      if (file.isFile()) {
+        const size = Bun.file(join(USAGE_DIR, file.name)).size;
+        directorySizeBytes += size;
       }
     }
   } catch {

@@ -14,7 +14,7 @@
  * - Entries include rule provenance and operator attribution
  */
 
-import { appendFile, readFile, mkdir } from "node:fs/promises";
+import { appendFile, readFile, mkdir, writeFile, rename } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
@@ -80,13 +80,11 @@ export async function log(entry: AuditEntry): Promise<void> {
     await mkdir(AUDIT_DIR, { recursive: true });
   }
   
-  // Add timestamp if not provided
-  if (!entry.timestamp) {
-    entry.timestamp = new Date().toISOString();
-  }
-  
+  // Create a new object with timestamp if not provided (never mutate the input)
+  const finalEntry = entry.timestamp ? entry : { ...entry, timestamp: new Date().toISOString() };
+
   // Append to log file
-  const line = JSON.stringify(entry) + "\n";
+  const line = JSON.stringify(finalEntry) + "\n";
   await appendFile(AUDIT_LOG_FILE, line, "utf8");
 }
 
@@ -380,10 +378,13 @@ export async function cleanupRetention(
     }
   }
   
-  // Note: In a production system, we'd write the kept lines back
-  // For safety, we just report what would be deleted
-  // Actual deletion should be done manually or with a backup
-  
+  // Write kept lines back atomically (temp file + rename)
+  if (deleted > 0) {
+    const tmpPath = AUDIT_LOG_FILE + ".tmp";
+    await writeFile(tmpPath, keptLines.map(l => l + "\n").join(""), "utf8");
+    await rename(tmpPath, AUDIT_LOG_FILE);
+  }
+
   return {
     deleted,
     remaining: keptLines.length,

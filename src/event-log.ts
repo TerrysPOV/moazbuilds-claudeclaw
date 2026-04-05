@@ -491,8 +491,10 @@ export async function append(entry: EventEntryInput): Promise<EventRecord> {
       // File might not exist yet, which is fine
     }
 
-    // Write combined content (atomic operation)
-    await Bun.write(segPath, existingContent + line);
+    // CRASH-SAFE: write to temp file then atomically rename
+    const tmpPath = segPath + ".tmp";
+    await Bun.write(tmpPath, existingContent + line);
+    await rename(tmpPath, segPath);
 
     // Update in-memory state
     currentSegment.nextSeq = seq + 1;

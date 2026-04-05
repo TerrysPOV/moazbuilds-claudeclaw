@@ -899,12 +899,17 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
       // Gateway processed successfully - response handled by processor
       return;
     } else {
-      await sendMessage(
-        config.token,
-        chatId,
-        "Claude is currently being upgraded. Please try again shortly.",
-        threadId
-      );
+      // Legacy path - direct Claude invocation
+      const prompt = promptParts.join("\n");
+      const result = await runUserMessage("telegram", prompt);
+
+      if (result.exitCode !== 0) {
+        await sendMessage(config.token, chatId, `Error: ${result.stderr || "Unknown error"}`, threadId);
+        return;
+      }
+
+      const responseText = result.stdout || "Done.";
+      await sendMessage(config.token, chatId, responseText, threadId);
       return;
     }
   } catch (err) {

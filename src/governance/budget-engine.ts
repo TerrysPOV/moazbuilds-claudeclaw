@@ -365,7 +365,7 @@ function matchesScope(record: { source?: string; channelId?: string; sessionId?:
   // Check source
   if (scope.source) {
     const sources = Array.isArray(scope.source) ? scope.source : [scope.source];
-    if (record.source && !sources.includes(record.source)) {
+    if (!record.source || !sources.includes(record.source)) {
       return false;
     }
   }
@@ -373,7 +373,7 @@ function matchesScope(record: { source?: string; channelId?: string; sessionId?:
   // Check channelId
   if (scope.channelId) {
     const channels = Array.isArray(scope.channelId) ? scope.channelId : [scope.channelId];
-    if (record.channelId && !channels.includes(record.channelId)) {
+    if (!record.channelId || !channels.includes(record.channelId)) {
       return false;
     }
   }
@@ -381,7 +381,7 @@ function matchesScope(record: { source?: string; channelId?: string; sessionId?:
   // Check sessionId
   if (scope.sessionId) {
     const sessions = Array.isArray(scope.sessionId) ? scope.sessionId : [scope.sessionId];
-    if (record.sessionId && !sessions.includes(record.sessionId)) {
+    if (!record.sessionId || !sessions.includes(record.sessionId)) {
       return false;
     }
   }
@@ -389,7 +389,7 @@ function matchesScope(record: { source?: string; channelId?: string; sessionId?:
   // Check provider
   if (scope.provider) {
     const providers = Array.isArray(scope.provider) ? scope.provider : [scope.provider];
-    if (record.provider && !providers.includes(record.provider)) {
+    if (!record.provider || !providers.includes(record.provider)) {
       return false;
     }
   }
@@ -397,7 +397,7 @@ function matchesScope(record: { source?: string; channelId?: string; sessionId?:
   // Check model
   if (scope.model) {
     const models = Array.isArray(scope.model) ? scope.model : [scope.model];
-    if (record.model && !models.includes(record.model)) {
+    if (!record.model || !models.includes(record.model)) {
       return false;
     }
   }
@@ -422,15 +422,13 @@ function getPeriodBounds(period: BudgetPeriod): { startDate: string; endDate: st
       break;
 
     case "daily":
-      startDate = new Date(year, month, day, 0, 0, 0, 0).toISOString();
-      endDate = new Date(year, month, day, 23, 59, 59, 999).toISOString();
+      startDate = new Date(Date.UTC(year, month, day, 0, 0, 0, 0)).toISOString();
+      endDate = new Date(Date.UTC(year, month, day, 23, 59, 59, 999)).toISOString();
       break;
 
     case "monthly":
-      startDate = new Date(year, month, 1, 0, 0, 0, 0).toISOString();
-      // Last day of month
-      const lastDay = new Date(year, month + 1, 0, 23, 59, 59, 999).toISOString();
-      endDate = lastDay;
+      startDate = new Date(Date.UTC(year, month, 1, 0, 0, 0, 0)).toISOString();
+      endDate = new Date(Date.UTC(year, month + 1, 0, 23, 59, 59, 999)).toISOString();
       break;
   }
 

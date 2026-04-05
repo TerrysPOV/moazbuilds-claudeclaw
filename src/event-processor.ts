@@ -229,29 +229,22 @@ export async function processNext(): Promise<boolean> {
     
     for await (const event of readFrom(lastProcessedSeq + 1)) {
       // Skip non-pending events and internal events (like status updates)
-      if (event.status === "pending" && !event.type.startsWith("__")) {
-        nextEvent = event;
-        break;
+      if (event.status !== "pending" || event.type.startsWith("__")) {
+        lastProcessedSeq = Math.max(lastProcessedSeq, event.seq);
+        continue;
       }
-      lastProcessedSeq = Math.max(lastProcessedSeq, event.seq);
+      // Skip events already processed (deduplication check against append-only log)
+      const eventDedupeKey = getDedupeKey(event);
+      if (isDuplicate(eventDedupeKey)) {
+        lastProcessedSeq = Math.max(lastProcessedSeq, event.seq);
+        continue;
+      }
+      nextEvent = event;
+      break;
     }
 
     if (!nextEvent) {
       return false; // No pending events
-    }
-
-    // Check for duplicates
-    const dedupeKey = getDedupeKey(nextEvent);
-    if (isDuplicate(dedupeKey)) {
-      console.log(`[processor] Skipping duplicate event ${nextEvent.id} (seq ${nextEvent.seq})`);
-      
-      // Mark as done without processing
-      await appendStatusUpdate(nextEvent.id, {
-        status: "done",
-      });
-      
-      lastProcessedSeq = nextEvent.seq;
-      return true;
     }
 
     // Process the event

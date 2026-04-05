@@ -78,13 +78,14 @@ export interface WorkflowState {
 /**
  * Workflow status - terminal or active states
  */
-export type WorkflowStatus = 
+export type WorkflowStatus =
   | "pending"
   | "running"
   | "waiting"
   | "completed"
   | "failed"
-  | "cancelled";
+  | "cancelled"
+  | "blocked";
 
 /**
  * Workflow-level error information

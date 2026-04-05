@@ -8,7 +8,7 @@ import { transcribeAudioToText } from "../whisper";
 import { resolveSkillPrompt } from "../skills";
 import { mkdir } from "node:fs/promises";
 import { extname, join } from "node:path";
-import { processInboundEvent, setGatewayEnabled } from "../gateway";
+import { processEventWithFallback, setGatewayEnabled } from "../gateway";
 import { normalizeDiscordMessage, type NormalizedEvent } from "../gateway/normalizer";
 
 
@@ -546,14 +546,30 @@ async function handleMessageCreate(token: string, message: DiscordMessage): Prom
       (normalized.metadata as any).prompt = prompt;
       (normalized.metadata as any).label = label;
 
-      const gatewayResult = await processInboundEvent(normalized);
+      const gatewayResult = await processEventWithFallback(normalized, {
+        legacyHandler: async () => {
+          const legacyRes = await runUserMessage("discord", prompt);
+          return {
+            success: legacyRes.exitCode === 0,
+            exitCode: legacyRes.exitCode,
+            stdout: legacyRes.stdout,
+            stderr: legacyRes.stderr,
+          };
+        },
+      });
       if (!gatewayResult.success) {
         await sendMessage(config.token, channelId, `Gateway error: ${gatewayResult.error}`);
         return;
       }
-      // For v2, the response is handled asynchronously via the resume system
-      // For now, send a processing message
-      await sendMessage(config.token, channelId, "Processing your request...");
+
+      // Deliver response back to Discord
+      if (gatewayResult.legacyResult?.stdout) {
+        const responseText = gatewayResult.legacyResult.stdout || "Done.";
+        await sendMessage(config.token, channelId, responseText);
+      } else {
+        // Gateway path - response will be delivered asynchronously via the event processor
+        await sendMessage(config.token, channelId, "Processing your request...");
+      }
       return;
     }
 

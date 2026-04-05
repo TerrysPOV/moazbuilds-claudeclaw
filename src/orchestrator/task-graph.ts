@@ -168,10 +168,11 @@ export function getReadyTasks(state: WorkflowState, _definition: WorkflowDefinit
   const ready: TaskDefinition[] = [];
   const definitionTasks = new Map(_definition.tasks.map(t => [t.id, t]));
   
-  // Get set of completed task IDs
+  // Get set of completed task IDs (including continued tasks so dependents can proceed)
   const completedOrFailed = new Set([
     ...state.completedTasks,
-    ...state.failedTasks
+    ...state.failedTasks,
+    ...(state.continuedTasks || [])
   ]);
   
   for (const taskId of state.readyTasks) {
@@ -259,7 +260,7 @@ export function advanceWorkflow(
     
     if (currentAttempt < maxRetries && task.onError === "retry_task") {
       // Schedule retry
-      const retryDelay = calculateRetryDelay(task.retryPolicy, currentAttempt);
+      const retryDelay = calculateRetryDelay(currentAttempt, task.retryPolicy);
       newState.taskStates[taskId] = {
         ...newState.taskStates[taskId],
         status: "pending",
@@ -319,9 +320,12 @@ export function advanceWorkflow(
   // Update workflow timestamps
   newState.updatedAt = now;
   
-  // Check if workflow is complete
-  checkWorkflowCompletion(newState, definition);
-  
+  // Check if workflow is complete (immutable: merge returned changes)
+  const completion = checkWorkflowCompletion(newState, definition);
+  if (completion) {
+    return { ...newState, ...completion };
+  }
+
   return newState;
 }
 
@@ -386,47 +390,50 @@ function calculateRetryDelay(
 }
 
 /**
- * Check if workflow is complete and update status accordingly
+ * Check if workflow is complete and return state changes
+ * Returns a partial WorkflowState to merge, or null if no change needed.
  * Note: continuedTasks (onError: "continue") are not counted as terminal completion
  */
-function checkWorkflowCompletion(state: WorkflowState, definition: WorkflowDefinition): void {
+function checkWorkflowCompletion(state: WorkflowState, definition: WorkflowDefinition): Partial<WorkflowState> | null {
   const totalTasks = definition.tasks.length;
   const completedTasks = state.completedTasks.length;
   const failedTasks = state.failedTasks.length;
   const continuedTasks = state.continuedTasks?.length || 0;
   const pendingOrReady = state.readyTasks.length;
   const runningTasks = state.runningTasks.length;
-  
+
   if (state.status === "failed" || state.status === "cancelled") {
     // Already in terminal state
-    return;
+    return null;
   }
-  
+
   // Terminal count excludes continuedTasks - they don't cause failure but don't complete either
   const terminalCount = completedTasks + failedTasks;
   const nonTerminalRemaining = continuedTasks + pendingOrReady + runningTasks;
-  
+
   if (terminalCount + nonTerminalRemaining === totalTasks) {
     // All tasks have finished in some way
     if (failedTasks > 0) {
-      state.status = "failed";
-      if (!state.completedAt) {
-        state.completedAt = new Date().toISOString();
-      }
+      return {
+        status: "failed",
+        ...(!state.completedAt ? { completedAt: new Date().toISOString() } : {})
+      };
     } else if (nonTerminalRemaining === 0) {
       // Everything completed with no failures and no remaining tasks
-      state.status = "completed";
-      if (!state.completedAt) {
-        state.completedAt = new Date().toISOString();
-      }
+      return {
+        status: "completed",
+        ...(!state.completedAt ? { completedAt: new Date().toISOString() } : {})
+      };
     }
     // If there are continued tasks still being tracked but no pending/running,
     // the workflow stays "running" - continued tasks don't cause completion
   } else if (pendingOrReady === 0 && runningTasks === 0 && terminalCount < totalTasks) {
     // No tasks ready or running but workflow not complete - this is an error
     // It means we have blocked tasks but no way to proceed
-    state.status = "blocked" as WorkflowState["status"];
+    return { status: "blocked" };
   }
+
+  return null;
 }
 
 /**

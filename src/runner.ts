@@ -421,7 +421,6 @@ async function execClaude(name: string, prompt: string): Promise<RunResult> {
 
   // Ensure governance client is initialized
   const gc = getGovernanceClient();
-  await mkdir(LOGS_DIR, { recursive: true });
 
   const existing = await getSession();
   const isNew = !existing;
@@ -522,11 +521,11 @@ async function execClaude(name: string, prompt: string): Promise<RunResult> {
     claudeSessionId: existing?.sessionId ?? null,
     source: name,
     channelId: undefined,
-    provider: primaryConfig.api || "anthropic",
+    provider: primaryConfig.model.startsWith("gpt") || primaryConfig.model.startsWith("o1") || primaryConfig.model.startsWith("o3") ? "openai" : "anthropic",
     model: primaryConfig.model,
     metadata: { taskType, routingReasoning },
   };
-  await recordInvocationStart(invocationContext);
+  await recordInvocationStart(invocationContext, invocationId);
 
   let exec: { rawStdout: string; stderr: string; exitCode: number };
   try {

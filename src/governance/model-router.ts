@@ -70,7 +70,7 @@ export function configureRouter(config: Partial<RouterConfig>): void {
   routerConfig = {
     ...routerConfig,
     ...config,
-    fallbackChain: config.fallbackChain || routerConfig.fallbackChain,
+    fallbackChain: config.fallbackChain ?? routerConfig.fallbackChain,
   };
 }
 
@@ -176,7 +176,7 @@ export async function selectModel(requestContext: ModelRequestContext): Promise<
   });
 
   const budgetState = determineBudgetState(budgetEvaluations);
-  const worstEvaluation = budgetEvaluations[0]; // First is typically the most relevant
+  const worstEvaluation = budgetEvaluations.find(e => e.state === budgetState) ?? budgetEvaluations[0];
 
   // Check for explicit override
   if (requestContext.explicitOverride?.allowed && 

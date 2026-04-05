@@ -125,6 +125,7 @@ let cacheConfig = { enabled: false, maxEntries: 1000, ttlMs: 60000 };
 
 let loadedRules: PolicyRule[] = [];
 let loadedAt: string = "";
+let loadError: Error | null = null;
 
 // ============================================================================
 // Core API
@@ -137,7 +138,18 @@ let loadedAt: string = "";
 export function evaluate(request: ToolRequestContext): PolicyDecision {
   const requestId = randomUUID();
   const evaluatedAt = new Date().toISOString();
-  
+
+  // Fail closed if policy engine failed to initialize
+  if (loadError) {
+    return {
+      requestId,
+      action: "deny",
+      reason: `Policy engine failed to initialize: ${loadError.message}`,
+      evaluatedAt,
+      cacheable: false,
+    };
+  }
+
   // Check cache first if enabled
   if (cacheConfig.enabled) {
     const cached = getCachedDecision(request);
@@ -182,7 +194,7 @@ export function evaluate(request: ToolRequestContext): PolicyDecision {
     matchedRuleId: matchedRule.id,
     reason: matchedRule.reason || `Matched rule: ${matchedRule.id}`,
     evaluatedAt,
-    cacheable: matchedRule.action === "allow",
+    cacheable: matchedRule.action === "allow" && !matchedRule.conditions?.timeWindow,
   };
   
   if (cacheConfig.enabled && decision.cacheable) {
@@ -287,6 +299,9 @@ export function validateRules(rules: PolicyRule[]): ValidationResult {
           if (isNaN(endDate.getTime())) {
             errors.push({ ruleId: rule.id, field: "conditions.timeWindow.end", message: "Invalid end date format" });
           }
+          if (!isNaN(startDate.getTime()) && !isNaN(endDate.getTime()) && startDate >= endDate) {
+            warnings.push({ ruleId: rule.id, field: "conditions.timeWindow", message: "timeWindow end is not after start - rule will never match" });
+          }
         }
       }
     }
@@ -384,25 +399,28 @@ function matchesScope(scope: PolicyScope | undefined, request: ToolRequestContex
   }
   
   // Check channelId
-  if (scope.channelId && request.channelId) {
+  if (scope.channelId) {
+    if (!request.channelId) return false;
     if (Array.isArray(scope.channelId)) {
       if (!scope.channelId.includes(request.channelId)) return false;
     } else if (scope.channelId !== "*") {
       if (scope.channelId !== request.channelId) return false;
     }
   }
-  
+
   // Check userId
-  if (scope.userId && request.userId) {
+  if (scope.userId) {
+    if (!request.userId) return false;
     if (Array.isArray(scope.userId)) {
       if (!scope.userId.includes(request.userId)) return false;
     } else if (scope.userId !== "*") {
       if (scope.userId !== request.userId) return false;
     }
   }
-  
+
   // Check skillName
-  if (scope.skillName && request.skillName) {
+  if (scope.skillName) {
+    if (!request.skillName) return false;
     if (Array.isArray(scope.skillName)) {
       if (!scope.skillName.includes(request.skillName)) return false;
     } else if (scope.skillName !== "*") {
@@ -426,15 +444,17 @@ function matchesConditions(conditions: PolicyConditions | undefined, request: To
   }
   
   // Check arg constraints
-  if (conditions.argConstraints && request.toolArgs) {
+  if (conditions.argConstraints) {
+    if (!request.toolArgs) return false;
     for (const [key, expectedValue] of Object.entries(conditions.argConstraints)) {
       const actualValue = request.toolArgs[key];
       if (actualValue !== expectedValue) return false;
     }
   }
-  
+
   // Check metadata constraints
-  if (conditions.metadata && request.metadata) {
+  if (conditions.metadata) {
+    if (!request.metadata) return false;
     for (const [key, expectedValue] of Object.entries(conditions.metadata)) {
       const actualValue = request.metadata[key];
       if (actualValue !== expectedValue) return false;
@@ -522,5 +542,6 @@ function cacheDecision(request: ToolRequestContext, decision: PolicyDecision): v
 
 // Auto-load rules on module import
 loadRules().catch(err => {
+  loadError = err instanceof Error ? err : new Error(String(err));
   console.error("Failed to load policy rules:", err);
 });

@@ -13,6 +13,21 @@ import { initializeWorkflowState } from "./task-graph.ts";
 
 const WORKFLOWS_DIR = join(process.cwd(), ".claude", "claudeclaw", "workflows");
 
+/** Maximum number of workflow definitions to retain in definitions.json */
+const MAX_STORED_DEFINITIONS = 1000;
+
+/**
+ * Simple write queue to serialize read-modify-write operations on definitions.json.
+ * Prevents concurrent writes from clobbering each other.
+ */
+let definitionWriteQueue: Promise<void> = Promise.resolve();
+
+function enqueueDefinitionWrite(fn: () => Promise<void>): Promise<void> {
+  const task = definitionWriteQueue.then(fn);
+  definitionWriteQueue = task.catch(() => {});
+  return task;
+}
+
 /**
  * Ensure the workflows directory exists
  */
@@ -46,10 +61,14 @@ export async function saveState(state: WorkflowState): Promise<void> {
   const path = getWorkflowPath(state.workflowId);
   const tempPath = `${path}.tmp.${Date.now()}.${Math.random().toString(36).slice(2)}`;
   
-  // Write to temp file first
+  // Write to temp file first, then atomic rename for crash safety.
+  // NOTE: writeFile + rename provides atomicity but not full durability.
+  // A crash between writeFile and rename could lose the write.
+  // For full durability, use fd.sync() before rename. Accepted trade-off
+  // for performance given the daemon's checkpoint interval.
   const content = JSON.stringify(state, null, 2);
   await writeFile(tempPath, content, { encoding: "utf-8", flag: "w" });
-  
+
   // Atomic rename to final location
   try {
     await rename(tempPath, path);
@@ -156,36 +175,55 @@ function isTerminalState(status: WorkflowState["status"]): boolean {
 }
 
 /**
- * Save workflow definition for restart reconstruction
+ * Save workflow definition for restart reconstruction.
+ * Serialized through a write queue to prevent concurrent read-modify-write races.
  */
 export async function saveDefinition(definition: WorkflowDefinition): Promise<void> {
-  await ensureWorkflowsDir();
-  
-  const path = getDefinitionsPath();
-  let definitions: Record<string, WorkflowDefinition> = {};
-  
-  try {
-    const content = await readFile(path, { encoding: "utf-8" });
-    definitions = JSON.parse(content);
-  } catch {
-    // File doesn't exist or is corrupt, start fresh
-  }
-  
-  definitions[definition.id] = definition;
-  
-  const tempPath = `${path}.tmp.${Date.now()}.${Math.random().toString(36).slice(2)}`;
-  await writeFile(tempPath, JSON.stringify(definitions, null, 2), { encoding: "utf-8", flag: "w" });
-  
-  try {
-    await rename(tempPath, path);
-  } catch {
+  return enqueueDefinitionWrite(async () => {
+    await ensureWorkflowsDir();
+
+    const path = getDefinitionsPath();
+    let definitions: Record<string, WorkflowDefinition> = {};
+
     try {
-      await unlink(tempPath);
+      const content = await readFile(path, { encoding: "utf-8" });
+      definitions = JSON.parse(content);
     } catch {
-      // Ignore
+      // File doesn't exist or is corrupt, start fresh
     }
-    throw new Error("Failed to save workflow definition");
-  }
+
+    definitions[definition.id] = definition;
+
+    // Prune oldest definitions when the store exceeds the cap
+    const defKeys = Object.keys(definitions);
+    if (defKeys.length > MAX_STORED_DEFINITIONS) {
+      const entries = Object.entries(definitions);
+      // Sort by createdAt (or id as fallback) so oldest come first
+      entries.sort((a, b) => {
+        const aTime = (a[1] as any).createdAt || a[0];
+        const bTime = (b[1] as any).createdAt || b[0];
+        return String(aTime).localeCompare(String(bTime));
+      });
+      const toRemove = entries.slice(0, entries.length - MAX_STORED_DEFINITIONS);
+      for (const [id] of toRemove) {
+        delete definitions[id];
+      }
+    }
+
+    const tempPath = `${path}.tmp.${Date.now()}.${Math.random().toString(36).slice(2)}`;
+    await writeFile(tempPath, JSON.stringify(definitions, null, 2), { encoding: "utf-8", flag: "w" });
+
+    try {
+      await rename(tempPath, path);
+    } catch {
+      try {
+        await unlink(tempPath);
+      } catch {
+        // Ignore
+      }
+      throw new Error("Failed to save workflow definition");
+    }
+  });
 }
 
 /**
@@ -325,16 +363,30 @@ export async function deleteWorkflow(workflowId: string): Promise<void> {
     // Already gone
   }
   
-  // Also remove from definitions if present
-  const defPath = getDefinitionsPath();
-  try {
-    const content = await readFile(defPath, { encoding: "utf-8" });
-    const definitions = JSON.parse(content) as Record<string, WorkflowDefinition>;
-    delete definitions[workflowId];
-    await writeFile(defPath, JSON.stringify(definitions, null, 2), { encoding: "utf-8", flag: "w" });
-  } catch {
-    // Ignore - definition might not exist
-  }
+  // Also remove from definitions if present (serialized through write queue)
+  await enqueueDefinitionWrite(async () => {
+    const defPath = getDefinitionsPath();
+    try {
+      const content = await readFile(defPath, { encoding: "utf-8" });
+      const definitions = JSON.parse(content) as Record<string, WorkflowDefinition>;
+      delete definitions[workflowId];
+
+      const tempPath = `${defPath}.tmp.${Date.now()}.${Math.random().toString(36).slice(2)}`;
+      await writeFile(tempPath, JSON.stringify(definitions, null, 2), { encoding: "utf-8", flag: "w" });
+
+      try {
+        await rename(tempPath, defPath);
+      } catch {
+        try {
+          await unlink(tempPath);
+        } catch {
+          // Ignore
+        }
+      }
+    } catch {
+      // Ignore - definition might not exist
+    }
+  });
 }
 
 /**

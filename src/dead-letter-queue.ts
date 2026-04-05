@@ -27,7 +27,7 @@
  */
 
 import { join } from "path";
-import { mkdir } from "fs/promises";
+import { mkdir, appendFile } from "fs/promises";
 import { randomUUID } from "crypto";
 import {
   initEventLog,
@@ -112,17 +112,10 @@ async function loadDLQ(): Promise<void> {
  */
 async function saveDLQEntry(entry: DLQEntry): Promise<void> {
   const line = JSON.stringify(entry) + "\n";
-  
+
   try {
-    // Append to existing file
-    let existingContent = "";
-    try {
-      existingContent = await Bun.file(DLQ_FILE).text();
-    } catch {
-      // File doesn't exist yet
-    }
-    
-    await Bun.write(DLQ_FILE, existingContent + line);
+    // Use appendFile for O(1) additions instead of read-whole-file + write-whole-file
+    await appendFile(DLQ_FILE, line);
   } catch (err) {
     console.error("[dlq] Failed to save DLQ entry:", err);
     throw err;

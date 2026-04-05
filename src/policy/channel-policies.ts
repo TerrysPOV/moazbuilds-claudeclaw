@@ -63,9 +63,9 @@ export function getScopedRules(context: ToolRequestContext): PolicyRule[] {
   const globalRules = getRules();
   allRules.push(...globalRules);
   
-  // Try to load and merge scoped policies
+  // Try to load and merge scoped policies (use cache first)
   try {
-    const scopedConfig = loadScopedPolicyConfig();
+    const scopedConfig = cachedConfig ?? loadScopedPolicyConfig();
     if (scopedConfig) {
       const sourceConfig = scopedConfig.sources[context.source];
       if (sourceConfig) {
@@ -165,17 +165,18 @@ let cachedConfig: ScopedPolicyConfig | null = null;
 let configLoadedAt: string = "";
 
 function loadScopedPolicyConfig(): ScopedPolicyConfig | null {
+  if (cachedConfig) return cachedConfig;
   try {
     if (!existsSync(SCOPED_POLICY_FILE)) {
       return null;
     }
-    
+
     const content = readFileSync(SCOPED_POLICY_FILE, "utf8");
     const config = JSON.parse(content) as ScopedPolicyConfig;
-    
+
     cachedConfig = config;
     configLoadedAt = new Date().toISOString();
-    
+
     return config;
   } catch {
     return null;
