@@ -2,22 +2,31 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 16-02
+current_plan: 16-03
 status: in_progress
 last_updated: "2026-04-06T00:00:00.000Z"
 progress:
   total_phases: 16
   completed_phases: 12
   total_plans: 21
-  completed_plans: 23
+  completed_plans: 24
 ---
 
 # State: ClaudeClaw v2 Upgrade
 
 ## Current Position
 **Phase:** 16 — Create Agent Command (In Progress)
-**Current Plan:** 16-02 (next)
-**Status:** 16-01 complete
+**Current Plan:** 16-03 (next)
+**Status:** 16-02 complete
+
+### 2026-04-06 — Phase 16 Plan 2 (16-02) Completion
+- Threaded optional `agentName` through sessions, runner, jobs, send command, cron loop
+- `src/sessions.ts`: agent sessions at `agents/<name>/session.json`, bypass module cache
+- `src/runner.ts`: new `loadAgentPrompts` helper; agent prompts replace global ones when set
+- `src/jobs.ts`: `Job.agent` optional field, parsed from frontmatter
+- `src/commands/send.ts`: `--agent <name>` flag routes to agent's session
+- `src/commands/start.ts`: cron loop passes `job.agent` to `run()`
+- 6 new sessions tests; full suite 596/609 (13 pre-existing failures unchanged); tsc baseline unchanged
 
 ### 2026-04-06 — Phase 16 Plan 1 (16-01) Completion
 - Created `src/agents.ts` with validateAgentName, parseScheduleToCron, createAgent, loadAgent, listAgents
