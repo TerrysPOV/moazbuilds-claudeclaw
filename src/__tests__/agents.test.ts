@@ -220,3 +220,59 @@ describe("listAgents and loadAgent", () => {
     await expect(loadAgent("definitely-not-an-agent-xyz")).rejects.toThrow();
   });
 });
+
+describe("integration: full agent lifecycle", () => {
+  it("creates an agent end-to-end with all files, job, and listing", async () => {
+    const name = uniq("suzy");
+    const role = "Daily content sourcer for the team";
+    const personality = "Sharp and curious. Loves weird internet corners. Skeptical of hype, allergic to filler.";
+    const ctx = await createAgent({
+      name,
+      role,
+      personality,
+      schedule: "daily at 9am",
+      discordChannels: ["#test", "#content"],
+      dataSources: "RSS feeds + HackerNews + Lobsters",
+    });
+
+    // 1. All four .md files + .gitignore exist
+    expect(existsSync(ctx.identityPath)).toBe(true);
+    expect(existsSync(ctx.soulPath)).toBe(true);
+    expect(existsSync(ctx.claudeMdPath)).toBe(true);
+    expect(existsSync(ctx.memoryPath)).toBe(true);
+    expect(existsSync(join(ctx.dir, ".gitignore"))).toBe(true);
+
+    // 2. IDENTITY.md contains role
+    const identity = await readFile(ctx.identityPath, "utf8");
+    expect(identity).toContain(role);
+
+    // 3. SOUL.md contains personality
+    const soul = await readFile(ctx.soulPath, "utf8");
+    expect(soul).toContain(personality);
+
+    // 4. CLAUDE.md contains channels and data sources
+    const claudeMd = await readFile(ctx.claudeMdPath, "utf8");
+    expect(claudeMd).toContain("#test");
+    expect(claudeMd).toContain("#content");
+    expect(claudeMd).toContain("RSS feeds");
+
+    // 5. Job file exists with correct schedule + agent fields
+    const jobPath = join(JOBS_DIR, `${name}.md`);
+    expect(existsSync(jobPath)).toBe(true);
+    const job = await readFile(jobPath, "utf8");
+    expect(job).toContain("schedule: 0 9 * * *");
+    expect(job).toContain(`agent: ${name}`);
+
+    // 6. listAgents includes the new agent
+    const all = await listAgents();
+    expect(all).toContain(name);
+
+    // 7. loadAgent returns correct paths
+    const loaded = await loadAgent(name);
+    expect(loaded.name).toBe(name);
+    expect(loaded.identityPath).toBe(ctx.identityPath);
+    expect(loaded.soulPath).toBe(ctx.soulPath);
+    expect(loaded.claudeMdPath).toBe(ctx.claudeMdPath);
+    expect(loaded.memoryPath).toBe(ctx.memoryPath);
+  });
+});
