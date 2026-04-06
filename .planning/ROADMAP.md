@@ -342,3 +342,13 @@ Phase 2 (Gateway) ────────────────────�
 **Plans:**
 2/2 plans complete
 - [x] 15-02-PLAN.md — Code simplification (Wave 2, depends on 15-01) ✅ Complete
+
+### Phase 16: Create Agent Command — /claudeclaw:create-agent slash command with wizard flow
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 15
+**Plans:** 1/3 plans executed
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 16 to break down)

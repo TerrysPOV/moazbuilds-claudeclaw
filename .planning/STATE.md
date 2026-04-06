@@ -2,22 +2,29 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: Not started
-status: completed
-last_updated: "2026-03-31T09:12:27.891Z"
+current_plan: 16-02
+status: in_progress
+last_updated: "2026-04-06T00:00:00.000Z"
 progress:
   total_phases: 16
   completed_phases: 12
-  total_plans: 18
-  completed_plans: 22
+  total_plans: 21
+  completed_plans: 23
 ---
 
 # State: ClaudeClaw v2 Upgrade
 
 ## Current Position
-**Phase:** 15 — Test Fix & Simplification (In Progress)
-**Current Plan:** Not started
-**Status:** Milestone complete
+**Phase:** 16 — Create Agent Command (In Progress)
+**Current Plan:** 16-02 (next)
+**Status:** 16-01 complete
+
+### 2026-04-06 — Phase 16 Plan 1 (16-01) Completion
+- Created `src/agents.ts` with validateAgentName, parseScheduleToCron, createAgent, loadAgent, listAgents
+- 26 unit/integration tests in `src/__tests__/agents.test.ts`, all passing
+- NL→cron parser handles 9 documented presets + raw cron passthrough
+- Lazy cwd resolution pattern for test/runtime alignment
+- No regressions: 13 pre-existing failures unchanged
 
 ## Phase Overview
 
