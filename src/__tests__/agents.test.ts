@@ -473,4 +473,36 @@ describe("Phase 17: multi-job agents", () => {
       expect(jobs[0].trigger).toContain("do the thing");
     });
   });
+
+  describe("Phase 17: parseScheduleToCron broadening", () => {
+    const cases: Array<[string, string | null]> = [
+      ["every day at 7pm", "0 19 * * *"],
+      ["every day at 7 pm", "0 19 * * *"],
+      ["every weekday at 9am", "0 9 * * 1-5"],
+      ["hourly", "0 * * * *"],
+      ["every monday at 9am", "0 9 * * 1"],
+      ["twice daily", "0 9,21 * * *"],
+      ["thrice daily", "0 9,13,17 * * *"],
+      ["every day at 7am and 7pm", "0 7,19 * * *"],
+      ["every day at 9am, 1pm, 5pm", "0 9,13,17 * * *"],
+      ["every 2 hours", "0 */2 * * *"],
+      ["daily at noon", "0 12 * * *"],
+      ["daily at midnight", "0 0 * * *"],
+      ["every weekend", "0 0 * * 0,6"],
+      // negatives
+      ["blarghonk", null],
+      ["every 0 hours", null],
+      ["every 30 hours", null],
+      ["every day at 25pm", null],
+      // regressions
+      ["every 15 minutes", "*/15 * * * *"],
+      ["daily at 9am", "0 9 * * *"],
+      ["*/5 * * * *", "*/5 * * * *"],
+    ];
+    for (const [input, expected] of cases) {
+      it(`parseScheduleToCron(${JSON.stringify(input)}) === ${JSON.stringify(expected)}`, () => {
+        expect(parseScheduleToCron(input)).toBe(expected);
+      });
+    }
+  });
 });
