@@ -2,6 +2,7 @@ import { readdir } from "fs/promises";
 import { join } from "path";
 
 const JOBS_DIR = join(process.cwd(), ".claude", "claudeclaw", "jobs");
+const AGENTS_DIR = join(process.cwd(), "agents");
 
 export interface Job {
   name: string;
@@ -10,6 +11,9 @@ export interface Job {
   recurring: boolean;
   notify: true | false | "error";
   agent?: string;
+  label?: string;
+  enabled?: boolean;
+  model?: string;
 }
 
 function parseFrontmatterValue(raw: string): string {
@@ -56,24 +60,69 @@ function parseJobFile(name: string, content: string): Job | null {
   const agentRaw = agentLine ? parseFrontmatterValue(agentLine.replace("agent:", "")) : "";
   const agent = agentRaw || undefined;
 
-  return { name, schedule, prompt, recurring, notify, agent };
+  const labelLine = lines.find((l) => l.startsWith("label:"));
+  const labelRaw = labelLine ? parseFrontmatterValue(labelLine.replace("label:", "")) : "";
+  const label = labelRaw || name;
+
+  const enabledLine = lines.find((l) => l.startsWith("enabled:"));
+  const enabledRaw = enabledLine
+    ? parseFrontmatterValue(enabledLine.replace("enabled:", "")).toLowerCase()
+    : "";
+  const enabled = !(enabledRaw === "false" || enabledRaw === "no");
+
+  const modelLine = lines.find((l) => l.startsWith("model:"));
+  const modelRaw = modelLine ? parseFrontmatterValue(modelLine.replace("model:", "")) : "";
+  const model = modelRaw || undefined;
+
+  return { name, schedule, prompt, recurring, notify, agent, label, enabled, model };
 }
 
 export async function loadJobs(): Promise<Job[]> {
   const jobs: Job[] = [];
-  let files: string[];
-  try {
-    files = await readdir(JOBS_DIR);
-  } catch {
-    return jobs;
-  }
 
-  for (const file of files) {
+  // 1. Flat-dir scan (legacy + standalone non-agent jobs)
+  let flatFiles: string[] = [];
+  try {
+    flatFiles = await readdir(JOBS_DIR);
+  } catch {
+    /* missing dir is fine */
+  }
+  for (const file of flatFiles) {
     if (!file.endsWith(".md")) continue;
     const content = await Bun.file(join(JOBS_DIR, file)).text();
     const job = parseJobFile(file.replace(/\.md$/, ""), content);
-    if (job) jobs.push(job);
+    if (job && job.enabled !== false) jobs.push(job);
   }
+
+  // 2. agents/<name>/jobs/*.md scan (Phase 17)
+  let agentDirs: string[] = [];
+  try {
+    agentDirs = await readdir(AGENTS_DIR);
+  } catch {
+    return jobs;
+  }
+  for (const agentName of agentDirs) {
+    const agentJobsDir = join(AGENTS_DIR, agentName, "jobs");
+    let jobFiles: string[] = [];
+    try {
+      jobFiles = await readdir(agentJobsDir);
+    } catch {
+      continue;
+    }
+    for (const file of jobFiles) {
+      if (!file.endsWith(".md")) continue;
+      const labelFromFile = file.replace(/\.md$/, "");
+      const content = await Bun.file(join(agentJobsDir, file)).text();
+      const job = parseJobFile(`${agentName}/${labelFromFile}`, content);
+      if (!job) continue;
+      // Directory location is authoritative.
+      job.agent = agentName;
+      job.label = labelFromFile;
+      if (job.enabled === false) continue;
+      jobs.push(job);
+    }
+  }
+
   return jobs;
 }
 
