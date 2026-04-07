@@ -9,7 +9,7 @@ progress:
   total_phases: 16
   completed_phases: 12
   total_plans: 21
-  completed_plans: 25
+  completed_plans: 26
 ---
 
 # State: ClaudeClaw v2 Upgrade
@@ -18,6 +18,18 @@ progress:
 **Phase:** 17 — Multi-Job Agents / Wizard Workflow (In Progress)
 **Current Plan:** 17-05 (next)
 **Status:** 17-04 complete (parallel with 17-03)
+
+### 2026-04-07 — Phase 17 Plan 3 (17-03) Completion
+- Added `updateAgent(name, patch)` to `src/agents.ts` with selective field patching for SOUL.md (workflow, personality) and CLAUDE.md (discordChannels, dataSources)
+- Pure string transforms: `applySoulPatch` / `applyClaudeMdPatch` — marker-aware with legacy-format regex fallback
+- 8 new section marker constants (`claudeclaw:workflow:start/end` etc.) mirroring existing `claudeclaw:managed` convention
+- `renderSoul` now wraps Personality in markers and emits optional `## Workflow` section when `opts.workflow` set
+- `renderClaudeMd` wraps Discord Channels and Data Sources in markers
+- `AgentCreateOpts.workflow?: string` added; threaded through to `renderSoul`
+- **UPDATE-02 invariant** enforced: source-grep unit test parses updateAgent function body and asserts zero references to `memoryPath|MEMORY.md|ensureMemoryFile|getMemoryPath|sessionPath|session.json`. mtime tests confirm MEMORY.md untouched after every patch shape.
+- 20 new tests; agents.test.ts 85/85 green; full suite 665/678 (13 pre-existing failures unchanged)
+- Commits: 3f9a018 (RED), 971204c (GREEN)
+- Requirements UPDATE-01, UPDATE-02 complete
 
 ### 2026-04-07 — Phase 17 Plan 4 (17-04) Completion
 - Extended `loadJobs()` in `src/jobs.ts` to scan both `.claude/claudeclaw/jobs/` AND `agents/*/jobs/*.md`
