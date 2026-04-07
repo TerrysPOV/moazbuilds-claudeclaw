@@ -28,7 +28,7 @@ Friendly, brief, opinionated. Same vibe as `create-agent`. Acknowledge each answ
 If `$ARGUMENTS` already names an agent, skip to Step 3. Otherwise:
 
 ```bash
-bun -e 'import { listAgents } from "./src/agents"; console.log((await listAgents()).join("\n"));'
+bun -e 'const { listAgents } = await import(`${process.env.CLAUDECLAW_ROOT || "."}/src/agents.ts`); console.log((await listAgents()).join("\n"));'
 ```
 
 Show the list and ask "Which one?".
@@ -41,7 +41,7 @@ Capture the chosen name. Validate it exists in the list above.
 
 ```bash
 bun -e '
-import { loadAgent, listAgentJobs } from "./src/agents";
+const { loadAgent, listAgentJobs } = await import(`${process.env.CLAUDECLAW_ROOT || "."}/src/agents.ts`);
 const ctx = await loadAgent("AGENT_NAME");
 const jobs = await listAgentJobs("AGENT_NAME");
 console.log("SOUL.md (head):");
@@ -76,8 +76,8 @@ Write to `/tmp/claudeclaw-update.json` then:
 
 ```bash
 bun -e '
-import { updateAgent } from "./src/agents";
 import { readFileSync } from "fs";
+const { updateAgent } = await import(`${process.env.CLAUDECLAW_ROOT || "."}/src/agents.ts`);
 const { workflow } = JSON.parse(readFileSync("/tmp/claudeclaw-update.json", "utf8"));
 await updateAgent("AGENT_NAME", { workflow });
 console.log("workflow updated");
@@ -90,8 +90,8 @@ Same shape as Workflow:
 
 ```bash
 bun -e '
-import { updateAgent } from "./src/agents";
 import { readFileSync } from "fs";
+const { updateAgent } = await import(`${process.env.CLAUDECLAW_ROOT || "."}/src/agents.ts`);
 const { personality } = JSON.parse(readFileSync("/tmp/claudeclaw-update.json", "utf8"));
 await updateAgent("AGENT_NAME", { personality });
 console.log("personality updated");
@@ -104,8 +104,8 @@ Collect: label (validate via `validateJobLabel`), cron (validate via `parseSched
 
 ```bash
 bun -e '
-import { addJob } from "./src/agents";
 import { readFileSync } from "fs";
+const { addJob } = await import(`${process.env.CLAUDECLAW_ROOT || "."}/src/agents.ts`);
 const j = JSON.parse(readFileSync("/tmp/claudeclaw-update.json", "utf8"));
 await addJob("AGENT_NAME", j.label, j.cron, j.trigger, j.model);
 console.log("added " + j.label);
@@ -118,8 +118,8 @@ List jobs first (via `listAgentJobs`), let the user pick a label, then ask which
 
 ```bash
 bun -e '
-import { updateJob } from "./src/agents";
 import { readFileSync } from "fs";
+const { updateJob } = await import(`${process.env.CLAUDECLAW_ROOT || "."}/src/agents.ts`);
 const { label, patch } = JSON.parse(readFileSync("/tmp/claudeclaw-update.json", "utf8"));
 await updateJob("AGENT_NAME", label, patch);
 console.log("updated " + label);
@@ -134,7 +134,7 @@ List jobs, let the user pick one, **confirm** ("Remove `<label>`? y/n"), then:
 
 ```bash
 bun -e '
-import { removeJob } from "./src/agents";
+const { removeJob } = await import(`${process.env.CLAUDECLAW_ROOT || "."}/src/agents.ts`);
 await removeJob("AGENT_NAME", "LABEL");
 console.log("removed");
 '
@@ -146,8 +146,8 @@ Re-prompt for the comma-separated list. Parse to array.
 
 ```bash
 bun -e '
-import { updateAgent } from "./src/agents";
 import { readFileSync } from "fs";
+const { updateAgent } = await import(`${process.env.CLAUDECLAW_ROOT || "."}/src/agents.ts`);
 const { discordChannels } = JSON.parse(readFileSync("/tmp/claudeclaw-update.json", "utf8"));
 await updateAgent("AGENT_NAME", { discordChannels });
 console.log("channels updated");
@@ -158,8 +158,8 @@ console.log("channels updated");
 
 ```bash
 bun -e '
-import { updateAgent } from "./src/agents";
 import { readFileSync } from "fs";
+const { updateAgent } = await import(`${process.env.CLAUDECLAW_ROOT || "."}/src/agents.ts`);
 const { dataSources } = JSON.parse(readFileSync("/tmp/claudeclaw-update.json", "utf8"));
 await updateAgent("AGENT_NAME", { dataSources });
 console.log("data sources updated");
@@ -172,7 +172,7 @@ This is destructive. Require the user to **re-type the agent name verbatim** as 
 
 ```bash
 bun -e '
-import { deleteAgent } from "./src/agents";
+const { deleteAgent } = await import(`${process.env.CLAUDECLAW_ROOT || "."}/src/agents.ts`);
 await deleteAgent("AGENT_NAME");
 console.log("deleted");
 '

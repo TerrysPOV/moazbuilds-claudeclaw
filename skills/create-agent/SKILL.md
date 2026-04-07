@@ -24,7 +24,7 @@ Ask: "What should we call them? (kebab-case — lowercase, hyphens only, like `d
 **Validate immediately.** Run this in a Bash tool call:
 
 ```bash
-bun -e "import {validateAgentName} from './src/agents'; const v = validateAgentName('USER_INPUT'); console.log(JSON.stringify(v));"
+bun -e 'const {validateAgentName} = await import(`${process.env.CLAUDECLAW_ROOT || "."}/src/agents.ts`); console.log(JSON.stringify(validateAgentName("USER_INPUT")));'
 ```
 
 If `valid: false`, tell the user the error in one line and re-ask. Common rejects: capitals (`Suzy`), spaces, starting with a digit, or the agent already existing.
@@ -69,11 +69,11 @@ For each task:
 
 1. **Label** — "Label for this task? (kebab-case, e.g. `digest-scan`, `morning-brief`)". Validate via:
    ```bash
-   bun -e "import {validateJobLabel} from './src/agents'; console.log(JSON.stringify(validateJobLabel('USER_INPUT')));"
+   bun -e 'const {validateJobLabel} = await import(`${process.env.CLAUDECLAW_ROOT || "."}/src/agents.ts`); console.log(JSON.stringify(validateJobLabel("USER_INPUT")));'
    ```
 2. **When** — "When should it run? Natural language (`every weekday at 9am`, `daily at 6pm`, `every 4 hours`) or raw cron." Validate via:
    ```bash
-   bun -e "import {parseScheduleToCron} from './src/agents'; console.log(parseScheduleToCron('USER_INPUT'));"
+   bun -e 'const {parseScheduleToCron} = await import(`${process.env.CLAUDECLAW_ROOT || "."}/src/agents.ts`); console.log(parseScheduleToCron("USER_INPUT"));'
    ```
    If `null`, re-ask with examples.
 3. **Trigger prompt** — "What should the agent do when this fires? (multi-line ok — write to a temp file if helpful)"
@@ -103,8 +103,8 @@ Once all answers are in, **write them to a temp JSON file** to keep escaping san
 
 # 2. Scaffold + add jobs in one bun -e:
 bun -e '
-import { createAgent, addJob } from "./src/agents";
 import { readFileSync } from "fs";
+const { createAgent, addJob } = await import(`${process.env.CLAUDECLAW_ROOT || "."}/src/agents.ts`);
 const cfg = JSON.parse(readFileSync("/tmp/claudeclaw-agent-wizard.json", "utf8"));
 const ctx = await createAgent({
   name: cfg.name,
