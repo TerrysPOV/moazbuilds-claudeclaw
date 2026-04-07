@@ -14,6 +14,13 @@ import {
   listAgents,
   validateAgentName,
   parseScheduleToCron,
+  validateJobLabel,
+  addJob,
+  updateJob,
+  removeJob,
+  listAgentJobs,
+  deleteAgent,
+  agentJobsDir,
 } from "../agents";
 import { cronMatches } from "../cron";
 
@@ -152,7 +159,7 @@ describe("createAgent", () => {
     expect(gi).toContain("MEMORY.md");
   });
 
-  it("writes a job file with valid cron when schedule is provided", async () => {
+  it("writes a default job file under agents/<name>/jobs when schedule is provided", async () => {
     const name = uniq("sched");
     await createAgent({
       name,
@@ -162,14 +169,18 @@ describe("createAgent", () => {
       defaultPrompt: "Write the digest.",
     });
 
-    const jobPath = join(JOBS_DIR, `${name}.md`);
+    // Legacy path should NOT exist
+    expect(existsSync(join(JOBS_DIR, `${name}.md`))).toBe(false);
+
+    // New path
+    const jobPath = join(AGENTS_DIR, name, "jobs", "default.md");
     expect(existsSync(jobPath)).toBe(true);
     const job = await readFile(jobPath, "utf8");
-    expect(job).toContain(`agent: ${name}`);
-    expect(job).toContain("schedule: 0 9 * * *");
+    expect(job).toContain("label: default");
+    expect(job).toContain("cron: 0 9 * * *");
+    expect(job).toContain("enabled: true");
     expect(job).toContain("Write the digest.");
 
-    // Cron is valid per cronMatches at 09:00 UTC
     const at9 = new Date(Date.UTC(2026, 0, 1, 9, 0, 0));
     expect(cronMatches("0 9 * * *", at9)).toBe(true);
   });
@@ -182,6 +193,7 @@ describe("createAgent", () => {
       personality: "y",
     });
     expect(existsSync(join(JOBS_DIR, `${name}.md`))).toBe(false);
+    expect(existsSync(join(AGENTS_DIR, name, "jobs"))).toBe(false);
   });
 
   it("rejects duplicate creation", async () => {
@@ -256,12 +268,12 @@ describe("integration: full agent lifecycle", () => {
     expect(claudeMd).toContain("#content");
     expect(claudeMd).toContain("RSS feeds");
 
-    // 5. Job file exists with correct schedule + agent fields
-    const jobPath = join(JOBS_DIR, `${name}.md`);
+    // 5. Default job file exists under agents/<name>/jobs/
+    const jobPath = join(AGENTS_DIR, name, "jobs", "default.md");
     expect(existsSync(jobPath)).toBe(true);
     const job = await readFile(jobPath, "utf8");
-    expect(job).toContain("schedule: 0 9 * * *");
-    expect(job).toContain(`agent: ${name}`);
+    expect(job).toContain("cron: 0 9 * * *");
+    expect(job).toContain("label: default");
 
     // 6. listAgents includes the new agent
     const all = await listAgents();
@@ -274,5 +286,191 @@ describe("integration: full agent lifecycle", () => {
     expect(loaded.soulPath).toBe(ctx.soulPath);
     expect(loaded.claudeMdPath).toBe(ctx.claudeMdPath);
     expect(loaded.memoryPath).toBe(ctx.memoryPath);
+  });
+});
+
+describe("Phase 17: multi-job agents", () => {
+  describe("validateJobLabel", () => {
+    it("rejects invalid labels", () => {
+      const bad = ["", "Foo", "with space", "../etc", "-bad", "bad-", "foo/bar"];
+      for (const l of bad) {
+        expect(validateJobLabel(l).valid).toBe(false);
+      }
+    });
+
+    it("accepts kebab-case labels", () => {
+      const good = ["default", "digest-scan", "morning-brief", "a", "a1"];
+      for (const l of good) {
+        expect(validateJobLabel(l).valid).toBe(true);
+      }
+    });
+  });
+
+  describe("addJob", () => {
+    it("writes file with correct frontmatter and body", async () => {
+      const name = uniq("multi");
+      await createAgent({ name, role: "x", personality: "y" });
+      const job = await addJob(name, "digest-scan", "0 9 * * 1-5", "Run the daily digest", "opus");
+
+      expect(job.label).toBe("digest-scan");
+      expect(job.cron).toBe("0 9 * * 1-5");
+      expect(job.enabled).toBe(true);
+      expect(job.model).toBe("opus");
+
+      const path = join(AGENTS_DIR, name, "jobs", "digest-scan.md");
+      expect(existsSync(path)).toBe(true);
+      const content = await readFile(path, "utf8");
+      expect(content).toContain("label: digest-scan");
+      expect(content).toContain("cron: 0 9 * * 1-5");
+      expect(content).toContain("enabled: true");
+      expect(content).toContain("model: opus");
+      expect(content).toContain("Run the daily digest");
+    });
+
+    it("throws on duplicate label", async () => {
+      const name = uniq("dup-job");
+      await createAgent({ name, role: "x", personality: "y" });
+      await addJob(name, "task", "0 9 * * *", "do thing");
+      await expect(addJob(name, "task", "0 9 * * *", "again")).rejects.toThrow();
+    });
+
+    it("throws on invalid cron", async () => {
+      const name = uniq("badcron");
+      await createAgent({ name, role: "x", personality: "y" });
+      await expect(addJob(name, "task", "not a cron", "x")).rejects.toThrow();
+    });
+
+    it("throws on invalid label", async () => {
+      const name = uniq("badlabel");
+      await createAgent({ name, role: "x", personality: "y" });
+      await expect(addJob(name, "Bad Label", "0 9 * * *", "x")).rejects.toThrow();
+    });
+
+    it("throws when agent does not exist", async () => {
+      await expect(addJob("definitely-not-exists-xyz", "task", "0 9 * * *", "x")).rejects.toThrow();
+    });
+  });
+
+  describe("updateJob", () => {
+    it("patches only specified fields", async () => {
+      const name = uniq("patch");
+      await createAgent({ name, role: "x", personality: "y" });
+      await addJob(name, "task", "0 9 * * *", "original body", "opus");
+
+      const updated = await updateJob(name, "task", { cron: "0 10 * * *" });
+      expect(updated.cron).toBe("0 10 * * *");
+      expect(updated.trigger).toBe("original body");
+      expect(updated.model).toBe("opus");
+      expect(updated.enabled).toBe(true);
+    });
+
+    it("toggles enabled to false", async () => {
+      const name = uniq("toggle");
+      await createAgent({ name, role: "x", personality: "y" });
+      await addJob(name, "task", "0 9 * * *", "body");
+
+      const updated = await updateJob(name, "task", { enabled: false });
+      expect(updated.enabled).toBe(false);
+
+      const content = await readFile(join(AGENTS_DIR, name, "jobs", "task.md"), "utf8");
+      expect(content).toContain("enabled: false");
+    });
+
+    it("replaces only the body when given trigger", async () => {
+      const name = uniq("body");
+      await createAgent({ name, role: "x", personality: "y" });
+      await addJob(name, "task", "0 9 * * *", "old");
+      const updated = await updateJob(name, "task", { trigger: "new body" });
+      expect(updated.trigger).toBe("new body");
+      expect(updated.cron).toBe("0 9 * * *");
+    });
+
+    it("throws when job missing", async () => {
+      const name = uniq("missing");
+      await createAgent({ name, role: "x", personality: "y" });
+      await expect(updateJob(name, "ghost", { enabled: false })).rejects.toThrow();
+    });
+  });
+
+  describe("removeJob", () => {
+    it("unlinks the file", async () => {
+      const name = uniq("remove");
+      await createAgent({ name, role: "x", personality: "y" });
+      await addJob(name, "task", "0 9 * * *", "body");
+      const path = join(AGENTS_DIR, name, "jobs", "task.md");
+      expect(existsSync(path)).toBe(true);
+      await removeJob(name, "task");
+      expect(existsSync(path)).toBe(false);
+    });
+
+    it("throws if missing", async () => {
+      const name = uniq("rm-missing");
+      await createAgent({ name, role: "x", personality: "y" });
+      await expect(removeJob(name, "ghost")).rejects.toThrow();
+    });
+  });
+
+  describe("listAgentJobs", () => {
+    it("returns sorted parsed jobs", async () => {
+      const name = uniq("list");
+      await createAgent({ name, role: "x", personality: "y" });
+      await addJob(name, "zeta", "0 9 * * *", "z");
+      await addJob(name, "alpha", "0 10 * * *", "a");
+      await addJob(name, "mid", "0 11 * * *", "m", "haiku");
+
+      const jobs = await listAgentJobs(name);
+      expect(jobs.map((j) => j.label)).toEqual(["alpha", "mid", "zeta"]);
+      expect(jobs[1].model).toBe("haiku");
+    });
+
+    it("returns [] when jobs dir missing", async () => {
+      const name = uniq("nojobs");
+      await createAgent({ name, role: "x", personality: "y" });
+      const jobs = await listAgentJobs(name);
+      expect(jobs).toEqual([]);
+    });
+  });
+
+  describe("deleteAgent", () => {
+    it("removes entire agent dir including MEMORY.md and jobs/", async () => {
+      const name = uniq("doomed");
+      await createAgent({ name, role: "x", personality: "y" });
+      await addJob(name, "task", "0 9 * * *", "body");
+
+      const dir = join(AGENTS_DIR, name);
+      expect(existsSync(dir)).toBe(true);
+      expect(existsSync(join(dir, "jobs", "task.md"))).toBe(true);
+      expect(existsSync(join(dir, "MEMORY.md"))).toBe(true);
+
+      await deleteAgent(name);
+      expect(existsSync(dir)).toBe(false);
+    });
+
+    it("is a no-op when dir missing", async () => {
+      await deleteAgent("definitely-not-an-agent-zzz");
+    });
+  });
+
+  describe("createAgent + multi-job integration", () => {
+    it("createAgent with schedule writes agents/<name>/jobs/default.md (not legacy)", async () => {
+      const name = uniq("default-job");
+      await createAgent({
+        name,
+        role: "x",
+        personality: "y",
+        schedule: "daily at 9am",
+        defaultPrompt: "do the thing",
+      });
+
+      expect(existsSync(join(JOBS_DIR, `${name}.md`))).toBe(false);
+      const newPath = join(AGENTS_DIR, name, "jobs", "default.md");
+      expect(existsSync(newPath)).toBe(true);
+
+      const jobs = await listAgentJobs(name);
+      expect(jobs.length).toBe(1);
+      expect(jobs[0].label).toBe("default");
+      expect(jobs[0].cron).toBe("0 9 * * *");
+      expect(jobs[0].trigger).toContain("do the thing");
+    });
   });
 });

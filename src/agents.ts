@@ -7,7 +7,7 @@
 
 import { join } from "path";
 import { existsSync } from "fs";
-import { mkdir, readdir, writeFile, stat } from "fs/promises";
+import { mkdir, readdir, readFile, writeFile, stat, unlink, rm } from "fs/promises";
 import { ensureMemoryFile } from "./memory";
 import { cronMatches } from "./cron";
 
@@ -21,8 +21,12 @@ function agentsDir(): string {
   return join(projectDir(), "agents");
 }
 
-function jobsDir(): string {
-  return join(projectDir(), ".claude", "claudeclaw", "jobs");
+export function agentJobsDir(name: string): string {
+  return join(agentsDir(), name, "jobs");
+}
+
+function jobFilePath(agentName: string, label: string): string {
+  return join(agentJobsDir(agentName), `${label}.md`);
 }
 
 export interface AgentCreateOpts {
@@ -43,6 +47,30 @@ export interface AgentContext {
   claudeMdPath: string;
   memoryPath: string;
   sessionPath: string;
+}
+
+export interface AgentJob {
+  label: string;
+  cron: string;
+  enabled: boolean;
+  model?: string;
+  trigger: string;
+  path: string;
+}
+
+const JOB_LABEL_RE = /^[a-z]([a-z0-9-]*[a-z0-9])?$/;
+
+export function validateJobLabel(label: string): { valid: boolean; error?: string } {
+  if (!label || typeof label !== "string") {
+    return { valid: false, error: "label required" };
+  }
+  if (label.includes("/") || label.includes("..") || label.includes("\\")) {
+    return { valid: false, error: "must not contain path separators" };
+  }
+  if (!JOB_LABEL_RE.test(label)) {
+    return { valid: false, error: "must be kebab-case" };
+  }
+  return { valid: true };
 }
 
 // ─── Validation ──────────────────────────────────────────────────────────────
@@ -218,18 +246,162 @@ function renderClaudeMd(opts: AgentCreateOpts): string {
   ].join("\n");
 }
 
-function renderJobFile(name: string, cron: string, prompt: string): string {
-  return [
+function renderJobFile(label: string, cron: string, trigger: string, model?: string): string {
+  const lines = [
     `---`,
-    `schedule: ${cron}`,
-    `agent: ${name}`,
-    `recurring: true`,
-    `notify: error`,
+    `label: ${label}`,
+    `cron: ${cron}`,
+    `enabled: true`,
+  ];
+  if (model) lines.push(`model: ${model}`);
+  lines.push(`---`, ``, trigger, ``);
+  return lines.join("\n");
+}
+
+function parseFrontmatterValue(raw: string): string {
+  return raw.trim().replace(/^["']|["']$/g, "");
+}
+
+function parseJobFileContent(
+  content: string
+): { label: string; cron: string; enabled: boolean; model?: string; trigger: string } | null {
+  const match = content.match(/^---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/);
+  if (!match) return null;
+  const fm = match[1];
+  const trigger = match[2].replace(/^\n+/, "").replace(/\n+$/, "");
+  const lines = fm.split("\n").map((l) => l.trim());
+
+  const labelLine = lines.find((l) => l.startsWith("label:"));
+  const cronLine = lines.find((l) => l.startsWith("cron:"));
+  if (!labelLine || !cronLine) return null;
+  const label = parseFrontmatterValue(labelLine.replace("label:", ""));
+  const cron = parseFrontmatterValue(cronLine.replace("cron:", ""));
+
+  const enabledLine = lines.find((l) => l.startsWith("enabled:"));
+  let enabled = true;
+  if (enabledLine) {
+    const v = parseFrontmatterValue(enabledLine.replace("enabled:", "")).toLowerCase();
+    if (v === "false" || v === "no" || v === "0") enabled = false;
+  }
+
+  const modelLine = lines.find((l) => l.startsWith("model:"));
+  const model = modelLine ? parseFrontmatterValue(modelLine.replace("model:", "")) || undefined : undefined;
+
+  return { label, cron, enabled, model, trigger };
+}
+
+function validateCronOrThrow(cron: string): void {
+  if (!cron || typeof cron !== "string") {
+    throw new Error(`invalid cron expression: "${cron}"`);
+  }
+  const fields = cron.trim().split(/\s+/);
+  if (fields.length !== 5) {
+    throw new Error(`invalid cron expression: "${cron}" (expected 5 fields)`);
+  }
+  // Each field must contain only cron-valid chars
+  const FIELD_RE = /^[\d*,\-/]+$/;
+  for (const f of fields) {
+    if (!FIELD_RE.test(f)) {
+      throw new Error(`invalid cron expression: "${cron}"`);
+    }
+  }
+  try {
+    cronMatches(cron, new Date());
+  } catch {
+    throw new Error(`invalid cron expression: "${cron}"`);
+  }
+}
+
+export async function addJob(
+  agentName: string,
+  label: string,
+  cron: string,
+  trigger: string,
+  model?: string
+): Promise<AgentJob> {
+  // Verify agent exists
+  await loadAgent(agentName);
+
+  const lv = validateJobLabel(label);
+  if (!lv.valid) throw new Error(`invalid job label: ${lv.error}`);
+
+  validateCronOrThrow(cron);
+
+  await mkdir(agentJobsDir(agentName), { recursive: true });
+  const path = jobFilePath(agentName, label);
+  if (existsSync(path)) {
+    throw new Error(`job ${label} already exists for agent ${agentName}`);
+  }
+
+  await writeFile(path, renderJobFile(label, cron, trigger, model), "utf8");
+
+  return { label, cron, enabled: true, model, trigger, path };
+}
+
+export async function updateJob(
+  agentName: string,
+  label: string,
+  patch: { cron?: string; trigger?: string; enabled?: boolean; model?: string }
+): Promise<AgentJob> {
+  const path = jobFilePath(agentName, label);
+  if (!existsSync(path)) {
+    throw new Error(`job ${label} does not exist for agent ${agentName}`);
+  }
+  const content = await readFile(path, "utf8");
+  const parsed = parseJobFileContent(content);
+  if (!parsed) throw new Error(`could not parse job file: ${path}`);
+
+  const merged = {
+    label: parsed.label,
+    cron: patch.cron ?? parsed.cron,
+    enabled: patch.enabled ?? parsed.enabled,
+    model: patch.model !== undefined ? patch.model : parsed.model,
+    trigger: patch.trigger ?? parsed.trigger,
+  };
+
+  if (patch.cron !== undefined) validateCronOrThrow(merged.cron);
+
+  // Render preserving enabled flag
+  const lines = [
     `---`,
-    ``,
-    prompt,
-    ``,
-  ].join("\n");
+    `label: ${merged.label}`,
+    `cron: ${merged.cron}`,
+    `enabled: ${merged.enabled}`,
+  ];
+  if (merged.model) lines.push(`model: ${merged.model}`);
+  lines.push(`---`, ``, merged.trigger, ``);
+  await writeFile(path, lines.join("\n"), "utf8");
+
+  return { ...merged, path };
+}
+
+export async function removeJob(agentName: string, label: string): Promise<void> {
+  await unlink(jobFilePath(agentName, label));
+}
+
+export async function listAgentJobs(agentName: string): Promise<AgentJob[]> {
+  let files: string[];
+  try {
+    files = await readdir(agentJobsDir(agentName));
+  } catch {
+    return [];
+  }
+  const jobs: AgentJob[] = [];
+  for (const file of files) {
+    if (!file.endsWith(".md")) continue;
+    const path = join(agentJobsDir(agentName), file);
+    const content = await readFile(path, "utf8");
+    const parsed = parseJobFileContent(content);
+    if (parsed) {
+      jobs.push({ ...parsed, path });
+    }
+  }
+  jobs.sort((a, b) => a.label.localeCompare(b.label));
+  return jobs;
+}
+
+export async function deleteAgent(name: string): Promise<void> {
+  await rm(join(agentsDir(), name), { recursive: true, force: true });
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────────
@@ -267,10 +439,9 @@ export async function createAgent(opts: AgentCreateOpts): Promise<AgentContext> 
     } catch (e) {
       throw new Error(`Generated invalid cron "${cron}" from schedule "${opts.schedule}"`);
     }
-    await mkdir(jobsDir(), { recursive: true });
-    const jobPath = join(jobsDir(), `${opts.name}.md`);
+    // Phase 17: scheduled tasks now live under agents/<name>/jobs/
     const body = opts.defaultPrompt ?? "Run your scheduled task per IDENTITY.md.";
-    await writeFile(jobPath, renderJobFile(opts.name, cron, body), "utf8");
+    await addJob(opts.name, "default", cron, body, undefined);
   }
 
   return {
