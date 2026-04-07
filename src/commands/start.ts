@@ -6,6 +6,7 @@ import { initGatewayProcessor } from "../event-processor";
 import { writeState, type StateData } from "../statusline";
 import { cronMatches, nextCronMatch } from "../cron";
 import { clearJobSchedule, loadJobs } from "../jobs";
+import { migrateLegacyAgentJobs } from "../migrations";
 import { writePidFile, cleanupPidFile, checkExistingDaemon } from "../pid";
 import { initConfig, loadSettings, reloadSettings, resolvePrompt, type HeartbeatConfig, type Settings } from "../config";
 import { getDayAndMinuteAtOffset } from "../timezone";
@@ -312,6 +313,15 @@ export async function start(args: string[] = []) {
   await initConfig();
   const settings = await loadSettings();
   await ensureProjectClaudeMd();
+
+  // Phase 17: migrate any Phase 16 single-job agents from flat dir into agents/<name>/jobs/default.md
+  const migration = await migrateLegacyAgentJobs();
+  if (migration.migrated.length > 0) {
+    console.log(
+      `[migration] moved ${migration.migrated.length} agent job(s) to agents/<name>/jobs/default.md: ${migration.migrated.join(", ")}`,
+    );
+  }
+
   const jobs = await loadJobs();
 
   // Initialize job system: wires governance adapter and resumes any pending workflows
@@ -716,8 +726,9 @@ export async function start(args: string[] = []) {
           .then((r) => {
             if (job.notify === false) return;
             if (job.notify === "error" && r.exitCode === 0) return;
-            forwardToTelegram(job.name, r);
-            forwardToDiscord(job.name, r);
+            const forwardLabel = job.agent && job.label ? `${job.agent}: ${job.label}` : job.name;
+            forwardToTelegram(forwardLabel, r);
+            forwardToDiscord(forwardLabel, r);
           })
           .finally(async () => {
             if (job.recurring) return;
