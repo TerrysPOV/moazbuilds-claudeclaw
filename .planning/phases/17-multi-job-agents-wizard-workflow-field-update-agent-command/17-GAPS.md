@@ -173,6 +173,52 @@ Implementation:
 
 ---
 
+## GAP-17-08 — Phase 17 agent jobs diverge from native cron scheduler format (FIXED in this commit)
+
+**Severity:** Blocking — production-critical. Without this fix, **no Phase 17 agent job ever fires via the native cron loop**.
+**Status:** Fixed pending deploy + migration
+
+### Symptom
+During Reg UAT on 2026-04-07, after scaffolding `agents/reg/jobs/daily-content-research.md` successfully, `loadJobs()` returned **zero jobs**. Reg's 7pm schedule would never fire. The daemon's cron `setInterval` loop (`start.ts:720`) iterates `currentJobs` from `loadJobs()`, so an empty list means no job execution — silently.
+
+### Root cause: parallel format, not reuse
+ClaudeClaw already has a working native cron scheduler:
+- **Job files:** `.claude/claudeclaw/jobs/*.md`
+- **Frontmatter key:** `schedule: <cron>`
+- **Loader:** `jobs.ts` `parseJobFile()` — only reads `schedule:`
+- **Writer:** Web UI "Add Scheduled Job" form → POSTs to `.claude/claudeclaw/jobs/` with `schedule:` key
+- **Executor:** `start.ts:720` `setInterval` tick (runs every 60s)
+- **Hot-reload:** every 30s via `start.ts:642`
+
+**Phase 17 wrongly introduced a parallel format** instead of reusing the native scheduler:
+- New location: `agents/<name>/jobs/<label>.md` (OK — agent-scoped, sensible)
+- New frontmatter key: `cron: <expression>` (**wrong** — native loader only knows `schedule:`)
+- New helpers in `agents.ts`: `renderJobFile` and `parseJobFileContent` both use `cron:`
+
+`jobs.ts` `loadJobs()` already has a Phase 17 scan pass for `agents/<name>/jobs/*.md` (wired by plan 17-04), but it calls the *native* `parseJobFile` which only reads `schedule:`. Every Phase 17 job file silently returns `null` from the parser and gets dropped on the floor.
+
+**This should have been caught in Phase 17 integration testing but wasn't** because the plan 17-04 SUMMARY's test only checked that `loadJobs` scanned the new directory, not that it successfully parsed the files the Phase 17 helpers write.
+
+### Fix (this commit)
+Change the frontmatter key from `cron:` to `schedule:` in `src/agents.ts`:
+- `renderJobFile()` — emits `schedule: ${cron}` instead of `cron: ${cron}`
+- `updateJob()` render block — same
+- `parseJobFileContent()` — reads `schedule:` as canonical, falls back to `cron:` for legacy Phase 17 files already on disk
+
+TypeScript variable/parameter names remain `cron` internally — only the on-disk frontmatter key changes. All 85 existing tests updated and passing.
+
+### Migration
+Any existing Phase 17 agent job files on disk (e.g. `agents/reg/jobs/daily-content-research.md`) need one-time migration:
+```bash
+sed -i 's/^cron: /schedule: /' agents/*/jobs/*.md
+```
+Idempotent — only touches lines beginning with `cron: `.
+
+### Architectural note (follow-up, not this commit)
+Phase 17's `addJob`/`updateJob`/`removeJob`/`listAgentJobs` helpers should ideally be refactored to be a thin agent-scoped layer over the **same** storage backend as the Web UI's "Add Scheduled Job" — rather than maintaining two parallel code paths that can diverge again. One storage format, one loader, one executor — multiple user-facing surfaces (Web UI form, CLI `addJob`, wizard, update-agent skill). File as follow-up for Phase 19 or post-v1.0.
+
+---
+
 ## Verification gate
 
 Phase 17 cannot be marked verified until:
@@ -183,5 +229,6 @@ Phase 17 cannot be marked verified until:
 - [ ] GAP-17-05 fixed (manual `fire` command — CLI + Discord/Telegram slash + Web UI button)
 - [ ] GAP-17-06 fixed (slash command discovery wired at user-level `~/.claude/commands/`)
 - [ ] GAP-17-07 fixed (update-agent Workflow/Personality/DataSources get append mode, default non-destructive)
+- [x] GAP-17-08 fixed (frontmatter key `cron:` → `schedule:` to match native scheduler; migration of existing files; tests updated)
 
 Plan 17-05's SUMMARY and the phase verification step (`gsd-verifier`) are blocked on these.

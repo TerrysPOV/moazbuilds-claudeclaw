@@ -417,7 +417,7 @@ function renderJobFile(label: string, cron: string, trigger: string, model?: str
   const lines = [
     `---`,
     `label: ${label}`,
-    `cron: ${cron}`,
+    `schedule: ${cron}`,
     `enabled: true`,
   ];
   if (model) lines.push(`model: ${model}`);
@@ -439,10 +439,17 @@ function parseJobFileContent(
   const lines = fm.split("\n").map((l) => l.trim());
 
   const labelLine = lines.find((l) => l.startsWith("label:"));
-  const cronLine = lines.find((l) => l.startsWith("cron:"));
-  if (!labelLine || !cronLine) return null;
+  // Accept both "schedule:" (canonical — matches native jobs.ts loader) and
+  // legacy "cron:" (Phase 17 pre-fix files — supported for backward compatibility).
+  const scheduleLine =
+    lines.find((l) => l.startsWith("schedule:")) ?? lines.find((l) => l.startsWith("cron:"));
+  if (!labelLine || !scheduleLine) return null;
   const label = parseFrontmatterValue(labelLine.replace("label:", ""));
-  const cron = parseFrontmatterValue(cronLine.replace("cron:", ""));
+  const cron = parseFrontmatterValue(
+    scheduleLine.startsWith("schedule:")
+      ? scheduleLine.replace("schedule:", "")
+      : scheduleLine.replace("cron:", ""),
+  );
 
   const enabledLine = lines.find((l) => l.startsWith("enabled:"));
   let enabled = true;
@@ -532,7 +539,7 @@ export async function updateJob(
   const lines = [
     `---`,
     `label: ${merged.label}`,
-    `cron: ${merged.cron}`,
+    `schedule: ${merged.cron}`,
     `enabled: ${merged.enabled}`,
   ];
   if (merged.model) lines.push(`model: ${merged.model}`);

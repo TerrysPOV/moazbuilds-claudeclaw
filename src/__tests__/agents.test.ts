@@ -181,7 +181,7 @@ describe("createAgent", () => {
     expect(existsSync(jobPath)).toBe(true);
     const job = await readFile(jobPath, "utf8");
     expect(job).toContain("label: default");
-    expect(job).toContain("cron: 0 9 * * *");
+    expect(job).toContain("schedule: 0 9 * * *");
     expect(job).toContain("enabled: true");
     expect(job).toContain("Write the digest.");
 
@@ -276,7 +276,7 @@ describe("integration: full agent lifecycle", () => {
     const jobPath = join(AGENTS_DIR, name, "jobs", "default.md");
     expect(existsSync(jobPath)).toBe(true);
     const job = await readFile(jobPath, "utf8");
-    expect(job).toContain("cron: 0 9 * * *");
+    expect(job).toContain("schedule: 0 9 * * *");
     expect(job).toContain("label: default");
 
     // 6. listAgents includes the new agent
@@ -325,7 +325,7 @@ describe("Phase 17: multi-job agents", () => {
       expect(existsSync(path)).toBe(true);
       const content = await readFile(path, "utf8");
       expect(content).toContain("label: digest-scan");
-      expect(content).toContain("cron: 0 9 * * 1-5");
+      expect(content).toContain("schedule: 0 9 * * 1-5");
       expect(content).toContain("enabled: true");
       expect(content).toContain("model: opus");
       expect(content).toContain("Run the daily digest");
