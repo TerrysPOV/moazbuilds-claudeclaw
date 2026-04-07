@@ -1,11 +1,11 @@
 ---
 name: create-agent
-description: Use when the user wants to create a new agent teammate, scaffold a scheduled Claude persona, or asks to "create an agent", "new agent", "add an agent", "scaffold an agent", "build an agent", "make an agent", or "/claudeclaw:create-agent". Trigger phrases include "I want an agent that", "create a teammate", "new agent persona", "scheduled claude agent".
+description: Use when the user wants to create a new agent teammate, scaffold a scheduled Claude persona, or asks to "create an agent", "new agent", "add an agent", "add a job", "scheduled task", "scaffold an agent", "build an agent", "make an agent", or "/claudeclaw:create-agent". Trigger phrases include "I want an agent that", "create a teammate", "new agent persona", "scheduled claude agent".
 ---
 
 # Create Agent
 
-Wizard for scaffolding a new ClaudeClaw agent — a focused Claude persona with its own identity, soul, memory, session, and optional cron schedule.
+Wizard for scaffolding a new ClaudeClaw agent — a focused Claude persona with its own identity, soul, memory, session, and any number of scheduled jobs.
 
 You are guiding the user through creating a teammate. Be conversational, warm, and direct. **Ask one question at a time.** Wait for the answer before moving on. **DO NOT dump all questions at once.** This is a wizard, not a form.
 
@@ -13,9 +13,9 @@ You are guiding the user through creating a teammate. Be conversational, warm, a
 
 Match the vibe of `skills/create-skill/SKILL.md`: friendly, brief, opinionated. You're texting a friend who happens to be brilliant. No filler, no walls of text. Acknowledge each answer in a sentence or less, then move to the next question.
 
-## The Six Questions
+## The Questions
 
-Ask these in order, one at a time:
+Ask these in order, one at a time.
 
 ### 1. Name (kebab-case)
 
@@ -33,31 +33,25 @@ If `valid: false`, tell the user the error in one line and re-ask. Common reject
 
 Ask: "What does this agent do? One line — what's their job?"
 
-Free text. Just capture it.
+Free text. Goes into IDENTITY.md.
 
 ### 3. Personality (2–4 sentences)
 
 Ask: "Who are they? Give me 2–4 sentences on their personality and vibe."
 
-Free text. This becomes their SOUL.md.
+Free text. Becomes the Personality section of SOUL.md.
 
-### 4. Schedule
+### 4. Workflow (multi-line)
 
-Ask: "When should they run? Natural language works (`every weekday at 9am`, `daily at 6pm`, `hourly`), raw cron is fine, or `none` for ad-hoc only."
+Ask: "How does this agent operate? What are their guidelines, tone, do's and don'ts? This can be as long as you want — write it like a mini operating manual."
 
-If the user says `none` or anything empty, skip cron and remember `schedule = undefined`. Otherwise **validate** by running:
-
-```bash
-bun -e "import {parseScheduleToCron} from './src/agents'; console.log(parseScheduleToCron('USER_INPUT'));"
-```
-
-If output is `null`, tell the user it didn't parse and re-ask with examples. Otherwise note the cron string and move on.
+This is a **dedicated multi-line field**, separate from any schedule. It becomes the `## Workflow` block in SOUL.md. If the answer is gnarly or long, write it to a temp file (e.g. `/tmp/claudeclaw-agent-workflow.txt`) so escaping doesn't bite you later.
 
 ### 5. Discord channels
 
 Ask: "Any Discord channels they should know about? Comma-separated (`#content,#research`) or `none`."
 
-Parse comma-separated into an array. `none` → empty array. This is metadata only for now (Phase 16) — gets written into the agent's CLAUDE.md.
+Parse comma-separated into an array. `none` → empty array.
 
 ### 6. Data sources
 
@@ -65,20 +59,73 @@ Ask: "What information sources do they pull from? (RSS feeds, APIs, files, websi
 
 Free text.
 
+### 7. Scheduled tasks (loop)
+
+Ask: "Want to add a scheduled task? (y/n)"
+
+If `n`, skip to scaffold. If `y`, run this loop until the user is done:
+
+For each task:
+
+1. **Label** — "Label for this task? (kebab-case, e.g. `digest-scan`, `morning-brief`)". Validate via:
+   ```bash
+   bun -e "import {validateJobLabel} from './src/agents'; console.log(JSON.stringify(validateJobLabel('USER_INPUT')));"
+   ```
+2. **When** — "When should it run? Natural language (`every weekday at 9am`, `daily at 6pm`, `every 4 hours`) or raw cron." Validate via:
+   ```bash
+   bun -e "import {parseScheduleToCron} from './src/agents'; console.log(parseScheduleToCron('USER_INPUT'));"
+   ```
+   If `null`, re-ask with examples.
+3. **Trigger prompt** — "What should the agent do when this fires? (multi-line ok — write to a temp file if helpful)"
+4. **Model** — "Which model? (`default` / `opus` / `haiku` — press enter for default)"
+
+Then: "Add another task? (y/n)" — loop or break out.
+
 ## Scaffold
 
-Once all six answers are in, scaffold the agent by calling `createAgent()` from `src/agents.ts` via a Bash tool invocation. **Do not use the Write tool for the agent files** — `createAgent()` handles all file generation, the job file, memory, and `.gitignore` in one shot.
-
-Use this pattern (single line, escape carefully):
+Once all answers are in, **write them to a temp JSON file** to keep escaping sane, then call the helpers in one shot. Mirror Phase 16's temp-file pattern.
 
 ```bash
-bun -e "import {createAgent} from './src/agents'; const ctx = await createAgent({name:'NAME',role:'ROLE',personality:'PERSONALITY',schedule:'SCHEDULE_OR_UNDEFINED',discordChannels:['#chan1','#chan2'],dataSources:'SOURCES'}); console.log(JSON.stringify(ctx, null, 2));"
+# 1. Write the collected wizard state (use the Write tool for the temp file).
+#    /tmp/claudeclaw-agent-wizard.json shape:
+#    {
+#      "name": "...",
+#      "role": "...",
+#      "personality": "...",
+#      "workflow": "...",
+#      "discordChannels": ["#a","#b"],
+#      "dataSources": "...",
+#      "jobs": [
+#        { "label": "digest-scan", "cron": "0 9 * * *", "trigger": "...", "model": "opus" },
+#        ...
+#      ]
+#    }
+
+# 2. Scaffold + add jobs in one bun -e:
+bun -e '
+import { createAgent, addJob } from "./src/agents";
+import { readFileSync } from "fs";
+const cfg = JSON.parse(readFileSync("/tmp/claudeclaw-agent-wizard.json", "utf8"));
+const ctx = await createAgent({
+  name: cfg.name,
+  role: cfg.role,
+  personality: cfg.personality,
+  workflow: cfg.workflow,
+  discordChannels: cfg.discordChannels,
+  dataSources: cfg.dataSources,
+});
+for (const job of cfg.jobs) {
+  await addJob(ctx.name, job.label, job.cron, job.trigger, job.model);
+}
+console.log(JSON.stringify({ agent: ctx.name, jobs: cfg.jobs.map(j => j.label) }, null, 2));
+'
 ```
 
 Notes:
-- If schedule is `none`, omit the `schedule` field entirely (don't pass an empty string).
-- If discordChannels is empty, pass `[]`.
-- Escape single quotes in personality/role with care; if the text is gnarly, write it to a temp JSON file and read it in the snippet instead.
+- `createAgent()` handles IDENTITY.md, SOUL.md (Personality + Workflow markers), CLAUDE.md, MEMORY.md, session.json, .gitignore.
+- `addJob()` writes each scheduled task to `agents/<name>/jobs/<label>.md` with frontmatter (label, cron, enabled, model).
+- **Do not use the Write tool to write any of the agent files** — let the helpers do it. The only file you write is the temp JSON.
+- If there are zero jobs, the loop just doesn't execute and the agent is ad-hoc only.
 
 ## On Success
 
@@ -89,21 +136,19 @@ Print a short summary:
 
 Files:
   agents/<name>/IDENTITY.md
-  agents/<name>/SOUL.md
+  agents/<name>/SOUL.md          ← personality + workflow
   agents/<name>/CLAUDE.md
   agents/<name>/MEMORY.md
-  .claude/claudeclaw/jobs/<name>.md   ← only if scheduled
+  agents/<name>/jobs/<label>.md  ← one per scheduled task
 
 Try it:
   claudeclaw send --agent <name> "say hello"
-
-<if scheduled:>
-Scheduled: <cron> — will fire on the daemon's next tick.
-</if>
 ```
+
+If any jobs were scheduled, list them with their cron + model. Mention the daemon hot-reloads jobs on the next tick.
 
 Then ask if they want to tweak IDENTITY.md or SOUL.md before they take it for a spin.
 
 ## On Failure
 
-If `createAgent()` throws (duplicate name, bad schedule, fs error), surface the error verbatim, suggest a fix, and offer to retry from the failing step. Don't restart the whole wizard.
+If `createAgent()` or `addJob()` throws (duplicate name, bad schedule, fs error), surface the error verbatim, suggest a fix, and offer to retry from the failing step. Don't restart the whole wizard — the temp JSON still has the state.
