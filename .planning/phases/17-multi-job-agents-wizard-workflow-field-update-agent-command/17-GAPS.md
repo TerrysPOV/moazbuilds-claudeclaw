@@ -134,6 +134,45 @@ Claude Code IS finding the skill itself (from `~claw/.claude/skills/create-agent
 
 ---
 
+## GAP-17-07 — update-agent Workflow/Personality/DataSources are replace-only, no append mode
+
+**Severity:** Blocking (footgun — silent data loss on every edit)
+**Status:** Open
+
+### Symptom
+Live during Reg UAT on 2026-04-07: user wanted to add a small paragraph to Reg's workflow telling him to use `nanobanana-pro-fallback` for images and `veo` for video. The update-agent wizard's **Option 1 (Workflow)** prompt is *"What's the new workflow? (multi-line, will replace the existing block entirely)"* — the user would have had to re-type or re-paste Reg's entire original 300-word workflow to avoid wiping it, just to add 3 extra sentences.
+
+Same issue applies to **Option 2 (Personality)** and **Option 7 (Data sources)** — all three are destructive replace-only operations with no "append" or "patch" alternative.
+
+### Why it matters
+- Silent data loss: user types a short addition, loses the rest without warning
+- Forces re-entry of content the user already wrote (error-prone, tedious)
+- Makes iterative refinement of agents impractical — every small tweak requires a full rewrite
+- Exact same footgun pattern as GAP-17-02 (workflow/trigger redundancy) — both trace to the wizard prescribing total-replacement when partial-edit is what the user actually wants
+
+### Proposed fix
+For Workflow / Personality / Data sources (Options 1, 2, 7), add a **mode selection** before the content prompt:
+
+```
+How should this be applied?
+  a. Append        — add to the existing <section> (keeps everything already there)
+  b. Replace       — wipe and rewrite the entire block
+  c. Show current  — print the current content so you can edit it in place
+```
+
+Default to `a` (append) since it's non-destructive. `c` is helpful when the user wants to see what's there before deciding. `b` stays available for full rewrites.
+
+Implementation:
+- `updateAgent()` helper already has the plumbing (it's a patch function). Add an optional `mode: "append" | "replace"` field per patch key (default `"replace"` to preserve existing API, wizard passes `"append"` explicitly).
+- For append, the helper concatenates with a blank line separator inside the managed markers (`claudeclaw:workflow:start/end`, etc.).
+- Wizard shows the "Show current" view by reading the file between markers and printing a diff-friendly block.
+
+### Related
+- GAP-17-02 (workflow/trigger redundancy) shares the same root cause — the wizard assumes whole-block replacement is always what the user wants.
+- GAP-17-03 (network glitch swallows acks) compounds this: if an acknowledgment is lost, the user may retype content unnecessarily, multiplying the replace-only data loss risk.
+
+---
+
 ## Verification gate
 
 Phase 17 cannot be marked verified until:
@@ -143,5 +182,6 @@ Phase 17 cannot be marked verified until:
 - [ ] GAP-17-04 fixed (local cron vs remote schedule callout in wizard)
 - [ ] GAP-17-05 fixed (manual `fire` command — CLI + Discord/Telegram slash + Web UI button)
 - [ ] GAP-17-06 fixed (slash command discovery wired at user-level `~/.claude/commands/`)
+- [ ] GAP-17-07 fixed (update-agent Workflow/Personality/DataSources get append mode, default non-destructive)
 
 Plan 17-05's SUMMARY and the phase verification step (`gsd-verifier`) are blocked on these.
