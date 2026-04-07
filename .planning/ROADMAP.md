@@ -352,3 +352,50 @@ Phase 2 (Gateway) ────────────────────�
 
 Plans:
 - [ ] TBD (run /gsd:plan-phase 16 to break down)
+
+### Phase 17: Multi-job agents, wizard workflow field, update-agent command
+
+**Goal:** Make agents first-class, multi-tasking entities. An agent can own multiple independent cron jobs, the wizard captures operational instructions in a dedicated field (not crammed into the schedule), users can update existing agents non-destructively, and the NL→cron parser handles richer time expressions.
+
+**Scope:**
+- **Data model:** agents own a `jobs/` subdirectory — `agents/<name>/jobs/<label>.md` each with frontmatter (`cron`, `label`, `enabled`, optional `model`) + trigger-prompt body. Delete agent → delete all jobs.
+- **Wizard restructure (`/claudeclaw:create-agent`):**
+  - Add dedicated `Workflow` field (multi-line) — becomes SOUL.md / CLAUDE.md system context, separate from cron schedule
+  - Scheduled tasks loop: user can add N jobs, each with label + cron + trigger prompt
+  - Optional `model` field (default / opus / haiku)
+  - Schedule field becomes cron-only, no operational detail
+- **NL→cron parser fix:** handle `every day at 7pm`, `every weekday at 9am`, `hourly`, `every Monday`, etc. Broaden preset coverage. **Multi-time per day:** parser must handle arbitrary N-times-daily patterns, not just "twice daily" — e.g. `every day at 7am and 7pm`, `every day at 9am, 1pm, 5pm`, `thrice daily`. Generate cron lists (`0 9,13,17 * * *`).
+- **New `/claudeclaw:update-agent` command:** lists agents, loads current config, offers menu (workflow / personality / add job / edit job / remove job / discord / model / delete agent). **Invariant: must never touch MEMORY.md** (preserve accumulated agent state).
+- **Runtime:** `jobs.ts` cron loop scans `agents/*/jobs/*.md` in addition to flat jobs dir. Each job fires a fresh session with `agentName=<name>` + that job's trigger prompt. Agent's base SOUL/CLAUDE loads as system context for every job.
+- **Deferred to Phase 18 (milestone-blocking):** per-job `model` override wired through the runner. Phase 17 captures `model:` in job frontmatter for forward-compat only; runner does NOT yet honor it. Phase 18 must land before milestone v1.0 can complete and before next production deploy.
+- **Discord labelling:** job completion posts include the job label (`Reg: digest-scan complete`) to disambiguate when an agent has multiple jobs.
+- **Backwards compat:** Phase 16 single-job agents auto-migrate to `agents/<name>/jobs/default.md` on first load. Standalone non-agent jobs keep working unchanged.
+
+**Related cross-agent context:** Suzy's daily digest output path is moving from `My Drive/Clippings` (Google Drive via gws CLI) to `$VAULT_PATH/POVIEW.AI/Clippings` (Obsidian vault). Reg's `digest-scan` job consumes this path, so Phase 17 docs should reference the vault path. The Suzy-side config change itself is out of scope for this phase — it's a runtime config tweak, not code.
+
+**Requirements**: TBD (derive during /gsd:plan-phase)
+**Depends on:** Phase 16
+**Plans:** 1/5 plans executed
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 17 to break down)
+
+### Phase 18: Per-job model override runtime wiring (milestone blocker) 🚧
+
+**Goal:** Plumb per-job `model` preference (declared in `agents/<name>/jobs/<label>.md` frontmatter during Phase 17) all the way through the runner so jobs actually execute on the requested model (e.g. Reg's digest-scan runs on sonnet, Reg's draft-writing runs on opus).
+
+**Scope:**
+- Extend `runner.ts` to accept a `model` parameter per invocation
+- Wire `jobs.ts` cron loop to pass `job.model` (falls back to agent default, then daemon default)
+- Wizard + update-agent expose model selection at both agent level (default) and job level (per-task override)
+- Validation: reject unknown model strings at load time, not at runtime
+- Tests: each supported model string resolves correctly, overrides cascade agent → job, invalid strings error cleanly
+
+**Milestone status:** 🚧 **BLOCKS milestone v1.0 completion and next production deploy.** Phase 17 ships the data model for this, Phase 18 makes it functional. Both must land before Reg can reliably use Opus for research while Suzy stays on cheaper models.
+
+**Requirements**: TBD (derive during /gsd:plan-phase)
+**Depends on:** Phase 17
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 18 to break down)

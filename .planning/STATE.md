@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 16-03
+current_plan: 17-02
 status: in_progress
-last_updated: "2026-04-06T00:00:00.000Z"
+last_updated: "2026-04-07T00:00:00.000Z"
 progress:
   total_phases: 16
   completed_phases: 12
@@ -15,9 +15,18 @@ progress:
 # State: ClaudeClaw v2 Upgrade
 
 ## Current Position
-**Phase:** 16 — Create Agent Command (In Progress)
-**Current Plan:** 16-03 (next)
-**Status:** 16-02 complete
+**Phase:** 17 — Multi-Job Agents / Wizard Workflow (In Progress)
+**Current Plan:** 17-02 (next)
+**Status:** 17-01 complete
+
+### 2026-04-07 — Phase 17 Plan 1 (17-01) Completion
+- Added multi-job CRUD primitives to `src/agents.ts`: validateJobLabel, agentJobsDir, addJob, updateJob, removeJob, listAgentJobs, deleteAgent
+- New `AgentJob` interface (label, cron, enabled, model?, trigger, path)
+- Refactored `createAgent` to write scheduled task to `agents/<name>/jobs/default.md` instead of legacy `.claude/claudeclaw/jobs/<name>.md`
+- Strengthened cron validation with structural pre-check (5 fields + char whitelist)
+- 19 new Phase 17 tests + 2 updated Phase 16 tests; full agents.ts suite 45/45 passing
+- Full suite 615/628 (13 pre-existing failures unchanged); tsc baseline unchanged
+- Commit: 3332ddf
 
 ### 2026-04-06 — Phase 16 Plan 2 (16-02) Completion
 - Threaded optional `agentName` through sessions, runner, jobs, send command, cron loop
@@ -259,6 +268,8 @@ progress:
 
 ### Roadmap Evolution
 - Phase 16 added: Create Agent Command — /claudeclaw:create-agent slash command with wizard flow (refs #78)
+- Phase 17 added: Multi-job agents, wizard workflow field, update-agent command — data model change (agents own multiple cron jobs under agents/<name>/jobs/), wizard adds dedicated Workflow field (separates operational instructions from cron schedule), NL→cron parser fix (`every day at 7pm`, plus N-times-daily patterns like `every day at 9am, 1pm, 5pm`), /claudeclaw:update-agent command (preserves MEMORY.md), backwards-compat migration for Phase 16 single-job agents. Related cross-agent context: Suzy's daily digest output path migrating from `My Drive/Clippings` (gws CLI) to `$VAULT_PATH/POVIEW.AI/Clippings` (Obsidian vault) — Reg's digest-scan job will read from the new vault path. Decisions from research review (2026-04-07): per-job model override deferred to Phase 18 (frontmatter captured in P17 for forward-compat, runner wiring in P18); `twice daily` preset broadened to general N-times-daily parsing; update-agent vs in-flight cron race documented as benign; delete-agent cleanup verified via test; Suzy path change already in place user-side.
+- Phase 18 added: Per-job model override runtime wiring — MILESTONE BLOCKER 🚧. Plumbs `model` field from job frontmatter through runner.ts so jobs execute on requested model (e.g. Reg digest-scan on sonnet, Reg draft-writing on opus). Blocks milestone v1.0 completion and next production deploy.
 
 ## Blockers
 None
