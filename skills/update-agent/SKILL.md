@@ -69,6 +69,8 @@ Present this menu and **loop until the user picks Done**. One selection at a tim
 
 For each option, ask the relevant follow-up question(s), then run the matching `bun -e` invocation. Use temp JSON files for any multi-line content (workflow, personality, trigger prompts) to keep escaping sane.
 
+> **IMPORTANT — Jobs are LOCAL cron.** The Add/Edit/Remove job options below operate on `agents/<name>/jobs/<label>.md` files which are scanned by `loadJobs()` and fired by ClaudeClaw's in-process cron loop. They are NOT the remote `schedule` skill. Do NOT invoke the `schedule` skill from this wizard.
+
 #### Option 1 — Workflow
 
 Re-prompt: "What's the new workflow? (multi-line, will replace the existing block entirely)"
