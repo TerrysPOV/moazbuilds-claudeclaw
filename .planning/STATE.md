@@ -15,9 +15,23 @@ progress:
 # State: ClaudeClaw v2 Upgrade
 
 ## Current Position
-**Phase:** 17 — Multi-Job Agents / Wizard Workflow (In Progress)
-**Current Plan:** Not started
-**Status:** Ready to plan
+**Phase:** 18 — Per-Job Model Override Runtime Wiring (In Progress)
+**Current Plan:** 18-02
+**Status:** 18-01 complete
+
+### 2026-04-08 — Phase 18 Plan 1 (18-01) Completion
+- Threaded `RunOptions.modelOverride` through `run() → execClaude() → runClaudeOnce()`
+- Override branch added before agentic branch in execClaude (override wins, taskType="job-override")
+- `runClaudeOnce` exported (one keyword) to enable spy-based unit testing
+- New `VALID_MODEL_STRINGS` (opus/sonnet/haiku/glm) + `validateModelString()` + `resolveJobModel()` in jobs.ts
+- `loadJobs()` skips invalid-model jobs with `console.error("[ts] Skipping job ...")`, valid siblings still load
+- `start.ts` cron tick resolves `job.model → modelOverride` and forwards to `run()`
+- `glm` sentinel preserved (runClaudeOnce already handles it via existing model-string check)
+- New `src/__tests__/runner.test.ts` (3 tests: override forwarded, settings.model fallback, glm forwarded)
+- 14 new jobs.test.ts assertions covering validation + resolveJobModel + loadJobs invalid-model rejection
+- Full suite 710/723 (13 pre-existing failures unchanged from baseline)
+- Commits: 9ffb0bf (Task 1), 7e6dae9 (Task 2)
+- Requirements MODEL-RT-01, MODEL-RT-02, MODEL-VAL-01, MODEL-VAL-02, MODEL-TEST-01 complete
 
 ### 2026-04-08 — Phase 17 Plan gap-03 (17-gap-03) Completion
 - Closed GAP-17-07: append mode for `updateAgent` workflow/personality/dataSources
