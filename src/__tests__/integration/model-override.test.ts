@@ -11,7 +11,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, spyOn } from "bun:test";
 import { rm, mkdir, writeFile } from "fs/promises";
 import { join } from "path";
-import { createAgent, deleteAgent } from "../../agents";
+import { createAgent } from "../../agents";
 import { loadJobs, resolveJobModel, type Job } from "../../jobs";
 import * as runnerMod from "../../runner";
 import { loadSettings } from "../../config";
