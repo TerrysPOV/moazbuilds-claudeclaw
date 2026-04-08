@@ -10,6 +10,7 @@ import { existsSync } from "fs";
 import { mkdir, readdir, readFile, writeFile, stat, unlink, rm } from "fs/promises";
 import { ensureMemoryFile } from "./memory";
 import { cronMatches } from "./cron";
+import { validateModelString } from "./jobs";
 
 // Resolve dirs at call time (not module load) so tests and runtime
 // pick up the current working directory.
@@ -38,6 +39,7 @@ export interface AgentCreateOpts {
   dataSources?: string;
   defaultPrompt?: string;
   workflow?: string;
+  defaultModel?: string;
 }
 
 export type PatchField<T = string> = T | { value: T; mode: "append" | "replace" };
@@ -47,6 +49,7 @@ export interface AgentUpdatePatch {
   personality?: PatchField<string>;
   discordChannels?: string[];
   dataSources?: PatchField<string>;
+  defaultModel?: PatchField<string>;
 }
 
 function normalizePatchField(
@@ -75,6 +78,8 @@ const DISCORD_START = "<!-- claudeclaw:discord:start -->";
 const DISCORD_END = "<!-- claudeclaw:discord:end -->";
 const DATASOURCES_START = "<!-- claudeclaw:datasources:start -->";
 const DATASOURCES_END = "<!-- claudeclaw:datasources:end -->";
+const CLAUDE_MD_MODEL_START = "<!-- claudeclaw:model:start -->";
+const CLAUDE_MD_MODEL_END = "<!-- claudeclaw:model:end -->";
 
 function replaceBetweenMarkers(
   text: string,
@@ -199,6 +204,7 @@ export interface AgentContext {
   claudeMdPath: string;
   memoryPath: string;
   sessionPath: string;
+  defaultModel?: string;
 }
 
 export interface AgentJob {
@@ -436,7 +442,7 @@ function renderClaudeMd(opts: AgentCreateOpts): string {
       ? opts.discordChannels.map((c) => `- ${c}`).join("\n")
       : "_none specified_";
   const sources = opts.dataSources && opts.dataSources.trim() ? opts.dataSources.trim() : "_none specified_";
-  return [
+  const lines = [
     `# Agent: ${opts.name}`,
     ``,
     `## Role`,
@@ -453,7 +459,18 @@ function renderClaudeMd(opts: AgentCreateOpts): string {
     sources,
     DATASOURCES_END,
     ``,
-  ].join("\n");
+  ];
+  const dm = opts.defaultModel ? opts.defaultModel.trim().toLowerCase() : "";
+  if (dm) {
+    lines.push(
+      `## Default Model`,
+      CLAUDE_MD_MODEL_START,
+      dm,
+      CLAUDE_MD_MODEL_END,
+      ``,
+    );
+  }
+  return lines.join("\n");
 }
 
 function renderJobFile(label: string, cron: string, trigger: string, model?: string): string {
@@ -629,6 +646,10 @@ export async function createAgent(opts: AgentCreateOpts): Promise<AgentContext> 
     throw new Error(`Invalid agent name: ${v.error}`);
   }
 
+  if (opts.defaultModel !== undefined && opts.defaultModel !== "") {
+    validateModelString(opts.defaultModel, `agent:${opts.name}`);
+  }
+
   const dir = join(agentsDir(), opts.name);
   await mkdir(dir, { recursive: true });
 
@@ -677,14 +698,27 @@ export async function loadAgent(name: string): Promise<AgentContext> {
   if (!existsSync(dir)) {
     throw new Error(`Agent "${name}" does not exist`);
   }
+  const claudeMdPath = join(dir, "CLAUDE.md");
+  let defaultModel: string | undefined;
+  try {
+    const cmd = await readFile(claudeMdPath, "utf8");
+    const raw = readBetweenMarkers(cmd, CLAUDE_MD_MODEL_START, CLAUDE_MD_MODEL_END);
+    if (raw !== null) {
+      const trimmed = raw.trim().toLowerCase();
+      if (trimmed) defaultModel = trimmed;
+    }
+  } catch {
+    // CLAUDE.md may not exist for agents created outside helpers
+  }
   return {
     name,
     dir,
     identityPath: join(dir, "IDENTITY.md"),
     soulPath: join(dir, "SOUL.md"),
-    claudeMdPath: join(dir, "CLAUDE.md"),
+    claudeMdPath,
     memoryPath: join(dir, "MEMORY.md"),
     sessionPath: join(dir, "session.json"),
+    defaultModel,
   };
 }
 
@@ -693,11 +727,60 @@ export async function loadAgent(name: string): Promise<AgentContext> {
  * agents/<name>/MEMORY.md, and NEVER touches agents/<name>/session.json.
  * Only SOUL.md and CLAUDE.md may be modified, via whole-file string transforms.
  */
+function applyDefaultModelPatch(
+  claudeMd: string,
+  rawField: PatchField<string>,
+  agentName: string,
+): string {
+  const norm = normalizePatchField(rawField);
+  if (!norm) return claudeMd;
+  if (norm.mode === "append") {
+    throw new Error(
+      "defaultModel is single-value; append mode is not supported (use replace or clear via empty string)",
+    );
+  }
+  const value = norm.value.trim().toLowerCase();
+  if (value !== "") {
+    validateModelString(value, `agent:${agentName}`);
+  }
+
+  // If clearing: remove the marker block + optional `## Default Model` heading.
+  if (value === "") {
+    const i = claudeMd.indexOf(CLAUDE_MD_MODEL_START);
+    if (i === -1) return claudeMd;
+    const j = claudeMd.indexOf(CLAUDE_MD_MODEL_END, i + CLAUDE_MD_MODEL_START.length);
+    if (j === -1) return claudeMd;
+    const endOfBlock = j + CLAUDE_MD_MODEL_END.length;
+    // Strip any preceding `## Default Model\n` heading
+    const before = claudeMd.slice(0, i);
+    const headingStripped = before.replace(/(?:^|\n)## Default Model\s*\n$/, "\n");
+    // Remove trailing newline(s) after the end marker
+    let after = claudeMd.slice(endOfBlock);
+    after = after.replace(/^\n+/, "\n");
+    return headingStripped + after;
+  }
+
+  // Replace existing block if present.
+  const replaced = replaceBetweenMarkers(
+    claudeMd,
+    CLAUDE_MD_MODEL_START,
+    CLAUDE_MD_MODEL_END,
+    value,
+  );
+  if (replaced !== null) return replaced;
+
+  // Append a new section at end.
+  const section = `## Default Model\n${CLAUDE_MD_MODEL_START}\n${value}\n${CLAUDE_MD_MODEL_END}\n`;
+  return claudeMd.replace(/\n*$/, "\n\n") + section;
+}
+
 export async function updateAgent(name: string, patch: AgentUpdatePatch): Promise<void> {
   const ctx = await loadAgent(name);
   const touchesSoul = patch.workflow !== undefined || patch.personality !== undefined;
   const touchesClaudeMd =
-    patch.discordChannels !== undefined || patch.dataSources !== undefined;
+    patch.discordChannels !== undefined ||
+    patch.dataSources !== undefined ||
+    patch.defaultModel !== undefined;
 
   if (touchesSoul) {
     const soul = await readFile(ctx.soulPath, "utf8");
@@ -707,7 +790,10 @@ export async function updateAgent(name: string, patch: AgentUpdatePatch): Promis
 
   if (touchesClaudeMd) {
     const claudeMd = await readFile(ctx.claudeMdPath, "utf8");
-    const next = applyClaudeMdPatch(claudeMd, patch);
+    let next = applyClaudeMdPatch(claudeMd, patch);
+    if (patch.defaultModel !== undefined) {
+      next = applyDefaultModelPatch(next, patch.defaultModel, name);
+    }
     if (next !== claudeMd) await writeFile(ctx.claudeMdPath, next, "utf8");
   }
 }
