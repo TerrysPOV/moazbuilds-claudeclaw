@@ -19,6 +19,18 @@ progress:
 **Current Plan:** 17-05 (next)
 **Status:** 17-04 complete (parallel with 17-03)
 
+### 2026-04-08 — Phase 17 Plan gap-03 (17-gap-03) Completion
+- Closed GAP-17-07: append mode for `updateAgent` workflow/personality/dataSources
+- New `PatchField<T> = T | { value, mode: "append"|"replace" }` type — bare strings remain back-compat (replace)
+- `applySoulPatch` / `applyClaudeMdPatch` branch on mode; append concatenates inside markers with `\n\n` separator
+- New helpers: `normalizePatchField`, `readBetweenMarkers`
+- dataSources append on file with no existing block creates a new marked section at end
+- update-agent SKILL.md: mode-selection prompt (Append default / Replace / Show current) added before content collection for Options 1, 2, 7; bun -e snippets pass `{ value, mode }` patch shape
+- 14 new tests in agents.test.ts (98/98 passing); full suite 697/710 (13 pre-existing failures unchanged)
+- MEMORY.md UPDATE-02 invariant preserved under all new append paths (verified by source-grep + mtime tests)
+- Commits: 3aa3cd7 (RED), 62eed25 (GREEN), 5bf0bc1 (SKILL.md)
+- Requirement UPDATE-03 complete
+
 ### 2026-04-08 — Phase 17 Plan gap-02 (17-gap-02) Completion
 - Closed GAP-17-05: manual `claudeclaw fire <agent>:<label>` command
 - New `src/commands/fire.ts` with `fireJob()`, `runFireCommand()`, `parseFireArgs()`; DI-based for hermetic tests (no real claude exec)
