@@ -978,3 +978,177 @@ describe("Phase 17 gap-03: append mode for updateAgent", () => {
     expect(await readFile(memPath, "utf8")).toBe("important state\n");
   });
 });
+
+// ──────────────────────────────────────────────────────────────────────
+// Phase 18 Plan 02 — agent-level defaultModel
+// ──────────────────────────────────────────────────────────────────────
+
+describe("Phase 18: createAgent defaultModel", () => {
+  it("writes marker block to CLAUDE.md when defaultModel is set", async () => {
+    const name = uniq("dm-create");
+    await createAgent({
+      name,
+      role: "tester",
+      personality: "calm",
+      defaultModel: "opus",
+    } as any);
+    const cmd = await readFile(join(AGENTS_DIR, name, "CLAUDE.md"), "utf8");
+    expect(cmd).toContain("<!-- claudeclaw:model:start -->");
+    expect(cmd).toContain("<!-- claudeclaw:model:end -->");
+    expect(cmd).toMatch(/claudeclaw:model:start -->\nopus\n<!-- claudeclaw:model:end/);
+  });
+
+  it("does NOT write marker block when defaultModel is absent", async () => {
+    const name = uniq("dm-noset");
+    await createAgent({ name, role: "tester", personality: "calm" });
+    const cmd = await readFile(join(AGENTS_DIR, name, "CLAUDE.md"), "utf8");
+    expect(cmd).not.toContain("claudeclaw:model:start");
+  });
+
+  it("rejects invalid defaultModel string at createAgent", async () => {
+    const name = uniq("dm-bad");
+    await expect(
+      createAgent({
+        name,
+        role: "tester",
+        personality: "calm",
+        defaultModel: "opuz",
+      } as any),
+    ).rejects.toThrow(/Invalid model/);
+  });
+
+  it("normalizes defaultModel (trim + lowercase) at write", async () => {
+    const name = uniq("dm-norm");
+    await createAgent({
+      name,
+      role: "tester",
+      personality: "calm",
+      defaultModel: "  OPUS  ",
+    } as any);
+    const cmd = await readFile(join(AGENTS_DIR, name, "CLAUDE.md"), "utf8");
+    expect(cmd).toMatch(/claudeclaw:model:start -->\nopus\n<!-- claudeclaw:model:end/);
+  });
+});
+
+describe("Phase 18: loadAgent defaultModel round-trip", () => {
+  it("loadAgent returns defaultModel from marker block", async () => {
+    const name = uniq("dm-load");
+    await createAgent({
+      name,
+      role: "tester",
+      personality: "calm",
+      defaultModel: "sonnet",
+    } as any);
+    const ctx = (await loadAgent(name)) as any;
+    expect(ctx.defaultModel).toBe("sonnet");
+  });
+
+  it("loadAgent returns undefined defaultModel when no marker block", async () => {
+    const name = uniq("dm-lnil");
+    await createAgent({ name, role: "tester", personality: "calm" });
+    const ctx = (await loadAgent(name)) as any;
+    expect(ctx.defaultModel).toBeUndefined();
+  });
+});
+
+describe("Phase 18: updateAgent defaultModel", () => {
+  it("sets defaultModel on an agent that had none", async () => {
+    const name = uniq("dm-up1");
+    await createAgent({ name, role: "tester", personality: "calm" });
+    await updateAgent(name, { defaultModel: "haiku" } as any);
+    const ctx = (await loadAgent(name)) as any;
+    expect(ctx.defaultModel).toBe("haiku");
+    const cmd = await readFile(join(AGENTS_DIR, name, "CLAUDE.md"), "utf8");
+    expect(cmd).toContain("claudeclaw:model:start");
+  });
+
+  it("replaces existing defaultModel", async () => {
+    const name = uniq("dm-up2");
+    await createAgent({
+      name,
+      role: "tester",
+      personality: "calm",
+      defaultModel: "opus",
+    } as any);
+    await updateAgent(name, { defaultModel: "haiku" } as any);
+    const ctx = (await loadAgent(name)) as any;
+    expect(ctx.defaultModel).toBe("haiku");
+  });
+
+  it("clears defaultModel when empty string passed", async () => {
+    const name = uniq("dm-up3");
+    await createAgent({
+      name,
+      role: "tester",
+      personality: "calm",
+      defaultModel: "opus",
+    } as any);
+    await updateAgent(name, { defaultModel: "" } as any);
+    const ctx = (await loadAgent(name)) as any;
+    expect(ctx.defaultModel).toBeUndefined();
+    const cmd = await readFile(join(AGENTS_DIR, name, "CLAUDE.md"), "utf8");
+    expect(cmd).not.toContain("claudeclaw:model:start");
+  });
+
+  it("accepts PatchField replace shape", async () => {
+    const name = uniq("dm-up4");
+    await createAgent({ name, role: "tester", personality: "calm" });
+    await updateAgent(name, {
+      defaultModel: { value: "opus", mode: "replace" },
+    } as any);
+    const ctx = (await loadAgent(name)) as any;
+    expect(ctx.defaultModel).toBe("opus");
+  });
+
+  it("rejects append mode for defaultModel", async () => {
+    const name = uniq("dm-up5");
+    await createAgent({ name, role: "tester", personality: "calm" });
+    await expect(
+      updateAgent(name, {
+        defaultModel: { value: "opus", mode: "append" },
+      } as any),
+    ).rejects.toThrow(/single-value|append/i);
+  });
+
+  it("rejects invalid model string at updateAgent", async () => {
+    const name = uniq("dm-up6");
+    await createAgent({ name, role: "tester", personality: "calm" });
+    await expect(
+      updateAgent(name, { defaultModel: "opuz" } as any),
+    ).rejects.toThrow(/Invalid model/);
+  });
+});
+
+describe("Phase 18: UPDATE-02 invariant for defaultModel", () => {
+  it("defaultModel code paths do not touch MEMORY.md or session.json", async () => {
+    const src = await readFile(join(PROJECT, "src", "agents.ts"), "utf8");
+    // Find the updateAgent function body — conservative slice from "export async function updateAgent"
+    // until the next `export ` at column 0.
+    const start = src.indexOf("export async function updateAgent");
+    expect(start).toBeGreaterThan(-1);
+    const rest = src.slice(start);
+    const endRel = rest.indexOf("\nexport ", 1);
+    const body = endRel === -1 ? rest : rest.slice(0, endRel);
+    expect(body).not.toMatch(/memoryPath/);
+    expect(body).not.toMatch(/MEMORY\.md/);
+    expect(body).not.toMatch(/ensureMemoryFile/);
+    expect(body).not.toMatch(/getMemoryPath/);
+    expect(body).not.toMatch(/sessionPath/);
+    expect(body).not.toMatch(/session\.json/);
+  });
+
+  it("updateAgent defaultModel preserves MEMORY.md mtime", async () => {
+    const name = uniq("dm-mem");
+    await createAgent({ name, role: "tester", personality: "calm" });
+    const memPath = join(AGENTS_DIR, name, "MEMORY.md");
+    await writeFile(memPath, "important state\n", "utf8");
+    const before = (await stat(memPath)).mtimeMs;
+    await new Promise((r) => setTimeout(r, 15));
+    await updateAgent(name, { defaultModel: "opus" } as any);
+    await updateAgent(name, { defaultModel: "haiku" } as any);
+    await updateAgent(name, { defaultModel: "" } as any);
+    const after = (await stat(memPath)).mtimeMs;
+    expect(after).toBe(before);
+    expect(await readFile(memPath, "utf8")).toBe("important state\n");
+  });
+});
