@@ -19,6 +19,19 @@ progress:
 **Current Plan:** 17-05 (next)
 **Status:** 17-04 complete (parallel with 17-03)
 
+### 2026-04-08 — Phase 17 Plan gap-02 (17-gap-02) Completion
+- Closed GAP-17-05: manual `claudeclaw fire <agent>:<label>` command
+- New `src/commands/fire.ts` with `fireJob()`, `runFireCommand()`, `parseFireArgs()`; DI-based for hermetic tests (no real claude exec)
+- `src/jobs.ts`: new `loadAgentJobsUnfiltered(agentName)` + `agentDirExists(agentName)` helpers — reuses `parseJobFile` (no parallel parser, respects GAP-17-08)
+- CLI: `fire` subcommand wired in `src/index.ts` with exit-code propagation; new `--help` handler listing all subcommands
+- Discord: `/fire` text-command intercept in message handler (before skill routing), replies to originating channel with firing/result/error
+- Telegram: `/fire` slash command alongside `/reset`, `/status`, `/context`
+- Web UI: `POST /api/jobs/fire` with CSRF validation; `/api/jobs` response enriched with `agent`/`label`/`fireable` fields; "Fire now" button per agent-job row in `src/ui/page/script.ts`
+- Manual fire bypasses `enabled: false` filter (disabled jobs still fireable on demand)
+- 14 new tests in `src/__tests__/fire.test.ts` — all passing; full suite 684/697 (13 pre-existing failures unchanged)
+- Commits: 572691b, 3599395, c64020f
+- Requirement FIRE-01 complete
+
 ### 2026-04-07 — Phase 17 Plan 3 (17-03) Completion
 - Added `updateAgent(name, patch)` to `src/agents.ts` with selective field patching for SOUL.md (workflow, personality) and CLAUDE.md (discordChannels, dataSources)
 - Pure string transforms: `applySoulPatch` / `applyClaudeMdPatch` — marker-aware with legacy-format regex fallback
