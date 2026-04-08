@@ -20,6 +20,16 @@ export function validateModelString(value: string | undefined, context: string):
 
 export async function resolveJobModel(job: Job): Promise<string | undefined> {
   if (job.model && job.model.trim() !== "") return job.model.trim().toLowerCase();
+  if (job.agent) {
+    try {
+      // Lazy import to avoid circular dependency at module load.
+      const { loadAgent } = await import("./agents");
+      const ctx = await loadAgent(job.agent);
+      if (ctx?.defaultModel) return ctx.defaultModel.trim().toLowerCase();
+    } catch {
+      // Agent load failure should not break cron — fall through to daemon default.
+    }
+  }
   return undefined;
 }
 

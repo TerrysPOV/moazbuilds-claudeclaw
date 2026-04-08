@@ -63,8 +63,9 @@ Present this menu and **loop until the user picks Done**. One selection at a tim
 5. Remove job       — delete a scheduled task
 6. Discord channels — re-set the channel list
 7. Data sources     — rewrite the data sources block
-8. Delete agent     — nuke the entire agent directory (requires re-typing the name)
-9. Done             — exit
+8. Default model    — set or clear the agent's defaultModel (opus/sonnet/haiku/glm — middle fallback tier)
+9. Delete agent     — nuke the entire agent directory (requires re-typing the name)
+10. Done            — exit
 ```
 
 For each option, ask the relevant follow-up question(s), then run the matching `bun -e` invocation. Use temp JSON files for any multi-line content (workflow, personality, trigger prompts) to keep escaping sane.
@@ -200,7 +201,19 @@ console.log("data sources updated (" + mode + ")");
 '
 ```
 
-#### Option 8 — Delete agent
+#### Option 8 — Default model
+
+Ask: "New default model? (`opus` / `sonnet` / `haiku` / `glm`, or empty to clear)". This is the agent's middle fallback tier — job frontmatter `model:` still wins per-task. Append mode is NOT supported (single-value field).
+
+```bash
+bun -e '
+const { updateAgent } = await import(`${process.env.CLAUDECLAW_ROOT || "."}/src/agents.ts`);
+await updateAgent("AGENT_NAME", { defaultModel: "opus" });  // or "" to clear
+console.log("default model updated");
+'
+```
+
+#### Option 9 — Delete agent
 
 This is destructive. Require the user to **re-type the agent name verbatim** as a confirmation guard. If the typed name does not match, abort and return to the menu.
 
@@ -214,7 +227,7 @@ console.log("deleted");
 
 This call IS allowed to remove `MEMORY.md` and `session.json` because the entire agent directory is going away.
 
-#### Option 9 — Done
+#### Option 10 — Done
 
 Exit the loop and print a one-line summary of what changed.
 

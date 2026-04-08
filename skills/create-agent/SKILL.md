@@ -72,7 +72,13 @@ Ask: "What information sources do they pull from? (RSS feeds, APIs, files, websi
 
 Free text.
 
-### 7. Scheduled tasks (loop)
+### 7. Default model (optional)
+
+Ask: "What model should this agent use by default? Options: `default` (daemon setting), `opus`, `sonnet`, `haiku`, `glm`. Individual jobs can still override this per-task."
+
+If the user picks anything other than `default` (or presses enter), capture it as `defaultModel`. This becomes the agent's middle-tier fallback: job frontmatter `model:` wins, then this agent default, then the daemon setting.
+
+### 8. Scheduled tasks (loop)
 
 > **IMPORTANT — Jobs are LOCAL cron.** Scheduled tasks here are managed by ClaudeClaw's in-process cron loop (`src/jobs.ts` → `src/commands/start.ts setInterval`). They are NOT the remote `schedule` skill (which uses cloud triggers like Vercel cron). Do NOT invoke the `schedule` skill from this wizard. All job files live at `agents/<name>/jobs/<label>.md` with `schedule:` frontmatter and are loaded by `loadJobs()` on the running daemon.
 
@@ -118,6 +124,7 @@ Once all answers are in and the user confirmed the review block, **write them to
 #      "workflow": "...",
 #      "discordChannels": ["#a","#b"],
 #      "dataSources": "...",
+#      "defaultModel": "opus",   // optional — omit for daemon default
 #      "jobs": [
 #        { "label": "digest-scan", "cron": "0 9 * * *", "trigger": "...", "model": "opus" },
 #        ...
@@ -136,6 +143,7 @@ const ctx = await createAgent({
   workflow: cfg.workflow,
   discordChannels: cfg.discordChannels,
   dataSources: cfg.dataSources,
+  defaultModel: cfg.defaultModel,
 });
 for (const job of cfg.jobs) {
   await addJob(ctx.name, job.label, job.cron, job.trigger, job.model);

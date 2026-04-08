@@ -160,6 +160,68 @@ describe("Phase 18: resolveJobModel", () => {
   });
 });
 
+describe("Phase 18 Plan 02: resolveJobModel cascade to agent defaultModel", () => {
+  const baseJob: Job = {
+    name: "x",
+    schedule: "0 9 * * *",
+    prompt: "",
+    recurring: true,
+    notify: true,
+  };
+
+  it("job.model wins over agent defaultModel", async () => {
+    const { createAgent } = await import("../agents");
+    const agent = uniq("cascade-win");
+    await createAgent({
+      name: agent,
+      role: "tester",
+      personality: "calm",
+      defaultModel: "opus",
+    } as any);
+    createdAgents.push(agent);
+    const resolved = await resolveJobModel({ ...baseJob, agent, model: "sonnet" });
+    expect(resolved).toBe("sonnet");
+  });
+
+  it("falls back to agent defaultModel when job has no model", async () => {
+    const { createAgent } = await import("../agents");
+    const agent = uniq("cascade-fallback");
+    await createAgent({
+      name: agent,
+      role: "tester",
+      personality: "calm",
+      defaultModel: "opus",
+    } as any);
+    createdAgents.push(agent);
+    const resolved = await resolveJobModel({ ...baseJob, agent });
+    expect(resolved).toBe("opus");
+  });
+
+  it("returns undefined when job has no model and agent has no defaultModel", async () => {
+    const { createAgent } = await import("../agents");
+    const agent = uniq("cascade-none");
+    await createAgent({ name: agent, role: "tester", personality: "calm" });
+    createdAgents.push(agent);
+    const resolved = await resolveJobModel({ ...baseJob, agent });
+    expect(resolved).toBeUndefined();
+  });
+
+  it("returns undefined for standalone job (no agent) with no model", async () => {
+    const resolved = await resolveJobModel({ ...baseJob });
+    expect(resolved).toBeUndefined();
+  });
+
+  it("returns model for standalone job (no agent) with model set", async () => {
+    const resolved = await resolveJobModel({ ...baseJob, model: "haiku" });
+    expect(resolved).toBe("haiku");
+  });
+
+  it("falls through to undefined when loadAgent throws (nonexistent agent)", async () => {
+    const resolved = await resolveJobModel({ ...baseJob, agent: "zz-does-not-exist-xyz" });
+    expect(resolved).toBeUndefined();
+  });
+});
+
 describe("Phase 18: loadJobs invalid model rejection", () => {
   it("skips agent job with invalid model and logs error; valid sibling still loads", async () => {
     const agent = uniq("badmodel");
