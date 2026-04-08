@@ -126,6 +126,43 @@ export async function loadJobs(): Promise<Job[]> {
   return jobs;
 }
 
+/**
+ * Load all jobs for a given agent WITHOUT filtering disabled ones.
+ * Used by `fire` (manual invocation) to allow firing disabled jobs on demand.
+ * Returns [] if the agent directory or its jobs/ subdir doesn't exist.
+ */
+export async function loadAgentJobsUnfiltered(agentName: string): Promise<Job[]> {
+  const jobs: Job[] = [];
+  const agentJobsDir = join(AGENTS_DIR, agentName, "jobs");
+  let jobFiles: string[] = [];
+  try {
+    jobFiles = await readdir(agentJobsDir);
+  } catch {
+    return jobs;
+  }
+  for (const file of jobFiles) {
+    if (!file.endsWith(".md")) continue;
+    const labelFromFile = file.replace(/\.md$/, "");
+    const content = await Bun.file(join(agentJobsDir, file)).text();
+    const job = parseJobFile(`${agentName}/${labelFromFile}`, content);
+    if (!job) continue;
+    job.agent = agentName;
+    job.label = labelFromFile;
+    jobs.push(job);
+  }
+  return jobs;
+}
+
+/** Returns true if `agents/<name>/` exists on disk. */
+export async function agentDirExists(agentName: string): Promise<boolean> {
+  try {
+    await readdir(join(AGENTS_DIR, agentName));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function clearJobSchedule(jobName: string): Promise<void> {
   const path = join(JOBS_DIR, `${jobName}.md`);
   const content = await Bun.file(path).text();
