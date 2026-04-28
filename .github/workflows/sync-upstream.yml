@@ -15,10 +15,27 @@ permissions:
   pull-requests: write
 
 jobs:
+  guard:
+    name: Check trigger
+    runs-on: ubuntu-latest
+    outputs:
+      should-run: ${{ steps.check.outputs.result }}
+    steps:
+      - id: check
+        run: |
+          if [[ "${{ github.event_name }}" == "schedule" || "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "result=true" >> "$GITHUB_OUTPUT"
+            echo "Proceeding — triggered by ${{ github.event_name }}"
+          else
+            echo "result=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping — sync only runs on schedule or manual dispatch (got: ${{ github.event_name }})"
+          fi
+
   sync:
     name: Check and merge upstream changes
     runs-on: ubuntu-latest
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: guard
+    if: needs.guard.outputs.should-run == 'true'
     steps:
       - uses: actions/checkout@v4
         with:
