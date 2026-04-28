@@ -480,6 +480,9 @@ function groupTriggerReason(message: TelegramMessage): string | null {
     }
   }
 
+  const { telegram } = getSettings();
+  if (telegram.listenChats?.includes(message.chat.id)) return "listen_chat";
+
   return null;
 }
 
@@ -1045,6 +1048,7 @@ async function registerBotCommands(token: string): Promise<void> {
 // --- Polling loop ---
 
 let running = true;
+let isPolling = false;
 
 async function poll(): Promise<void> {
   const config = getSettings().telegram;
@@ -1123,12 +1127,15 @@ process.on("SIGINT", () => { running = false; });
 
 /** Start polling in-process (called by start.ts when token is configured) */
 export function startPolling(debug = false): void {
+  if (isPolling) return;
+  isPolling = true;
   telegramDebug = debug;
   (async () => {
     await ensureProjectClaudeMd();
     await poll();
   })().catch((err) => {
     console.error(`[Telegram] Fatal: ${err}`);
+    isPolling = false;
   });
 }
 

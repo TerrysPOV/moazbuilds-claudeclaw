@@ -1,6 +1,7 @@
 import { ensureProjectClaudeMd, run, runUserMessage, compactCurrentSession } from "../runner";
 import { getSettings, loadSettings } from "../config";
 import { resetSession, peekSession } from "../sessions";
+import { listThreadSessions, removeThreadSession, peekThreadSession } from "../sessionManager";
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
@@ -163,6 +164,9 @@ async function fetchDiscordWithSizeLimit(url: string): Promise<Uint8Array> {
   return bytes;
 }
 
+// Track known thread channel IDs and their parent channel IDs for multi-session support
+const knownThreads = new Map<string, { parentId: string }>();
+
 // --- Debug ---
 
 function debugLog(message: string): void {
@@ -287,6 +291,29 @@ function extractReactionDirective(text: string): { cleanedText: string; reaction
   return { cleanedText, reactionEmoji };
 }
 
+// --- Thread rejoin helper ---
+async function rejoinThreads(token: string): Promise<void> {
+  const threadSessions = await listThreadSessions();
+  for (const ts of threadSessions) {
+    try {
+      await discordApi(token, "DELETE", `/channels/${ts.threadId}/thread-members/@me`).catch(() => {});
+      await discordApi(token, "PUT", `/channels/${ts.threadId}/thread-members/@me`);
+      if (!knownThreads.has(ts.threadId)) {
+        const ch = await discordApi<{ parent_id?: string }>(token, "GET", `/channels/${ts.threadId}`);
+        if (ch.parent_id) {
+          knownThreads.set(ts.threadId, { parentId: ch.parent_id });
+        }
+      }
+      console.log(`[Discord] Rejoined thread: ${ts.threadId}`);
+    } catch (err) {
+      console.error(`[Discord] Failed to rejoin thread ${ts.threadId}: ${err}`);
+    }
+  }
+  if (threadSessions.length > 0) {
+    console.log(`[Discord] Rejoined ${threadSessions.length} thread(s) from sessions.json`);
+  }
+}
+
 // --- Guild trigger logic ---
 
 function guildTriggerReason(message: DiscordMessage): string | null {
@@ -303,10 +330,62 @@ function guildTriggerReason(message: DiscordMessage): string | null {
   const config = getSettings().discord;
   if (config.listenChannels.includes(message.channel_id)) return "listen_channel";
 
+  // Thread whose parent channel is a listen channel
+  const threadInfo = knownThreads.get(message.channel_id);
+  if (threadInfo && config.listenChannels.includes(threadInfo.parentId)) return "listen_channel_thread";
+
   return null;
 }
 
 // --- Attachment handling ---
+
+// --- AI-powered thread intent classifier (uses Sonnet via Claude OAuth) ---
+interface ThreadIntent {
+  action: "hire" | "fire";
+  names: string[];
+}
+
+async function classifyThreadIntent(text: string): Promise<ThreadIntent | null> {
+  const systemPrompt = `You classify user messages into thread management intents.
+
+If the user wants to CREATE/SPAWN/DEPLOY threads (e.g. "hire X", "派出 X", "叫 X 出來", "派 X 去打", "開 X", "建立 X"):
+Return: {"action":"hire","names":["name1","name2"]}
+
+If the user wants to DELETE/REMOVE threads (e.g. "fire X", "撤回 X", "把 X 叫回來", "刪 X", "關 X"):
+Return: {"action":"fire","names":["name1","name2"]}
+
+If the message is NOT about thread management, return: null
+
+Rules:
+- Extract individual names. "桃園三結義" = ["劉備","關羽","張飛"]. "五虎將" = ["關羽","張飛","趙雲","馬超","黃忠"].
+- Common patterns: 派/派出/出征/上陣/迎戰/出戰 = hire. 撤/撤回/收回/叫回來/滾 = fire.
+- Return ONLY valid JSON or the word null. No explanation.`;
+
+  try {
+    const { execSync } = await import("node:child_process");
+    const input = `${systemPrompt}\n\n---\nUser message: ${text}`;
+    const result = execSync(
+      `claude --model claude-sonnet-4-20250514 --print --output-format text`,
+      {
+        input,
+        encoding: "utf-8",
+        timeout: 15000,
+        env: { ...process.env, HOME: homedir() },
+      },
+    ).trim();
+
+    if (!result || result === "null") return null;
+    // Extract JSON from response (in case there's extra text)
+    const jsonMatch = result.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return null;
+    return JSON.parse(jsonMatch[0]) as ThreadIntent;
+  } catch (err) {
+    console.error(`[Discord] Intent classifier error: ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  }
+}
+
+// --- Attachment handling (original) ---
 
 function isImageAttachment(a: DiscordAttachment): boolean {
   return Boolean(a.content_type?.startsWith("image/"));
@@ -316,6 +395,12 @@ function isVoiceAttachment(a: DiscordAttachment): boolean {
   // IS_VOICE_MESSAGE flag
   if ((a.flags ?? 0) & (1 << 13)) return true;
   return Boolean(a.content_type?.startsWith("audio/"));
+}
+
+function isTextAttachment(a: DiscordAttachment): boolean {
+  if (a.content_type?.startsWith("text/")) return true;
+  const ext = extname(a.filename).toLowerCase();
+  return ext === ".txt" || ext === ".md";
 }
 
 async function downloadDiscordAttachment(
@@ -408,12 +493,29 @@ async function handleMessageCreate(token: string, message: DiscordMessage): Prom
   const channelId = message.channel_id;
   const isDM = !message.guild_id;
   const isGuild = !!message.guild_id;
-  const content = message.content;
+  const content = message.content.replace(/\0/g, "");
+
+  // Recover lost thread from sessions.json (fallback for knownThreads volatility)
+  if (isGuild && !knownThreads.has(channelId)) {
+    const persisted = await peekThreadSession(channelId);
+    if (persisted) {
+      try {
+        const ch = await discordApi<{ parent_id?: string }>(config.token, "GET", `/channels/${channelId}`);
+        if (ch.parent_id) {
+          knownThreads.set(channelId, { parentId: ch.parent_id });
+          debugLog(`Thread recovered from sessions.json: ${channelId} (parent: ${ch.parent_id})`);
+        }
+      } catch (err) {
+        debugLog(`Thread recovery failed for ${channelId}: ${err}`);
+      }
+    }
+  }
 
   // Guild trigger check
   const triggerReason = isGuild ? guildTriggerReason(message) : "direct_message";
   if (isGuild && !triggerReason) {
-    debugLog(`Skip guild message channel=${channelId} from=${userId} reason=no_trigger`);
+    const threadInfo = knownThreads.get(channelId);
+    console.log(`[Discord][DIAG] SKIP channel=${channelId} guild=${message.guild_id} inKnown=${knownThreads.has(channelId)} threadInfo=${JSON.stringify(threadInfo)} knownSize=${knownThreads.size} listenCh=${JSON.stringify(config.listenChannels)} text="${content.slice(0, 40)}"`);
     return;
   }
   debugLog(
@@ -439,10 +541,12 @@ async function handleMessageCreate(token: string, message: DiscordMessage): Prom
   // Detect attachments
   const imageAttachments = message.attachments.filter(isImageAttachment);
   const voiceAttachments = message.attachments.filter(isVoiceAttachment);
+  const textAttachments = message.attachments.filter(isTextAttachment);
   const hasImage = imageAttachments.length > 0;
   const hasVoice = voiceAttachments.length > 0;
+  const hasText = textAttachments.length > 0;
 
-  if (!content.trim() && !hasImage && !hasVoice) return;
+  if (!content.trim() && !hasImage && !hasVoice && !hasText) return;
 
   // Strip bot mention from content for cleaner prompt
   let cleanContent = content;
@@ -451,7 +555,7 @@ async function handleMessageCreate(token: string, message: DiscordMessage): Prom
   }
 
   const label = message.author.username;
-  const mediaParts = [hasImage ? "image" : "", hasVoice ? "voice" : ""].filter(Boolean);
+  const mediaParts = [hasImage ? "image" : "", hasVoice ? "voice" : "", hasText ? "text" : ""].filter(Boolean);
   const mediaSuffix = mediaParts.length > 0 ? ` [${mediaParts.join("+")}]` : "";
   console.log(
     `[${new Date().toLocaleTimeString()}] Discord ${label}${mediaSuffix}: "${cleanContent.slice(0, 60)}${cleanContent.length > 60 ? "..." : ""}"`,
@@ -466,6 +570,7 @@ async function handleMessageCreate(token: string, message: DiscordMessage): Prom
     let imagePath: string | null = null;
     let voicePath: string | null = null;
     let voiceTranscript: string | null = null;
+    let textContent: string | null = null;
 
     if (hasImage) {
       try {
@@ -492,6 +597,83 @@ async function handleMessageCreate(token: string, message: DiscordMessage): Prom
         } catch (err) {
           console.error(`[Discord] Failed to transcribe voice for ${label}: ${err instanceof Error ? err.message : err}`);
         }
+      }
+    }
+
+    if (hasText) {
+      try {
+        const resp = await fetch(textAttachments[0].url);
+        if (resp.ok) {
+          const raw = await resp.text();
+          textContent = raw.length > 51200 ? raw.slice(0, 51200) + "\n...[truncated]" : raw;
+        }
+      } catch (err) {
+        console.error(`[Discord] Failed to fetch text attachment for ${label}: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+
+    // --- Thread management: AI-powered intent classification ---
+    if (isGuild && cleanContent.length < 200) {
+      const intent = await classifyThreadIntent(cleanContent);
+      if (intent && intent.action === "hire" && intent.names.length > 0) {
+        const results: string[] = [];
+        for (const threadName of intent.names) {
+          try {
+            const thread = await discordApi<{ id: string; name: string }>(
+              config.token,
+              "POST",
+              `/channels/${channelId}/threads`,
+              {
+                name: threadName,
+                type: 11, // PUBLIC_THREAD
+                auto_archive_duration: 4320, // 3 days
+              },
+            );
+            knownThreads.set(thread.id, { parentId: channelId });
+            // Don't pre-create session — let Claude CLI create it on first message
+            // The real UUID will be captured and saved by runner.ts
+            await sendMessage(config.token, thread.id, `🧵 Thread **${threadName}** created with independent session. Start chatting!`);
+            results.push(`✅ **${threadName}** → <#${thread.id}>`);
+            console.log(`[Discord] Thread created: ${thread.id} name="${threadName}" parent=${channelId} knownSize=${knownThreads.size}`);
+          } catch (err) {
+            results.push(`❌ **${threadName}** — ${err instanceof Error ? err.message : err}`);
+          }
+        }
+        await sendMessage(config.token, channelId, results.join("\n"));
+        return;
+      }
+
+      if (intent && intent.action === "fire" && intent.names.length > 0) {
+        const results: string[] = [];
+        for (const targetName of intent.names) {
+          const targetLower = targetName.toLowerCase();
+          let foundId: string | null = null;
+          for (const [tid, info] of knownThreads.entries()) {
+            if (info.parentId === channelId) {
+              try {
+                const ch = await discordApi<{ id: string; name: string }>(config.token, "GET", `/channels/${tid}`);
+                if (ch.name.toLowerCase() === targetLower) {
+                  foundId = tid;
+                  break;
+                }
+              } catch { /* thread might be gone */ }
+            }
+          }
+          if (foundId) {
+            try {
+              await removeThreadSession(foundId);
+              await discordApi(config.token, "DELETE", `/channels/${foundId}`);
+              knownThreads.delete(foundId);
+              results.push(`🗑️ **${targetName}** — deleted`);
+            } catch (err) {
+              results.push(`❌ **${targetName}** — ${err instanceof Error ? err.message : err}`);
+            }
+          } else {
+            results.push(`❌ **${targetName}** — not found`);
+          }
+        }
+        await sendMessage(config.token, channelId, results.join("\n"));
+        return;
       }
     }
 
@@ -566,6 +748,11 @@ async function handleMessageCreate(token: string, message: DiscordMessage): Prom
         "The user attached voice audio, but it could not be transcribed. Respond and ask them to resend a clearer clip.",
       );
     }
+    if (textContent) {
+      promptParts.push(`Attached text file (${textAttachments[0].filename}):\n${textContent}`);
+    } else if (hasText) {
+      promptParts.push("The user attached a text file, but downloading it failed. Ask them to resend.");
+    }
 
     // Build the prompt for Claude
     const prompt = promptParts.join("\n");
@@ -575,7 +762,7 @@ async function handleMessageCreate(token: string, message: DiscordMessage): Prom
     if (process.env.USE_GATEWAY_DISCORD === "true") {
       // Normalize the Discord message and pass through the gateway
       const normalized = normalizeDiscordMessage(message);
-      
+
       // Store the built prompt in metadata for the event processor
       (normalized.metadata as any).prompt = prompt;
       (normalized.metadata as any).label = label;
@@ -607,17 +794,21 @@ async function handleMessageCreate(token: string, message: DiscordMessage): Prom
       return;
     }
 
-    // Legacy path - run Claude directly
-    const result = await runUserMessage("discord", prompt);
+    // Legacy path - use thread-specific session if message is in a known thread
+    const threadId = knownThreads.has(channelId) ? channelId : undefined;
+    const result = await runUserMessage("discord", prompt, threadId);
 
     if (result.exitCode !== 0) {
-      await sendMessage(config.token, channelId, `Error: ${result.stderr || "Unknown error"}`);
-      return;
+      await sendMessage(config.token, channelId, `Error (exit ${result.exitCode}): ${result.stderr || result.stdout || "Unknown error"}`);
+    } else {
+      const { cleanedText, reactionEmoji } = extractReactionDirective(result.stdout || "");
+      if (reactionEmoji) {
+        await sendReaction(config.token, channelId, message.id, reactionEmoji).catch((err) => {
+          console.error(`[Discord] Failed to send reaction for ${label}: ${err instanceof Error ? err.message : err}`);
+        });
+      }
+      await sendMessage(config.token, channelId, cleanedText || "(empty response)");
     }
-
-    // Send response back to Discord
-    const responseText = result.stdout || "Done.";
-    await sendMessage(config.token, channelId, responseText);
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     console.error(`[Discord] Error for ${label}: ${errMsg}`);
@@ -676,6 +867,7 @@ async function handleInteractionCreate(token: string, interaction: DiscordIntera
         await respondToInteraction(interaction, { content: "📊 No active session." });
         return;
       }
+      const threadSessions = await listThreadSessions();
       const lines = [
         "📊 **Session Status**",
         `Session: \`${session.sessionId.slice(0, 8)}\``,
@@ -686,6 +878,15 @@ async function handleInteractionCreate(token: string, interaction: DiscordIntera
         `Last used: ${session.lastUsedAt}`,
         `Compact warned: ${(session as any).compactWarned ? "yes" : "no"}`,
       ];
+      if (threadSessions.length > 0) {
+        lines.push("", `**Thread Sessions:** ${threadSessions.length}`);
+        for (const ts of threadSessions.slice(0, 5)) {
+          lines.push(`  Thread \`${ts.threadId.slice(0, 8)}\` → Session \`${ts.sessionId.slice(0, 8)}\` (${ts.turnCount} turns)`);
+        }
+        if (threadSessions.length > 5) {
+          lines.push(`  ... and ${threadSessions.length - 5} more`);
+        }
+      }
       await respondToInteraction(interaction, { content: lines.join("\n") });
       return;
     }
@@ -871,6 +1072,7 @@ function resetGatewayState(): void {
   botUserId = null;
   botUsername = null;
   applicationId = null;
+  knownThreads.clear();
 }
 
 function sendIdentify(token: string): void {
@@ -921,12 +1123,16 @@ function handleDispatch(token: string, eventName: string, data: any): void {
       break;
 
     case "RESUMED":
-      debugLog("Session resumed successfully");
+      console.log("[Discord] Session resumed — rejoining threads");
+      rejoinThreads(token).catch((err) =>
+        console.error(`[Discord] Failed to rejoin threads on RESUMED: ${err}`),
+      );
       break;
 
     case "MESSAGE_CREATE":
+      console.log(`[Discord][GW] MESSAGE_CREATE ch=${data.channel_id} author=${data.author?.username} guild=${data.guild_id || 'DM'}`);
       handleMessageCreate(token, data).catch((err) =>
-        console.error(`[Discord] MESSAGE_CREATE unhandled: ${err}`),
+        console.error(`[Discord] MESSAGE_CREATE unhandled:`, err),
       );
       break;
 
@@ -937,9 +1143,67 @@ function handleDispatch(token: string, eventName: string, data: any): void {
       break;
 
     case "GUILD_CREATE":
+      // Cache active threads for multi-session support
+      if (data.threads) {
+        console.log(`[Discord] GUILD_CREATE: ${data.threads.length} active threads in guild ${data.id}`);
+        for (const thread of data.threads) {
+          knownThreads.set(thread.id, { parentId: thread.parent_id });
+          console.log(`[Discord]   thread: ${thread.id} name="${thread.name}" parent=${thread.parent_id}`);
+        }
+      } else {
+        console.log(`[Discord] GUILD_CREATE: no active threads in guild ${data.id}`);
+      }
+      // Rejoin all known threads from sessions.json so gateway sends MESSAGE_CREATE
+      rejoinThreads(token).catch((err) =>
+        console.error(`[Discord] Failed to rejoin threads: ${err}`),
+      );
       handleGuildCreate(token, data).catch((err) =>
         console.error(`[Discord] GUILD_CREATE unhandled: ${err}`),
       );
+      break;
+
+    case "THREAD_CREATE":
+      if (data.id && data.parent_id) {
+        knownThreads.set(data.id, { parentId: data.parent_id });
+        debugLog(`Thread tracked: ${data.id} (parent: ${data.parent_id})`);
+        if (getSettings().discord.listenChannels.includes(data.parent_id)) {
+          discordApi(token, "PUT", `/channels/${data.id}/thread-members/@me`).catch((err) =>
+            console.error(`[Discord] Failed to join thread ${data.id}: ${err}`),
+          );
+        }
+      }
+      break;
+
+    case "THREAD_DELETE":
+      if (data.id) {
+        knownThreads.delete(data.id);
+        removeThreadSession(data.id).catch((err) =>
+          console.error(`[Discord] Failed to cleanup thread session: ${err}`),
+        );
+        debugLog(`Thread removed: ${data.id}`);
+      }
+      break;
+
+    case "THREAD_UPDATE":
+      if (data.id && data.parent_id) {
+        if (data.thread_metadata?.archived) {
+          knownThreads.delete(data.id);
+          removeThreadSession(data.id).catch((err) =>
+            console.error(`[Discord] Failed to cleanup archived thread session: ${err}`),
+          );
+          debugLog(`Thread archived and cleaned up: ${data.id}`);
+        } else {
+          knownThreads.set(data.id, { parentId: data.parent_id });
+        }
+      }
+      break;
+
+    case "THREAD_LIST_SYNC":
+      if (data.threads) {
+        for (const thread of data.threads) {
+          knownThreads.set(thread.id, { parentId: thread.parent_id });
+        }
+      }
       break;
   }
 }

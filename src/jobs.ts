@@ -1,5 +1,6 @@
 import { readdir } from "fs/promises";
 import { join } from "path";
+import { getJobsDir } from "./config";
 
 const JOBS_DIR = join(process.cwd(), ".claude", "claudeclaw", "jobs");
 const AGENTS_DIR = join(process.cwd(), "agents");
@@ -46,6 +47,7 @@ export interface Job {
   agent?: string;
   label?: string;
   enabled?: boolean;
+  /** When set, overrides the global model for this job. Useful for routing cheap tasks to haiku. */
   model?: string;
 }
 
@@ -122,7 +124,7 @@ export async function loadJobs(): Promise<Job[]> {
   }
   for (const file of flatFiles) {
     if (!file.endsWith(".md")) continue;
-    const content = await Bun.file(join(JOBS_DIR, file)).text();
+    const content = await Bun.file(join(getJobsDir(), file)).text();
     const job = parseJobFile(file.replace(/\.md$/, ""), content);
     if (!job) continue;
     try {
@@ -210,7 +212,7 @@ export async function agentDirExists(agentName: string): Promise<boolean> {
 }
 
 export async function clearJobSchedule(jobName: string): Promise<void> {
-  const path = join(JOBS_DIR, `${jobName}.md`);
+  const path = join(getJobsDir(), `${jobName}.md`);
   const content = await Bun.file(path).text();
   const match = content.match(/^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/);
   if (!match) return;
