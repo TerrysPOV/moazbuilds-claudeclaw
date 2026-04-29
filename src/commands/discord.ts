@@ -680,7 +680,7 @@ async function handleMessageCreate(token: string, message: DiscordMessage): Prom
     const prefixedPrompt = promptParts.join("\n");
     // Use thread-specific session if message is in a known thread
     const threadId = knownThreads.has(channelId) ? channelId : undefined;
-    const result = await runUserMessage("discord", prefixedPrompt, threadId);
+    const result = await runUserMessage("discord", prefixedPrompt, threadId, threadInfo?.agentName);
 
     if (result.exitCode !== 0) {
       await sendMessage(config.token, channelId, `Error (exit ${result.exitCode}): ${result.stdout || result.stderr || "Unknown error"}`);

@@ -344,7 +344,8 @@ export async function runCompact(
   api: string,
   baseEnv: Record<string, string>,
   securityArgs: string[],
-  timeoutMs: number
+  timeoutMs: number,
+  cwd?: string
 ): Promise<boolean> {
   const compactArgs = [
     "claude", "-p", "/compact",
@@ -353,7 +354,7 @@ export async function runCompact(
     ...securityArgs,
   ];
   console.log(`[${new Date().toLocaleTimeString()}] Running /compact on session ${sessionId.slice(0, 8)}...`);
-  const result = await runClaudeOnce(compactArgs, model, api, baseEnv, timeoutMs);
+  const result = await runClaudeOnce(compactArgs, model, api, baseEnv, timeoutMs, cwd);
   const success = result.exitCode === 0;
   console.log(`[${new Date().toLocaleTimeString()}] Compact ${success ? "succeeded" : `failed (exit ${result.exitCode})`}`);
   return success;
@@ -372,13 +373,15 @@ export async function compactCurrentSession(agentName?: string): Promise<{ succe
   const baseEnv = cleanSpawnEnv();
   const timeoutMs = settings.sessionTimeoutMs;
 
+  const compactCwd = agentName ? await ensureAgentDir(agentName) : undefined;
   const ok = await runCompact(
     existing.sessionId,
     settings.model,
     settings.api,
     baseEnv,
     securityArgs,
-    timeoutMs
+    timeoutMs,
+    compactCwd
   );
 
   return ok
@@ -571,13 +574,14 @@ async function execClaude(
       primaryConfig.api,
       baseEnv,
       securityArgs,
-      timeoutMs
+      timeoutMs,
+      spawnCwd
     );
     emitCompactEvent({ type: "auto-compact-done", success: compactOk });
 
     if (compactOk) {
       console.log(`[${new Date().toLocaleTimeString()}] Retrying ${name} after compact...`);
-      const retryExec = await runClaudeOnce(args, primaryConfig.model, primaryConfig.api, baseEnv, timeoutMs);
+      const retryExec = await runClaudeOnce(args, primaryConfig.model, primaryConfig.api, baseEnv, timeoutMs, spawnCwd);
       const retryResult: RunResult = {
         stdout: retryExec.rawStdout,
         stderr: retryExec.stderr,
@@ -770,8 +774,8 @@ function prefixUserMessageWithClock(prompt: string): string {
   }
 }
 
-export async function runUserMessage(name: string, prompt: string, threadId?: string): Promise<RunResult> {
-  return run(name, prefixUserMessageWithClock(prompt), threadId);
+export async function runUserMessage(name: string, prompt: string, threadId?: string, agentName?: string): Promise<RunResult> {
+  return run(name, prefixUserMessageWithClock(prompt), threadId, undefined, undefined, agentName);
 }
 
 /**
