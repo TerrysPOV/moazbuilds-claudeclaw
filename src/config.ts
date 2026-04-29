@@ -22,6 +22,11 @@ export function getJobsDir(): string {
   return DEFAULT_JOBS_DIR;
 }
 
+/** Returns the root directory for agent-scoped sessions and jobs. */
+export function getAgentsDir(): string {
+  return join(process.cwd(), "agents");
+}
+
 const DEFAULT_SETTINGS: Settings = {
   model: "",
   api: "",

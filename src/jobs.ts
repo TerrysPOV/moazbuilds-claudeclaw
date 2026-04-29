@@ -1,8 +1,6 @@
 import { readdir } from "fs/promises";
 import { join } from "path";
-import { getJobsDir } from "./config";
-
-const AGENTS_DIR = join(process.cwd(), "agents");
+import { getJobsDir, getAgentsDir } from "./config";
 
 export interface Job {
   /** Scheduler key. For standalone jobs this is the file stem. For agent-scoped jobs this is "agent/label". */
@@ -111,12 +109,12 @@ export async function loadJobs(): Promise<Job[]> {
   // agents/ lives at project root (outside .claude/), so agent-managed jobs are writable by Claude Code.
   let agentDirs: string[] = [];
   try {
-    agentDirs = await readdir(AGENTS_DIR);
+    agentDirs = await readdir(getAgentsDir());
   } catch {
     return jobs;
   }
   for (const agentName of agentDirs) {
-    const agentJobsDir = join(AGENTS_DIR, agentName, "jobs");
+    const agentJobsDir = join(getAgentsDir(), agentName, "jobs");
     let jobFiles: string[] = [];
     try {
       jobFiles = await readdir(agentJobsDir);
@@ -143,7 +141,7 @@ function resolveJobPath(jobName: string): string {
   if (slash > 0 && slash < jobName.length - 1) {
     const agentName = jobName.slice(0, slash);
     const label = jobName.slice(slash + 1);
-    return join(AGENTS_DIR, agentName, "jobs", `${label}.md`);
+    return join(getAgentsDir(), agentName, "jobs", `${label}.md`);
   }
   return join(getJobsDir(), `${jobName}.md`);
 }

@@ -1,9 +1,9 @@
 import { join } from "path";
 import { unlink, readdir, rename } from "fs/promises";
+import { getAgentsDir } from "./config";
 
 const HEARTBEAT_DIR = join(process.cwd(), ".claude", "claudeclaw");
 const SESSION_FILE = join(HEARTBEAT_DIR, "session.json");
-const AGENTS_DIR = join(process.cwd(), "agents");
 
 export interface GlobalSession {
   sessionId: string;
@@ -18,7 +18,7 @@ export interface GlobalSession {
 let current: GlobalSession | null = null;
 
 function sessionPathFor(agentName?: string): string {
-  if (agentName) return join(AGENTS_DIR, agentName, "session.json");
+  if (agentName) return join(getAgentsDir(), agentName, "session.json");
   return SESSION_FILE;
 }
 

@@ -353,8 +353,8 @@ export async function runCompact(
  * High-level compact: resolves session + settings internally.
  * Returns { success, message }.
  */
-export async function compactCurrentSession(): Promise<{ success: boolean; message: string }> {
-  const existing = await getSession();
+export async function compactCurrentSession(agentName?: string): Promise<{ success: boolean; message: string }> {
+  const existing = await getSession(agentName);
   if (!existing) return { success: false, message: "No active session to compact." };
 
   const settings = getSettings();
@@ -546,8 +546,8 @@ async function execClaude(
         clearSession(trackingId);
         return result;
       }
-      // Non-timeout failures reset the counter but leave nothing to track.
-      if (exitCode !== 124) clearSession(trackingId);
+      // Non-timeout, non-zero exits: counter is already reset by recordResult.
+      // Do NOT clearSession here — that would reset startedAt and weaken maxRuntimeSeconds.
     }
   }
 

@@ -1,14 +1,13 @@
 import { join } from "path";
 import { readdir, readFile } from "fs/promises";
 import { homedir } from "os";
-import { getJobsDir, loadSettings } from "../config";
+import { getJobsDir, getAgentsDir, loadSettings } from "../config";
 
 const CLAUDE_DIR = join(process.cwd(), ".claude");
 const HEARTBEAT_DIR = join(CLAUDE_DIR, "claudeclaw");
 const PID_FILE = join(HEARTBEAT_DIR, "daemon.pid");
 const STATE_FILE = join(HEARTBEAT_DIR, "state.json");
 const SETTINGS_FILE = join(HEARTBEAT_DIR, "settings.json");
-const AGENTS_DIR = join(process.cwd(), "agents");
 
 function formatCountdown(ms: number): string {
   if (ms <= 0) return "now!";
@@ -114,10 +113,10 @@ async function showStatus(): Promise<boolean> {
     } catch {}
     // Agent-scoped jobs: agents/<name>/jobs/*.md
     try {
-      const agentDirs = await readdir(AGENTS_DIR);
+      const agentDirs = await readdir(getAgentsDir());
       for (const agentName of agentDirs) {
         try {
-          const agentJobsDir = join(AGENTS_DIR, agentName, "jobs");
+          const agentJobsDir = join(getAgentsDir(), agentName, "jobs");
           const files = await readdir(agentJobsDir);
           for (const f of files.filter((f) => f.endsWith(".md"))) {
             const content = await Bun.file(join(agentJobsDir, f)).text();

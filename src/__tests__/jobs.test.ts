@@ -163,8 +163,8 @@ describe("sessions — agent-scoped paths", () => {
 
   test("agent sessions stored outside .claude/", async () => {
     const src = await Bun.file(join(import.meta.dir, "../sessions.ts")).text();
-    // Verify path uses AGENTS_DIR (project root) not HEARTBEAT_DIR (.claude/...)
-    expect(src).toContain('join(AGENTS_DIR, agentName, "session.json")');
+    // Verify path uses getAgentsDir() (project root) not HEARTBEAT_DIR (.claude/...)
+    expect(src).toContain('join(getAgentsDir(), agentName, "session.json")');
   });
 });
 

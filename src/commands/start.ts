@@ -715,7 +715,7 @@ export async function start(args: string[] = []) {
             run(
               job.name,
               prompt,
-              job.agent ? undefined : job.name,
+              job.agent ? `agent:${job.agent}` : job.name,
               job.model,
               job.timeoutSeconds ? job.timeoutSeconds * 1000 : undefined,
               job.agent
