@@ -31,6 +31,17 @@ interface WizardEntry {
 
 const sessions = new Map<string, WizardEntry>();
 
+// Sweep expired entries every 15 minutes so the Map doesn't grow unbounded
+// in a long-running daemon. unref() prevents this timer from keeping the
+// process alive if it would otherwise exit.
+const sweepTimer = setInterval(() => {
+  const now = Date.now();
+  for (const [k, entry] of sessions) {
+    if (now > entry.expiry) sessions.delete(k);
+  }
+}, 15 * 60 * 1000);
+if (sweepTimer.unref) sweepTimer.unref();
+
 function key(ctx: WizardContext): string {
   return `${ctx.iface}:${ctx.scopeId}`;
 }
@@ -74,7 +85,8 @@ const MENU = `Plugin marketplace — what would you like to do?
 8) List installed plugins
 9) List marketplaces
 
-Reply with a number, or 'cancel' to exit.`;
+Reply with a number. Send 'cancel' at any time to exit and return to normal chat.
+(While this wizard is open all messages are routed here, not to Claude.)`;
 
 const SCOPE_PROMPT = `Install scope (reply 'cancel' to exit):
 
@@ -152,7 +164,7 @@ export async function handleWizardInput(ctx: WizardContext, rawText: string): Pr
           return formatResult(r.ok, r.stdout, r.stderr);
         }
         default:
-          return `Unrecognised option '${text}'. ${MENU}`;
+          return `'${text}' is not a valid option. Send 'cancel' to exit the wizard and return to normal chat.\n\n${MENU}`;
       }
     }
 
