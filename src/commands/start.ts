@@ -10,6 +10,7 @@ import { initConfig, loadSettings, reloadSettings, resolvePrompt, type Heartbeat
 import { getDayAndMinuteAtOffset } from "../timezone";
 import { startWebUi, type WebServerHandle } from "../web";
 import type { Job } from "../jobs";
+import { isWizardTrigger, hasActiveWizard, handleWizardInput } from "./plugin-wizard";
 
 const CLAUDE_DIR = join(process.cwd(), ".claude");
 const HEARTBEAT_DIR = join(CLAUDE_DIR, "claudeclaw");
@@ -474,6 +475,11 @@ export async function start(args: string[] = []) {
             console.log(`[${ts()}] Jobs reloaded from Web UI`);
           },
           onChat: async (message, onChunk, onUnblock) => {
+            const wizardCtx = { iface: "web" as const, scopeId: "default" };
+            if (isWizardTrigger(message) || hasActiveWizard(wizardCtx)) {
+              onChunk(await handleWizardInput(wizardCtx, message));
+              return;
+            }
             await streamUserMessage("chat", message, onChunk, onUnblock);
           },
         });
