@@ -763,7 +763,9 @@ export async function start(args: string[] = []) {
       // Fire pending retries before checking the cron schedule.
       const retryState = jobRetryState.get(job.name);
       if (retryState && retryState.retryAt <= Date.now()) {
-        // Do NOT delete state here — runJob reads it to continue counting failures correctly.
+        // Push retryAt to sentinel so subsequent cron ticks don't re-fire while in flight.
+        // runJob's .then() handler overwrites this with the real next-retry time (or deletes it).
+        retryState.retryAt = Number.MAX_SAFE_INTEGER;
         console.log(`[${ts()}] Retrying job: ${job.name} (attempt ${retryState.failCount + 1}/${job.retry})`);
         runJob(job);
         continue;
