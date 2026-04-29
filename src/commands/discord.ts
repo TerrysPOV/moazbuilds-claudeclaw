@@ -9,6 +9,7 @@ import { transcribeAudioToText } from "../whisper";
 import { resolveSkillPrompt } from "../skills";
 import { mkdir } from "node:fs/promises";
 import { extname, join } from "node:path";
+import { isWizardTrigger, hasActiveWizard, handleWizardInput } from "./plugin-wizard";
 
 // --- Discord API constants ---
 
@@ -622,6 +623,15 @@ async function handleMessageCreate(token: string, message: DiscordMessage): Prom
 
     // Skill routing: detect slash commands and resolve to SKILL.md prompts
     const command = cleanContent.startsWith("/") ? cleanContent.trim().split(/\s+/, 1)[0].toLowerCase() : null;
+
+    // Plugin wizard: intercept /plugin and /claudeclaw:plugin before Claude routing
+    const wizardCtx = { iface: "discord" as const, scopeId: channelId };
+    if ((command && isWizardTrigger(command)) || hasActiveWizard(wizardCtx)) {
+      const reply = await handleWizardInput(wizardCtx, cleanContent.trim());
+      await sendMessage(config.token, channelId, reply);
+      return;
+    }
+
     let skillContext: string | null = null;
     if (command) {
       try {
