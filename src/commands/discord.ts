@@ -505,6 +505,16 @@ async function handleMessageCreate(token: string, message: DiscordMessage): Prom
     `[${new Date().toLocaleTimeString()}] Discord ${label}${mediaSuffix}: "${cleanContent.slice(0, 60)}${cleanContent.length > 60 ? "..." : ""}"`,
   );
 
+  // Plugin wizard: intercept /plugin and /claudeclaw:plugin before thread management and Claude routing.
+  // Must run here — after auth + non-empty checks but before AI thread intent classification,
+  // so an active wizard cannot be bypassed by messages that classify as "hire" / "fire".
+  const wizardCtx = { iface: "discord" as const, scopeId: channelId };
+  if ((cleanContent.trim().startsWith("/") && isWizardTrigger(cleanContent.trim().split(/\s+/, 1)[0].toLowerCase())) || hasActiveWizard(wizardCtx)) {
+    const reply = await handleWizardInput(wizardCtx, cleanContent.trim());
+    await sendMessage(config.token, channelId, reply);
+    return;
+  }
+
   // Typing indicator loop (Discord typing lasts 10s, fire every 8s)
   const typingInterval = setInterval(() => sendTyping(config.token, channelId), 8000);
 
@@ -623,14 +633,6 @@ async function handleMessageCreate(token: string, message: DiscordMessage): Prom
 
     // Skill routing: detect slash commands and resolve to SKILL.md prompts
     const command = cleanContent.startsWith("/") ? cleanContent.trim().split(/\s+/, 1)[0].toLowerCase() : null;
-
-    // Plugin wizard: intercept /plugin and /claudeclaw:plugin before Claude routing
-    const wizardCtx = { iface: "discord" as const, scopeId: channelId };
-    if ((command && isWizardTrigger(command)) || hasActiveWizard(wizardCtx)) {
-      const reply = await handleWizardInput(wizardCtx, cleanContent.trim());
-      await sendMessage(config.token, channelId, reply);
-      return;
-    }
 
     let skillContext: string | null = null;
     if (command) {
