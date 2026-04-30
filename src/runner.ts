@@ -1,5 +1,5 @@
-import { mkdir, readFile, writeFile } from "fs/promises";
-import { join } from "path";
+import { mkdir, readFile, writeFile, realpath } from "fs/promises";
+import { join, resolve, sep } from "path";
 import { existsSync } from "fs";
 import { getSession, createSession, incrementTurn, markCompactWarned } from "./sessions";
 import {
@@ -158,7 +158,8 @@ async function runClaudeOnce(
   model: string,
   api: string,
   baseEnv: Record<string, string>,
-  timeoutMs: number = DEFAULT_SESSION_TIMEOUT_MS
+  timeoutMs: number = DEFAULT_SESSION_TIMEOUT_MS,
+  cwd?: string
 ): Promise<{ rawStdout: string; stderr: string; exitCode: number }> {
   const args = [...baseArgs];
   const normalizedModel = model.trim().toLowerCase();
@@ -168,6 +169,7 @@ async function runClaudeOnce(
     stdout: "pipe",
     stderr: "pipe",
     env: buildChildEnv(baseEnv, model, api),
+    ...(cwd ? { cwd } : {}),
   });
 
   const timeoutPromise = new Promise<never>((_, reject) => {
@@ -206,6 +208,64 @@ async function runClaudeOnce(
 }
 
 const PROJECT_DIR = process.cwd();
+
+// Converts a raw agent/thread display name to a safe filesystem segment.
+// Converts a display name to a safe filesystem segment (no unique suffix).
+// Exported for display-only use (e.g. showing the human-readable name in UI).
+export function safeAgentSlug(raw: string): string {
+  const slug = raw
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64);
+  if (!slug) throw new Error(`Agent name "${raw}" cannot be converted to a safe path segment`);
+  return slug;
+}
+
+// Builds a guaranteed-unique, filesystem-safe directory key for an agent thread.
+// Truncates the display slug to leave room for "-<threadId>" so the suffix is
+// NEVER truncated away on a second slugging pass.
+export function agentDirKey(rawName: string, threadId: string): string {
+  const suffix = `-${threadId}`;
+  const maxSlugLen = Math.max(1, 64 - suffix.length);
+  const slug = rawName
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, maxSlugLen);
+  if (!slug) throw new Error(`Agent name "${rawName}" cannot be converted to a safe path segment`);
+  return `${slug}${suffix}`;
+}
+
+// Returns the working directory for a named agent's Claude spawn.
+// Works with any agent name — Discord-generated keys (from agentDirKey) or
+// raw filesystem directory names used by scheduled jobs.
+// Security: uses realpath() after mkdir so symlinks are resolved before the
+// containment check. A lexical path.resolve() check is not sufficient because
+// a symlinked agents/<name> can point outside the repo and pass lexical checks.
+export async function ensureAgentDir(name: string): Promise<string> {
+  const agentsRoot = join(PROJECT_DIR, "agents");
+  const dir = join(agentsRoot, name);
+  // Lexical pre-check: reject obvious traversal before touching the filesystem
+  if (!resolve(dir).startsWith(resolve(agentsRoot) + sep)) {
+    throw new Error(`Agent directory "${dir}" would escape the agents root — rejecting`);
+  }
+  await mkdir(dir, { recursive: true });
+  // Post-mkdir realpath checks resolve symlinks at every level.
+  // We verify two things:
+  //   1. agents/ itself resolves inside PROJECT_DIR (catches a symlinked agents/ root)
+  //   2. agents/<name> resolves inside agents/ (catches a symlinked individual agent dir)
+  const realProjectDir = await realpath(PROJECT_DIR);
+  const realRoot = await realpath(agentsRoot);
+  const realDir = await realpath(dir);
+  if (!realRoot.startsWith(realProjectDir + sep)) {
+    throw new Error(`agents/ root "${realRoot}" resolves outside the project directory via symlink — rejecting`);
+  }
+  if (!realDir.startsWith(realRoot + sep)) {
+    throw new Error(`Agent directory "${realDir}" resolves outside the agents root via symlink — rejecting`);
+  }
+  return realDir;
+}
 
 const DIR_SCOPE_PROMPT = [
   `CRITICAL SECURITY CONSTRAINT: You are scoped to the project directory: ${PROJECT_DIR}`,
@@ -334,7 +394,8 @@ export async function runCompact(
   api: string,
   baseEnv: Record<string, string>,
   securityArgs: string[],
-  timeoutMs: number
+  timeoutMs: number,
+  cwd?: string
 ): Promise<boolean> {
   const compactArgs = [
     "claude", "-p", "/compact",
@@ -343,7 +404,7 @@ export async function runCompact(
     ...securityArgs,
   ];
   console.log(`[${new Date().toLocaleTimeString()}] Running /compact on session ${sessionId.slice(0, 8)}...`);
-  const result = await runClaudeOnce(compactArgs, model, api, baseEnv, timeoutMs);
+  const result = await runClaudeOnce(compactArgs, model, api, baseEnv, timeoutMs, cwd);
   const success = result.exitCode === 0;
   console.log(`[${new Date().toLocaleTimeString()}] Compact ${success ? "succeeded" : `failed (exit ${result.exitCode})`}`);
   return success;
@@ -362,17 +423,49 @@ export async function compactCurrentSession(agentName?: string): Promise<{ succe
   const baseEnv = cleanSpawnEnv();
   const timeoutMs = settings.sessionTimeoutMs;
 
+  const compactCwd = agentName ? await ensureAgentDir(agentName) : undefined;
   const ok = await runCompact(
     existing.sessionId,
     settings.model,
     settings.api,
     baseEnv,
     securityArgs,
-    timeoutMs
+    timeoutMs,
+    compactCwd
   );
 
   return ok
     ? { success: true, message: `✅ Session compact complete (${existing.sessionId.slice(0, 8)})` }
+    : { success: false, message: `❌ Compact failed (${existing.sessionId.slice(0, 8)})` };
+}
+
+// Compact a Discord thread session by threadId. Uses getThreadSession (not getSession)
+// because Discord threads have their own session store. agentName is used only for cwd isolation.
+export async function compactCurrentThreadSession(
+  threadId: string,
+  agentName?: string
+): Promise<{ success: boolean; message: string }> {
+  const existing = await getThreadSession(threadId);
+  if (!existing) return { success: false, message: "No active session to compact." };
+
+  const settings = getSettings();
+  const securityArgs = buildSecurityArgs(settings.security);
+  const baseEnv = cleanSpawnEnv();
+  const timeoutMs = settings.sessionTimeoutMs;
+
+  const compactCwd = agentName ? await ensureAgentDir(agentName) : undefined;
+  const ok = await runCompact(
+    existing.sessionId,
+    settings.model,
+    settings.api,
+    baseEnv,
+    securityArgs,
+    timeoutMs,
+    compactCwd
+  );
+
+  return ok
+    ? { success: true, message: `✅ Thread session compact complete (${existing.sessionId.slice(0, 8)})` }
     : { success: false, message: `❌ Compact failed (${existing.sessionId.slice(0, 8)})` };
 }
 
@@ -463,8 +556,9 @@ async function execClaude(
   }
 
   const baseEnv = cleanSpawnEnv();
+  const spawnCwd = agentName ? await ensureAgentDir(agentName) : undefined;
 
-  let exec = await runClaudeOnce(args, primaryConfig.model, primaryConfig.api, baseEnv, timeoutMs);
+  let exec = await runClaudeOnce(args, primaryConfig.model, primaryConfig.api, baseEnv, timeoutMs, spawnCwd);
   const primaryRateLimit = extractRateLimitMessage(exec.rawStdout, exec.stderr);
   let usedFallback = false;
 
@@ -472,7 +566,7 @@ async function execClaude(
     console.warn(
       `[${new Date().toLocaleTimeString()}] Claude limit reached; retrying with fallback${fallbackConfig.model ? ` (${fallbackConfig.model})` : ""}...`
     );
-    exec = await runClaudeOnce(args, fallbackConfig.model, fallbackConfig.api, baseEnv, timeoutMs);
+    exec = await runClaudeOnce(args, fallbackConfig.model, fallbackConfig.api, baseEnv, timeoutMs, spawnCwd);
     usedFallback = true;
   }
 
@@ -560,13 +654,14 @@ async function execClaude(
       primaryConfig.api,
       baseEnv,
       securityArgs,
-      timeoutMs
+      timeoutMs,
+      spawnCwd
     );
     emitCompactEvent({ type: "auto-compact-done", success: compactOk });
 
     if (compactOk) {
       console.log(`[${new Date().toLocaleTimeString()}] Retrying ${name} after compact...`);
-      const retryExec = await runClaudeOnce(args, primaryConfig.model, primaryConfig.api, baseEnv, timeoutMs);
+      const retryExec = await runClaudeOnce(args, primaryConfig.model, primaryConfig.api, baseEnv, timeoutMs, spawnCwd);
       const retryResult: RunResult = {
         stdout: retryExec.rawStdout,
         stderr: retryExec.stderr,
@@ -759,8 +854,8 @@ function prefixUserMessageWithClock(prompt: string): string {
   }
 }
 
-export async function runUserMessage(name: string, prompt: string, threadId?: string): Promise<RunResult> {
-  return run(name, prefixUserMessageWithClock(prompt), threadId);
+export async function runUserMessage(name: string, prompt: string, threadId?: string, agentName?: string): Promise<RunResult> {
+  return run(name, prefixUserMessageWithClock(prompt), threadId, undefined, undefined, agentName);
 }
 
 /**
