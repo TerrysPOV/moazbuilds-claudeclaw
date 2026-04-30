@@ -9,7 +9,11 @@ import { resolveSkillPrompt, listSkills } from "../skills";
 import { fireJob, parseFireArgs } from "./fire";
 import { mkdir } from "node:fs/promises";
 import { extname, join } from "node:path";
+<<<<<<< HEAD
 import { submitTelegramToGateway } from "../gateway";
+=======
+import { isWizardTrigger, hasActiveWizard, handleWizardInput } from "./plugin-wizard";
+>>>>>>> upstream/master
 
 // --- Markdown → Telegram HTML conversion (ported from nanobot) ---
 
@@ -864,6 +868,14 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
           console.error(`[Telegram] Failed to transcribe voice for ${label}: ${err instanceof Error ? err.message : err}`);
         }
       }
+    }
+
+    // Plugin wizard: intercept /plugin and /claudeclaw:plugin before Claude routing
+    const wizardCtx = { iface: "telegram" as const, scopeId: String(chatId) };
+    if ((command && isWizardTrigger(command)) || hasActiveWizard(wizardCtx)) {
+      const reply = await handleWizardInput(wizardCtx, text.trim());
+      await sendMessage(config.token, chatId, reply, threadId);
+      return;
     }
 
     // Skill routing: resolve slash commands to SKILL.md prompts

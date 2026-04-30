@@ -1,5 +1,6 @@
 import { join } from "path";
 import { unlink, readdir, rename } from "fs/promises";
+import { getAgentsDir } from "./config";
 
 const HEARTBEAT_DIR = join(process.cwd(), ".claude", "claudeclaw");
 const SESSION_FILE = join(HEARTBEAT_DIR, "session.json");
@@ -12,8 +13,11 @@ export interface GlobalSession {
   compactWarned: boolean;
 }
 
+// Module-level cache is for the GLOBAL session only.
+// Agent sessions bypass this cache — they read/write directly.
 let current: GlobalSession | null = null;
 
+<<<<<<< HEAD
 /** Resolve the directory and session-file path for an optional agent. */
 function sessionDirFor(agentName?: string): string {
   if (agentName) return join(process.cwd(), "agents", agentName);
@@ -22,11 +26,18 @@ function sessionDirFor(agentName?: string): string {
 
 function sessionPathFor(agentName?: string): string {
   if (agentName) return join(sessionDirFor(agentName), "session.json");
+=======
+function sessionPathFor(agentName?: string): string {
+  if (agentName) return join(getAgentsDir(), agentName, "session.json");
+>>>>>>> upstream/master
   return SESSION_FILE;
 }
 
 async function loadSession(agentName?: string): Promise<GlobalSession | null> {
+<<<<<<< HEAD
   // Agent sessions bypass the module-level cache (cache is global-only).
+=======
+>>>>>>> upstream/master
   if (agentName) {
     try {
       return await Bun.file(sessionPathFor(agentName)).json();
@@ -53,7 +64,12 @@ export async function getSession(
   agentName?: string
 ): Promise<{ sessionId: string; turnCount: number; compactWarned: boolean } | null> {
   const existing = await loadSession(agentName);
+<<<<<<< HEAD
   if (existing && existing.sessionId) {
+=======
+  if (existing) {
+    // Backfill missing fields from older session.json files
+>>>>>>> upstream/master
     if (typeof existing.turnCount !== "number") existing.turnCount = 0;
     if (typeof existing.compactWarned !== "boolean") existing.compactWarned = false;
     existing.lastUsedAt = new Date().toISOString();

@@ -4,6 +4,10 @@ import { existsSync } from "fs";
 import { normalizeTimezoneName, resolveTimezoneOffsetMinutes } from "./timezone";
 import { parseWatchdogConfig, type WatchdogConfig } from "./watchdog";
 
+<<<<<<< HEAD
+=======
+/** Re-exported under the name used in the Settings interface. */
+>>>>>>> upstream/master
 export type WatchdogSettings = WatchdogConfig;
 
 const HEARTBEAT_DIR = join(process.cwd(), ".claude", "claudeclaw");
@@ -11,11 +15,19 @@ const SETTINGS_FILE = join(HEARTBEAT_DIR, "settings.json");
 const DEFAULT_JOBS_DIR = join(HEARTBEAT_DIR, "jobs");
 const LOGS_DIR = join(HEARTBEAT_DIR, "logs");
 
+/** Default Claude session timeout (30 minutes). Exported so runner.ts can reference the same value. */
+export const DEFAULT_SESSION_TIMEOUT_MS = 30 * 60 * 1000;
+
 export function getJobsDir(): string {
   if (cached?.jobsDir) {
     return isAbsolute(cached.jobsDir) ? cached.jobsDir : join(process.cwd(), cached.jobsDir);
   }
   return DEFAULT_JOBS_DIR;
+}
+
+/** Returns the root directory for agent-scoped sessions and jobs. */
+export function getAgentsDir(): string {
+  return join(process.cwd(), "agents");
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -72,6 +84,10 @@ const DEFAULT_SETTINGS: Settings = {
   security: { level: "moderate", allowedTools: [], disallowedTools: [] },
   web: { enabled: false, host: "127.0.0.1", port: 4632 },
   stt: { baseUrl: "", model: "" },
+<<<<<<< HEAD
+=======
+  sessionTimeoutMs: DEFAULT_SESSION_TIMEOUT_MS,
+>>>>>>> upstream/master
   watchdog: { maxConsecutiveTimeouts: null, maxRuntimeSeconds: null },
 };
 
@@ -127,10 +143,16 @@ export interface Settings {
   security: SecurityConfig;
   web: WebConfig;
   stt: SttConfig;
+<<<<<<< HEAD
   watchdog: WatchdogSettings;
   sessionTimeoutMs?: number;
+=======
+  sessionTimeoutMs: number;
+  watchdog: WatchdogSettings;
+>>>>>>> upstream/master
   jobsDir?: string;
 }
+
 
 export interface AgenticMode {
   name: string;
@@ -298,8 +320,15 @@ function parseSettings(
       baseUrl: typeof raw.stt?.baseUrl === "string" ? raw.stt.baseUrl.trim() : "",
       model: typeof raw.stt?.model === "string" ? raw.stt.model.trim() : "",
     },
+<<<<<<< HEAD
     watchdog: parseWatchdogConfig(raw.watchdog),
     ...(typeof raw.sessionTimeoutMs === "number" && raw.sessionTimeoutMs > 0 ? { sessionTimeoutMs: raw.sessionTimeoutMs } : {}),
+=======
+    sessionTimeoutMs: typeof raw.sessionTimeoutMs === "number" && raw.sessionTimeoutMs > 0
+      ? raw.sessionTimeoutMs
+      : DEFAULT_SESSION_TIMEOUT_MS,
+    watchdog: parseWatchdogConfig(raw.watchdog),
+>>>>>>> upstream/master
     ...(typeof raw.jobsDir === "string" && raw.jobsDir.trim() ? { jobsDir: raw.jobsDir.trim() } : {}),
   };
 }
