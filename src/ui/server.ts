@@ -10,6 +10,7 @@ import { fireJob } from "../commands/fire";
 import { readLogs } from "./services/logs";
 import { listSessions, readSessionMessages, listAgents } from "./services/sessions";
 import { runUserMessage } from "../runner";
+import { readKanban, writeKanban, type KanbanBoard } from "./services/kanban";
 
 // --- Security: CSRF Protection ---
 // NOTE: The Web UI has no built-in authentication. CSRF protection prevents
@@ -399,6 +400,20 @@ export function startWebUi(opts: StartWebUiOptions): WebServerHandle {
         } catch (err) {
           console.error("Chat request failed:", err);
           return json({ ok: false, error: "Chat request failed" });
+        }
+      }
+
+      if (url.pathname === "/api/kanban" && req.method === "GET") {
+        return json(await readKanban());
+      }
+
+      if (url.pathname === "/api/kanban" && req.method === "POST") {
+        try {
+          const body = await req.json() as KanbanBoard;
+          await writeKanban(body);
+          return json({ ok: true });
+        } catch (err) {
+          return json({ ok: false, error: String(err) });
         }
       }
 

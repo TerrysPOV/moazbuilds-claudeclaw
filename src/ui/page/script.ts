@@ -988,8 +988,10 @@ export const pageScript = String.raw`    const $ = (id) => document.getElementBy
     // ── Chat ──
     const tabDashboardBtn = $("tab-dashboard");
     const tabChatBtn = $("tab-chat");
+    const tabKanbanBtn = $("tab-kanban");
     const dashboardPanel = $("dashboard-panel");
     const chatPanel = $("chat-panel");
+    const kanbanPanel = $("kanban-panel");
     const chatMessages = $("chat-messages");
     const chatForm = $("chat-form");
     const chatInput = $("chat-input");
@@ -1008,8 +1010,8 @@ export const pageScript = String.raw`    const $ = (id) => document.getElementBy
     })();
 
     function setActiveTab(tab) {
-      const allBtns = [tabDashboardBtn, tabChatBtn];
-      const allPanels = [dashboardPanel, chatPanel];
+      const allBtns = [tabDashboardBtn, tabChatBtn, tabKanbanBtn];
+      const allPanels = [dashboardPanel, chatPanel, kanbanPanel];
       allBtns.forEach(b => { if (b) { b.classList.remove("tab-btn-active"); b.setAttribute("aria-selected", "false"); } });
       allPanels.forEach(p => { if (p) p.hidden = true; });
 
@@ -1017,6 +1019,11 @@ export const pageScript = String.raw`    const $ = (id) => document.getElementBy
         tabDashboardBtn && tabDashboardBtn.classList.add("tab-btn-active");
         tabDashboardBtn && tabDashboardBtn.setAttribute("aria-selected", "true");
         if (dashboardPanel) dashboardPanel.hidden = false;
+      } else if (tab === "kanban") {
+        tabKanbanBtn && tabKanbanBtn.classList.add("tab-btn-active");
+        tabKanbanBtn && tabKanbanBtn.setAttribute("aria-selected", "true");
+        if (kanbanPanel) kanbanPanel.hidden = false;
+        loadKanban();
       } else {
         tabChatBtn && tabChatBtn.classList.add("tab-btn-active");
         tabChatBtn && tabChatBtn.setAttribute("aria-selected", "true");
@@ -1027,6 +1034,7 @@ export const pageScript = String.raw`    const $ = (id) => document.getElementBy
 
     if (tabDashboardBtn) tabDashboardBtn.addEventListener("click", () => setActiveTab("dashboard"));
     if (tabChatBtn) tabChatBtn.addEventListener("click", function() { setActiveTab("chat"); loadSessions(); });
+    if (tabKanbanBtn) tabKanbanBtn.addEventListener("click", () => setActiveTab("kanban"));
 
     // --- Session browser ---
 
@@ -1461,4 +1469,119 @@ export const pageScript = String.raw`    const $ = (id) => document.getElementBy
         var elapsedEl = chatMessages.querySelector(".chat-msg-elapsed");
         if (elapsedEl) elapsedEl.textContent = fmtElapsed(Date.now() - chatStartedAt);
       }
-    }, 1000);`;
+    }, 1000);
+
+// ── Kanban ───────────────────────────────────────────────────────────────────
+var kanbanData = { columns: { todo: [], in_progress: [], done: [] } };
+
+function timeAgoKanban(isoString) {
+  if (!isoString) return "";
+  var diff = Date.now() - new Date(isoString).getTime();
+  var s = Math.floor(diff / 1000);
+  if (s < 60) return s + "s ago";
+  var m = Math.floor(s / 60);
+  if (m < 60) return m + "m ago";
+  var h = Math.floor(m / 60);
+  if (h < 24) return h + "h ago";
+  return Math.floor(h / 24) + "d ago";
+}
+
+function escKanban(str) {
+  if (!str) return "";
+  return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function renderKanbanCard(card, isDone) {
+  return '<div class="kanban-card" data-id="' + escKanban(card.id) + '">' +
+    '<div class="kanban-card-title">' + escKanban(card.title) + "</div>" +
+    (card.description ? '<div class="kanban-card-desc">' + escKanban(card.description) + "</div>" : "") +
+    '<div class="kanban-card-meta">' +
+      (card.started_at ? '<span>' + timeAgoKanban(isDone ? card.completed_at : card.started_at) + "</span>" : "") +
+    "</div>" +
+  "</div>";
+}
+
+function renderKanban() {
+  var todo = kanbanData.columns.todo || [];
+  var ip = kanbanData.columns.in_progress || [];
+  var done = kanbanData.columns.done || [];
+
+  var countTodo = $("kanban-count-todo");
+  var countIp = $("kanban-count-inprogress");
+  var countDone = $("kanban-count-done");
+  var cardsTodo = $("kanban-cards-todo");
+  var cardsIp = $("kanban-cards-inprogress");
+  var cardsDone = $("kanban-cards-done");
+
+  if (countTodo) countTodo.textContent = todo.length;
+  if (countIp) countIp.textContent = ip.length;
+  if (countDone) countDone.textContent = done.length;
+
+  if (cardsTodo) cardsTodo.innerHTML = todo.length
+    ? todo.map(function(c) { return renderKanbanCard(c, false); }).join("")
+    : '<div class="kanban-empty">No tasks queued</div>';
+  if (cardsIp) cardsIp.innerHTML = ip.length
+    ? ip.map(function(c) { return renderKanbanCard(c, false); }).join("")
+    : '<div class="kanban-empty">No active tasks</div>';
+  if (cardsDone) cardsDone.innerHTML = done.length
+    ? done.map(function(c) { return renderKanbanCard(c, true); }).join("")
+    : '<div class="kanban-empty">Nothing completed yet</div>';
+}
+
+async function loadKanban() {
+  try {
+    var res = await fetch("/api/kanban");
+    if (res.ok) { kanbanData = await res.json(); renderKanban(); }
+  } catch (_) {}
+}
+
+async function saveKanban() {
+  try {
+    await fetch("/api/kanban", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(kanbanData) });
+  } catch (_) {}
+}
+
+function clearKanbanDone() {
+  kanbanData.columns.done = [];
+  renderKanban();
+  saveKanban();
+}
+
+var kanbanModal = $("kanban-modal-overlay");
+var kanbanAddBtn = $("kanban-add-btn");
+var kanbanCancelBtn = $("kanban-cancel-btn");
+var kanbanSaveBtn = $("kanban-save-btn");
+var kanbanModalClose = $("kanban-modal-close");
+
+function openKanbanModal() { if (kanbanModal) kanbanModal.hidden = false; }
+function closeKanbanModal() {
+  if (kanbanModal) kanbanModal.hidden = true;
+  var t = $("kanban-input-title"); var d = $("kanban-input-desc");
+  if (t) t.value = ""; if (d) d.value = "";
+}
+
+function addKanbanTask() {
+  var titleEl = $("kanban-input-title");
+  var descEl = $("kanban-input-desc");
+  var title = titleEl ? titleEl.value.trim() : "";
+  if (!title) { if (titleEl) titleEl.focus(); return; }
+  var card = { id: "task-" + Date.now(), title: title, description: descEl ? descEl.value.trim() : "", started_at: new Date().toISOString() };
+  if (!Array.isArray(kanbanData.columns.todo)) kanbanData.columns.todo = [];
+  kanbanData.columns.todo.unshift(card);
+  closeKanbanModal();
+  renderKanban();
+  saveKanban();
+}
+
+if (kanbanAddBtn) kanbanAddBtn.addEventListener("click", openKanbanModal);
+if (kanbanCancelBtn) kanbanCancelBtn.addEventListener("click", closeKanbanModal);
+if (kanbanModalClose) kanbanModalClose.addEventListener("click", closeKanbanModal);
+if (kanbanSaveBtn) kanbanSaveBtn.addEventListener("click", addKanbanTask);
+if ($("kanban-input-title")) {
+  $("kanban-input-title").addEventListener("keydown", function(e) {
+    if (e.key === "Enter") { e.preventDefault(); addKanbanTask(); }
+  });
+}
+
+loadKanban();
+setInterval(loadKanban, 10000);`;

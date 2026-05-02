@@ -115,6 +115,7 @@ ${pageStyles}
     <nav class="tab-nav" role="tablist" aria-label="Main navigation">
       <button class="tab-btn tab-btn-active" id="tab-dashboard" type="button" role="tab" aria-selected="true" aria-controls="dashboard-panel">Dashboard</button>
       <button class="tab-btn" id="tab-chat" type="button" role="tab" aria-selected="false" aria-controls="chat-panel">Chat</button>
+      <button class="tab-btn" id="tab-kanban" type="button" role="tab" aria-selected="false" aria-controls="kanban-panel">Kanban</button>
     </nav>
     <div id="dashboard-panel">
     <section class="hero">
@@ -218,6 +219,60 @@ ${pageStyles}
           </div>
         </div><!-- chat-main -->
       </div><!-- chat-layout -->
+    </div>
+    <div id="kanban-panel" hidden>
+      <div class="kanban-board">
+        <div class="kanban-col" id="kanban-col-todo">
+          <div class="kanban-col-header">
+            <div class="kanban-col-title-group">
+              <div class="kanban-col-indicator kanban-indicator-todo"></div>
+              <span class="kanban-col-title">To Do</span>
+              <span class="kanban-col-count" id="kanban-count-todo">0</span>
+            </div>
+          </div>
+          <div class="kanban-cards" id="kanban-cards-todo"></div>
+        </div>
+        <div class="kanban-col" id="kanban-col-inprogress">
+          <div class="kanban-col-header">
+            <div class="kanban-col-title-group">
+              <div class="kanban-col-indicator kanban-indicator-inprogress"></div>
+              <span class="kanban-col-title">In Progress</span>
+              <span class="kanban-col-count" id="kanban-count-inprogress">0</span>
+            </div>
+          </div>
+          <div class="kanban-cards" id="kanban-cards-inprogress"></div>
+        </div>
+        <div class="kanban-col" id="kanban-col-done">
+          <div class="kanban-col-header">
+            <div class="kanban-col-title-group">
+              <div class="kanban-col-indicator kanban-indicator-done"></div>
+              <span class="kanban-col-title">Done</span>
+              <span class="kanban-col-count" id="kanban-count-done">0</span>
+            </div>
+            <button class="kanban-clear-btn" onclick="clearKanbanDone()" type="button">Clear</button>
+          </div>
+          <div class="kanban-cards" id="kanban-cards-done"></div>
+        </div>
+      </div>
+      <div class="kanban-toolbar">
+        <button class="kanban-add-btn" id="kanban-add-btn" type="button">+ Add task</button>
+      </div>
+      <div class="kanban-modal-overlay" id="kanban-modal-overlay" hidden>
+        <div class="kanban-modal">
+          <div class="kanban-modal-header">
+            <span>Add task</span>
+            <button class="kanban-modal-close" id="kanban-modal-close" type="button">×</button>
+          </div>
+          <div class="kanban-modal-body">
+            <input class="kanban-input" id="kanban-input-title" placeholder="Task title" type="text" />
+            <textarea class="kanban-input kanban-textarea" id="kanban-input-desc" placeholder="Description (optional)" rows="3"></textarea>
+          </div>
+          <div class="kanban-modal-footer">
+            <button class="kanban-btn-secondary" id="kanban-cancel-btn" type="button">Cancel</button>
+            <button class="kanban-btn-primary" id="kanban-save-btn" type="button">Add to To Do</button>
+          </div>
+        </div>
+      </div>
     </div>
   </main>
 
