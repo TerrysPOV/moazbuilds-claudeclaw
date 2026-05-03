@@ -408,6 +408,8 @@ export function startWebUi(opts: StartWebUiOptions): WebServerHandle {
       }
 
       if (url.pathname === "/api/kanban" && req.method === "POST") {
+        const csrfError = requireCsrf(req);
+        if (csrfError) return csrfError;
         try {
           const body = await req.json() as KanbanBoard;
           await writeKanban(body);
