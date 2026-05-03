@@ -17,6 +17,7 @@ import { initializeJobSystem } from "../orchestrator/resumable-jobs";
 import type { Job } from "../jobs";
 import { isWizardTrigger, hasActiveWizard, handleWizardInput } from "./plugin-wizard";
 import { PluginManager, setPluginManager } from "../plugins";
+import { indexSessions } from "../memory";
 
 const CLAUDE_DIR = join(process.cwd(), ".claude");
 const HEARTBEAT_DIR = join(CLAUDE_DIR, "claudeclaw");
@@ -339,6 +340,20 @@ export async function start(args: string[] = []) {
   // dev. Idempotent and non-destructive.
   try {
     const links = await ensureUserSymlinks();
+  // memory-search: incremental session re-index on boot (issue #19).
+  // Idempotent (skips files whose mtime is unchanged), so it is cheap to
+  // run every time. Runs synchronously to keep the deterministic R/W
+  // contract; failures are logged but never block daemon startup.
+  try {
+    const memSettings = (await loadSettings()) as { memorySearch?: any };
+    const idx = indexSessions(memSettings.memorySearch);
+    if (idx.indexed > 0) {
+      console.log(`[memory-search] indexed ${idx.indexed} new session(s) (${idx.skipped} up-to-date)`);
+    }
+  } catch (e) {
+    console.log(`[memory-search] index skipped on boot: ${(e as Error).message}`);
+  }
+
     const now = new Date().toLocaleTimeString();
     if (links.created.length > 0) {
       console.log(`[${now}] Installed ${links.created.length} user symlink(s): ${links.created.join(", ")}`);

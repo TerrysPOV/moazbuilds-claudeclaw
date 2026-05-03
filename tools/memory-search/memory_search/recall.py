@@ -1,0 +1,127 @@
+"""
+High-level recall: search the session DB and optionally summarize the hits.
+
+Two modes:
+  1. Plain: print the top-N session excerpts.
+  2. With summary: pipe the excerpts through `claude --print` to get a
+     short narrative answer to the user's query.
+
+The `claude --print` path uses Claude Code's existing OAuth session, so it
+works without an Anthropic API key (handy for Claude Max users).
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import subprocess
+from typing import Optional
+
+from . import config, db
+
+log = logging.getLogger(__name__)
+
+
+def summarize(query: str, hits: list[dict]) -> Optional[str]:
+    """
+    Produce a short summary of the search hits using `claude --print`.
+    Returns None if the CLI is unavailable or the call fails.
+    """
+    cli = config.claude_cli_path()
+    if not cli:
+        log.info("claude CLI not found; skipping summary")
+        return None
+
+    if not hits:
+        return None
+
+    excerpts = []
+    for h in hits:
+        ts = (h.get("timestamp") or "?")[:16]
+        sid = h.get("session_id", "")[:8]
+        excerpts.append(f"--- Session {sid} ({ts}) ---\n{h.get('excerpt', '')}")
+
+    prompt = (
+        f'Voici des extraits de sessions passées pertinentes pour la requête : "{query}"\n\n'
+        + "\n\n".join(excerpts)
+        + "\n\nRésume en 3-5 points concis ce qui a été fait ou discuté en lien avec cette requête. "
+          "Sois direct et factuel."
+    )
+
+    try:
+        result = subprocess.run(
+            [cli, "--print", "--model", config.summarizer_model()],
+            input=prompt,
+            capture_output=True,
+            text=True,
+            timeout=config.summarizer_timeout_sec(),
+            cwd=config.summarizer_cwd(),
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        log.warning("claude --print failed: %s", e)
+        return None
+
+    if result.returncode != 0:
+        log.warning("claude --print exit=%s stderr=%s",
+                    result.returncode, result.stderr[:200])
+        return None
+
+    out = (result.stdout or "").strip()
+    return out or None
+
+
+def recall(
+    query: str,
+    *,
+    top_k: int = 5,
+    alpha: Optional[float] = None,
+    do_summary: bool = True,
+) -> dict:
+    """
+    Run a hybrid search and return a structured response with optional summary.
+
+    Returns:
+        {
+            "query": str,
+            "hits": [ {score, session_id, timestamp, turn_count, excerpt}, ... ],
+            "summary": str | None,
+        }
+    """
+    hits = db.search(query, top_k=top_k, alpha=alpha)
+    summary = summarize(query, hits) if do_summary else None
+    return {"query": query, "hits": hits, "summary": summary}
+
+
+def format_for_humans(result: dict) -> str:
+    """Render the recall response for terminal output."""
+    lines: list[str] = []
+    lines.append(f'🔍 Recherche : "{result["query"]}"')
+    if not result["hits"]:
+        lines.append("❌ Aucun résultat dans l'historique des sessions.")
+        return "\n".join(lines)
+
+    lines.append("")
+    lines.append(f"✅ {len(result['hits'])} session(s) trouvée(s) :")
+    lines.append("")
+    for h in result["hits"]:
+        ts = (h.get("timestamp") or "?")[:16]
+        lines.append(
+            f"  📅 {ts} | Score: {h['score']} | {h['turn_count']} tours"
+        )
+        excerpt = h.get("excerpt", "")
+        lines.append(f"     {excerpt[:200]}{'...' if len(excerpt) > 200 else ''}")
+        lines.append("")
+
+    if result.get("summary"):
+        lines.append("💬 Résumé :")
+        lines.append("-" * 40)
+        lines.append(result["summary"])
+    elif result["hits"]:
+        # Be explicit so the user knows why there's no summary
+        if not config.claude_cli_path():
+            lines.append("(claude CLI introuvable — résumé désactivé)")
+    return "\n".join(lines)
+
+
+def format_as_json(result: dict) -> str:
+    return json.dumps(result, ensure_ascii=False, indent=2)
