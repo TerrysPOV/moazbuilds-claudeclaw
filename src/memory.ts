@@ -171,10 +171,37 @@ export interface IndexResult {
   skipped: number;
 }
 
-function resolveBin(opts?: MemorySearchSettings): string {
-  if (opts?.binPath) return opts.binPath;
-  if (existsSync(MEMORY_SEARCH_BIN)) return MEMORY_SEARCH_BIN;
-  return "memory-search"; // rely on PATH
+const SETUP_HINT =
+  "Run: cd tools/memory-search && uv pip install -e .";
+
+type BinCheck =
+  | { ok: true; bin: string }
+  | { ok: false; reason: string };
+
+/**
+ * Locate the memory-search binary, with a clear setup hint when missing.
+ * Order: explicit `opts.binPath` → project venv → `which memory-search` on PATH.
+ */
+function checkMemorySearchBin(opts?: MemorySearchSettings): BinCheck {
+  if (opts?.binPath) {
+    if (existsSync(opts.binPath)) return { ok: true, bin: opts.binPath };
+    return {
+      ok: false,
+      reason: `binary not found at configured binPath '${opts.binPath}'. ${SETUP_HINT}`,
+    };
+  }
+  if (existsSync(MEMORY_SEARCH_BIN)) return { ok: true, bin: MEMORY_SEARCH_BIN };
+
+  // Fall back to PATH lookup so users with a system-wide install still work.
+  const which = spawnSync("which", ["memory-search"], { encoding: "utf8" });
+  if (which.status === 0 && which.stdout.trim()) {
+    return { ok: true, bin: which.stdout.trim() };
+  }
+
+  return {
+    ok: false,
+    reason: `binary not installed (looked at ${MEMORY_SEARCH_BIN} and PATH). ${SETUP_HINT}`,
+  };
 }
 
 function buildEnv(opts?: MemorySearchSettings): NodeJS.ProcessEnv {
@@ -196,7 +223,11 @@ export function indexSessions(opts?: MemorySearchSettings): IndexResult {
   if (opts?.enabled === false) {
     return { found: 0, indexed: 0, skipped: 0 };
   }
-  const result = spawnSync(resolveBin(opts), ["index"], {
+  const check = checkMemorySearchBin(opts);
+  if (!check.ok) {
+    throw new Error(`memory-search ${check.reason}`);
+  }
+  const result = spawnSync(check.bin, ["index"], {
     env: buildEnv(opts),
     encoding: "utf8",
     timeout: (opts?.indexTimeoutSec ?? 600) * 1000,
@@ -228,8 +259,13 @@ export function indexSessions(opts?: MemorySearchSettings): IndexResult {
  */
 export function indexSessionsBackground(opts?: MemorySearchSettings): void {
   if (opts?.enabled === false) return;
+  const check = checkMemorySearchBin(opts);
+  if (!check.ok) {
+    console.log(`[memory-search] ${check.reason}`);
+    return;
+  }
   const { spawn } = require("child_process") as typeof import("child_process");
-  const proc = spawn(resolveBin(opts), ["index"], {
+  const proc = spawn(check.bin, ["index"], {
     env: buildEnv(opts),
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -286,7 +322,12 @@ export function searchSessions(
     args.push("--no-summary");
   }
 
-  const result = spawnSync(resolveBin(opts), args, {
+  const check = checkMemorySearchBin(opts);
+  if (!check.ok) {
+    throw new Error(`memory-search ${check.reason}`);
+  }
+
+  const result = spawnSync(check.bin, args, {
     env: buildEnv(opts),
     encoding: "utf8",
     timeout: (opts?.searchTimeoutSec ?? 60) * 1000,
