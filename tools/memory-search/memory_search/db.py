@@ -277,7 +277,9 @@ def search(
             lo, hi = min(ranks), max(ranks)
             span = (hi - lo) or 1
             for rowid, rank in rows:
-                fts_scores[rowid] = (rank - lo) / span
+                # FTS5 rank is BM25-derived: lower (more negative) = better match.
+                # Invert so that the best match maps to 1.0, worst to 0.0.
+                fts_scores[rowid] = 1.0 - (rank - lo) / span
     except sqlite3.OperationalError:
         # FTS5 throws on some queries (e.g. only stop-words); fall back to vector only.
         pass

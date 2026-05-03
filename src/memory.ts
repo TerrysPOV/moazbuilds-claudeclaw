@@ -92,7 +92,10 @@ export async function loadMemoryInstructions(agentName?: string): Promise<string
 // ---------------------------------------------------------------------------
 
 const MEMORY_SEARCH_DIR = join(import.meta.dir, "..", "tools", "memory-search");
-const MEMORY_SEARCH_BIN = join(MEMORY_SEARCH_DIR, ".venv", "bin", "memory-search");
+const MEMORY_SEARCH_BIN =
+  process.platform === "win32"
+    ? join(MEMORY_SEARCH_DIR, ".venv", "Scripts", "memory-search.exe")
+    : join(MEMORY_SEARCH_DIR, ".venv", "bin", "memory-search");
 
 export interface MemorySearchSettings {
   /** Disable the whole subsystem at runtime. Default: true. */
@@ -193,9 +196,10 @@ function checkMemorySearchBin(opts?: MemorySearchSettings): BinCheck {
   if (existsSync(MEMORY_SEARCH_BIN)) return { ok: true, bin: MEMORY_SEARCH_BIN };
 
   // Fall back to PATH lookup so users with a system-wide install still work.
-  const which = spawnSync("which", ["memory-search"], { encoding: "utf8" });
+  const whichCmd = process.platform === "win32" ? "where" : "which";
+  const which = spawnSync(whichCmd, ["memory-search"], { encoding: "utf8" });
   if (which.status === 0 && which.stdout.trim()) {
-    return { ok: true, bin: which.stdout.trim() };
+    return { ok: true, bin: which.stdout.trim().split("\n")[0].trim() };
   }
 
   return {
