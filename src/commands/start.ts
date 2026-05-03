@@ -359,7 +359,7 @@ export async function start(args: string[] = []) {
   // Discord polling for tens of seconds). Top-level try so failures here are
   // never confused with symlink-installation failures.
   try {
-    const memSettings = (await loadSettings()) as { memorySearch?: any };
+    const memSettings = await loadSettings();
     indexSessionsBackground(memSettings.memorySearch);
   } catch (e) {
     console.log(`[memory-search] background index could not be scheduled: ${(e as Error).message}`);

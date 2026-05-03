@@ -119,6 +119,38 @@ export interface MemorySearchSettings {
   indexTimeoutSec?: number;
 }
 
+/**
+ * Parse a raw settings.memorySearch object into a strict MemorySearchSettings.
+ * Unknown / wrong-type fields are dropped. Returns `{}` (all defaults) when
+ * the input is missing or not an object.
+ */
+export function parseMemorySearchSettings(raw: unknown): MemorySearchSettings {
+  if (!raw || typeof raw !== "object") return {};
+  const r = raw as Record<string, unknown>;
+  const out: MemorySearchSettings = {};
+
+  if (typeof r.enabled === "boolean") out.enabled = r.enabled;
+  if (typeof r.binPath === "string" && r.binPath.trim()) out.binPath = r.binPath.trim();
+  if (typeof r.dbPath === "string" && r.dbPath.trim()) out.dbPath = r.dbPath.trim();
+  if (typeof r.sessionsDir === "string" && r.sessionsDir.trim()) out.sessionsDir = r.sessionsDir.trim();
+  if (typeof r.model === "string" && r.model.trim()) out.model = r.model.trim();
+
+  if (typeof r.alpha === "number" && Number.isFinite(r.alpha) && r.alpha >= 0 && r.alpha <= 1) {
+    out.alpha = r.alpha;
+  }
+  if (typeof r.reindexEveryNTurns === "number" && Number.isInteger(r.reindexEveryNTurns) && r.reindexEveryNTurns >= 0) {
+    out.reindexEveryNTurns = r.reindexEveryNTurns;
+  }
+  if (typeof r.searchTimeoutSec === "number" && Number.isFinite(r.searchTimeoutSec) && r.searchTimeoutSec > 0) {
+    out.searchTimeoutSec = r.searchTimeoutSec;
+  }
+  if (typeof r.indexTimeoutSec === "number" && Number.isFinite(r.indexTimeoutSec) && r.indexTimeoutSec > 0) {
+    out.indexTimeoutSec = r.indexTimeoutSec;
+  }
+
+  return out;
+}
+
 export interface SessionSearchHit {
   score: number;
   session_id: string;
