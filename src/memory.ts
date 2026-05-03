@@ -7,7 +7,7 @@
 
 import { join } from "path";
 import { existsSync } from "fs";
-import { spawnSync } from "child_process";
+import { spawnSync, spawn } from "child_process";
 import { readFile, writeFile, mkdir } from "fs/promises";
 
 const PROJECT_DIR = process.cwd();
@@ -264,7 +264,6 @@ export function indexSessionsBackground(opts?: MemorySearchSettings): void {
     console.log(`[memory-search] ${check.reason}`);
     return;
   }
-  const { spawn } = require("child_process") as typeof import("child_process");
   const proc = spawn(check.bin, ["index"], {
     env: buildEnv(opts),
     stdio: ["ignore", "pipe", "pipe"],
