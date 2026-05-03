@@ -10,15 +10,10 @@ import { transcribeAudioToText } from "../whisper";
 import { resolveSkillPrompt } from "../skills";
 import { fireJob, parseFireArgs } from "./fire";
 import { mkdir } from "node:fs/promises";
-<<<<<<< HEAD
-import { extname, join } from "node:path";
+import { extname, join, basename, sep } from "node:path";
 import { processEventWithFallback, setGatewayEnabled } from "../gateway";
 import { normalizeDiscordMessage, type NormalizedEvent } from "../gateway/normalizer";
-
-=======
-import { extname, join, basename, sep } from "node:path";
 import { isWizardTrigger, hasActiveWizard, handleWizardInput } from "./plugin-wizard";
->>>>>>> upstream/master
 
 // --- Discord API constants ---
 
@@ -824,7 +819,6 @@ async function handleMessageCreate(token: string, message: DiscordMessage): Prom
     // Skill routing: detect slash commands and resolve to SKILL.md prompts
     const command = cleanContent.startsWith("/") ? cleanContent.trim().split(/\s+/, 1)[0].toLowerCase() : null;
 
-<<<<<<< HEAD
     // /fire <agent>:<label> — manual fire, bypasses skill resolution
     if (command === "/fire") {
       const fireArgs = cleanContent.trim().slice("/fire".length).trim().split(/\s+/).filter(Boolean);
@@ -857,8 +851,6 @@ async function handleMessageCreate(token: string, message: DiscordMessage): Prom
       return;
     }
 
-=======
->>>>>>> upstream/master
     let skillContext: string | null = null;
     if (command) {
       try {
@@ -903,7 +895,6 @@ async function handleMessageCreate(token: string, message: DiscordMessage): Prom
       promptParts.push("The user attached a text file, but downloading it failed. Ask them to resend.");
     }
 
-<<<<<<< HEAD
     // Build the prompt for Claude
     const prompt = promptParts.join("\n");
     debugLog(`Prompt: ${prompt.slice(0, 100)}...`);
@@ -944,11 +935,7 @@ async function handleMessageCreate(token: string, message: DiscordMessage): Prom
       return;
     }
 
-    // Legacy path - use thread-specific session if message is in a known thread
-    const threadId = knownThreads.has(channelId) ? channelId : undefined;
-    const result = await runUserMessage("discord", prompt, threadId);
-=======
-    const prefixedPrompt = promptParts.join("\n");
+    const prefixedPrompt = prompt;
     // Guild channels (including threads) each get their own isolated session; DMs use the global session
     const sessionKey = isGuild ? channelId : undefined;
     const requestStartedAt = Date.now();
@@ -963,7 +950,6 @@ async function handleMessageCreate(token: string, message: DiscordMessage): Prom
       }
     }
     const result = await runUserMessage("discord", prefixedPrompt, sessionKey, threadInfo?.agentName);
->>>>>>> upstream/master
 
     if (result.exitCode !== 0) {
       await sendMessage(config.token, channelId, `Error (exit ${result.exitCode}): ${extractErrorDetail(result) || "Unknown error"}`);

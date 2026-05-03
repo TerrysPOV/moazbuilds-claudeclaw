@@ -18,27 +18,19 @@ export interface GlobalSession {
 // Agent sessions bypass this cache — they read/write directly.
 let current: GlobalSession | null = null;
 
-<<<<<<< HEAD
 /** Resolve the directory and session-file path for an optional agent. */
 function sessionDirFor(agentName?: string): string {
-  if (agentName) return join(process.cwd(), "agents", agentName);
+  if (agentName) return join(getAgentsDir(), agentName);
   return HEARTBEAT_DIR;
 }
 
 function sessionPathFor(agentName?: string): string {
-  if (agentName) return join(sessionDirFor(agentName), "session.json");
-=======
-function sessionPathFor(agentName?: string): string {
   if (agentName) return join(getAgentsDir(), agentName, "session.json");
->>>>>>> upstream/master
   return SESSION_FILE;
 }
 
 async function loadSession(agentName?: string): Promise<GlobalSession | null> {
-<<<<<<< HEAD
   // Agent sessions bypass the module-level cache (cache is global-only).
-=======
->>>>>>> upstream/master
   if (agentName) {
     try {
       return await Bun.file(sessionPathFor(agentName)).json();
@@ -65,12 +57,8 @@ export async function getSession(
   agentName?: string
 ): Promise<{ sessionId: string; turnCount: number; compactWarned: boolean } | null> {
   const existing = await loadSession(agentName);
-<<<<<<< HEAD
-  if (existing && existing.sessionId) {
-=======
   if (existing) {
     // Backfill missing fields from older session.json files
->>>>>>> upstream/master
     if (typeof existing.turnCount !== "number") existing.turnCount = 0;
     if (typeof existing.compactWarned !== "boolean") existing.compactWarned = false;
     existing.lastUsedAt = new Date().toISOString();
@@ -106,16 +94,6 @@ export async function incrementTurn(agentName?: string): Promise<number> {
   return existing.turnCount;
 }
 
-<<<<<<< HEAD
-/** Mark that the compact warning has been sent for the current session. */
-export async function markCompactWarned(agentName?: string): Promise<void> {
-  const existing = await loadSession(agentName);
-  if (!existing) return;
-  existing.compactWarned = true;
-  await saveSession(existing, agentName);
-}
-
-=======
 /** Increment the message counter for rotation tracking. Call once per actual Claude invocation, not on reads. */
 export async function incrementMessageCount(agentName?: string): Promise<void> {
   const existing = await loadSession(agentName);
@@ -132,13 +110,10 @@ export async function markCompactWarned(agentName?: string): Promise<void> {
   await saveSession(existing, agentName);
 }
 
->>>>>>> upstream/master
 export async function resetSession(agentName?: string): Promise<void> {
   if (!agentName) current = null;
   try {
     await unlink(sessionPathFor(agentName));
-<<<<<<< HEAD
-=======
   } catch {
     // already gone
   }
@@ -206,7 +181,6 @@ export async function incrementFallbackTurn(agentName?: string, threadId?: strin
 export async function resetFallbackSession(agentName?: string, threadId?: string): Promise<void> {
   try {
     await unlink(fallbackSessionPathFor(agentName, threadId));
->>>>>>> upstream/master
   } catch {
     // already gone
   }

@@ -45,9 +45,6 @@ export interface Job {
   prompt: string;
   recurring: boolean;
   notify: true | false | "error";
-  agent?: string;
-  label?: string;
-  enabled?: boolean;
   /** When set, overrides the global model for this job. Useful for routing cheap tasks to haiku. */
   model?: string;
   /** When set, overrides the global session timeout for this job (in seconds). */
@@ -104,15 +101,10 @@ function parseJobFile(name: string, content: string): Job | null {
     : notifyRaw === "error" ? "error"
     : true;
 
-  const agentLine = lines.find((l) => l.startsWith("agent:"));
-  const agentRaw = agentLine ? parseFrontmatterValue(agentLine.replace("agent:", "")) : "";
-  const agent = agentRaw || undefined;
+  const modelLine = lines.find((l) => l.startsWith("model:"));
+  const modelRaw = modelLine ? parseFrontmatterValue(modelLine.replace("model:", "")) : "";
+  const model = modelRaw || undefined;
 
-<<<<<<< HEAD
-  const labelLine = lines.find((l) => l.startsWith("label:"));
-  const labelRaw = labelLine ? parseFrontmatterValue(labelLine.replace("label:", "")) : "";
-  const label = labelRaw || name;
-=======
   const timeoutLine = lines.find((l) => l.startsWith("timeout:"));
   const timeoutRaw = timeoutLine ? parseFrontmatterValue(timeoutLine.replace("timeout:", "")) : "";
   const timeoutParsed = timeoutRaw ? parseInt(timeoutRaw, 10) : NaN;
@@ -125,21 +117,11 @@ function parseJobFile(name: string, content: string): Job | null {
   const labelLine = lines.find((l) => l.startsWith("label:"));
   const labelRaw = labelLine ? parseFrontmatterValue(labelLine.replace("label:", "")) : "";
   const label = labelRaw || undefined;
->>>>>>> upstream/master
 
   const enabledLine = lines.find((l) => l.startsWith("enabled:"));
   const enabledRaw = enabledLine
     ? parseFrontmatterValue(enabledLine.replace("enabled:", "")).toLowerCase()
     : "";
-<<<<<<< HEAD
-  const enabled = !(enabledRaw === "false" || enabledRaw === "no");
-
-  const modelLine = lines.find((l) => l.startsWith("model:"));
-  const modelRaw = modelLine ? parseFrontmatterValue(modelLine.replace("model:", "")) : "";
-  const model = modelRaw || undefined;
-
-  return { name, schedule, prompt, recurring, notify, agent, label, enabled, model };
-=======
   const enabled =
     enabledRaw === "false" || enabledRaw === "no" || enabledRaw === "0"
       ? false
@@ -152,22 +134,15 @@ function parseJobFile(name: string, content: string): Job | null {
   const retryDelay = retryDelayLine ? parseInt(parseFrontmatterValue(retryDelayLine.replace("retry_delay:", "")), 10) || undefined : undefined;
 
   return { name, schedule, prompt, recurring, notify, model, timeoutSeconds, agent, label, enabled, retry, retryDelay };
->>>>>>> upstream/master
 }
 
 export async function loadJobs(): Promise<Job[]> {
   const jobs: Job[] = [];
 
-<<<<<<< HEAD
   // 1. Flat-dir scan (legacy + standalone non-agent jobs)
   let flatFiles: string[] = [];
   try {
-    flatFiles = await readdir(JOBS_DIR);
-=======
-  let flatFiles: string[] = [];
-  try {
     flatFiles = await readdir(getJobsDir());
->>>>>>> upstream/master
   } catch {
     /* missing dir is fine */
   }
@@ -176,7 +151,6 @@ export async function loadJobs(): Promise<Job[]> {
     const content = await Bun.file(join(getJobsDir(), file)).text();
     const job = parseJobFile(file.replace(/\.md$/, ""), content);
     if (!job) continue;
-<<<<<<< HEAD
     try {
       validateModelString(job.model, `standalone/${job.label ?? job.name}`);
     } catch (err) {
@@ -187,14 +161,15 @@ export async function loadJobs(): Promise<Job[]> {
   }
 
   // 2. agents/<name>/jobs/*.md scan (Phase 17)
+  // agents/ lives at project root (outside .claude/), so agent-managed jobs are writable by Claude Code.
   let agentDirs: string[] = [];
   try {
-    agentDirs = await readdir(AGENTS_DIR);
+    agentDirs = await readdir(getAgentsDir());
   } catch {
     return jobs;
   }
   for (const agentName of agentDirs) {
-    const agentJobsDir = join(AGENTS_DIR, agentName, "jobs");
+    const agentJobsDir = join(getAgentsDir(), agentName, "jobs");
     let jobFiles: string[] = [];
     try {
       jobFiles = await readdir(agentJobsDir);
@@ -247,42 +222,10 @@ export async function loadAgentJobsUnfiltered(agentName: string): Promise<Job[]>
     job.agent = agentName;
     job.label = labelFromFile;
     jobs.push(job);
-=======
-    if (job.enabled !== false) jobs.push(job);
->>>>>>> upstream/master
   }
-
-  // agents/ lives at project root (outside .claude/), so agent-managed jobs are writable by Claude Code.
-  let agentDirs: string[] = [];
-  try {
-    agentDirs = await readdir(getAgentsDir());
-  } catch {
-    return jobs;
-  }
-  for (const agentName of agentDirs) {
-    const agentJobsDir = join(getAgentsDir(), agentName, "jobs");
-    let jobFiles: string[] = [];
-    try {
-      jobFiles = await readdir(agentJobsDir);
-    } catch {
-      continue;
-    }
-    for (const file of jobFiles) {
-      if (!file.endsWith(".md")) continue;
-      const labelFromFile = file.replace(/\.md$/, "");
-      const content = await Bun.file(join(agentJobsDir, file)).text();
-      const job = parseJobFile(`${agentName}/${labelFromFile}`, content);
-      if (!job) continue;
-      job.agent = agentName;
-      job.label = labelFromFile;
-      if (job.enabled !== false) jobs.push(job);
-    }
-  }
-
   return jobs;
 }
 
-<<<<<<< HEAD
 /** Returns true if `agents/<name>/` exists on disk. */
 export async function agentDirExists(agentName: string): Promise<boolean> {
   try {
@@ -291,7 +234,8 @@ export async function agentDirExists(agentName: string): Promise<boolean> {
   } catch {
     return false;
   }
-=======
+}
+
 function resolveJobPath(jobName: string): string {
   const slash = jobName.indexOf("/");
   if (slash > 0 && slash < jobName.length - 1) {
@@ -347,7 +291,6 @@ export async function snapshotJobFrontmatter(
 
     return false;
   };
->>>>>>> upstream/master
 }
 
 export async function clearJobSchedule(jobName: string): Promise<void> {

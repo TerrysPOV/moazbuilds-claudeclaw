@@ -3,13 +3,9 @@ import { mkdir } from "fs/promises";
 import { existsSync } from "fs";
 import { normalizeTimezoneName, resolveTimezoneOffsetMinutes } from "./timezone";
 import { parseWatchdogConfig, type WatchdogConfig } from "./watchdog";
-<<<<<<< HEAD
-
-=======
 import { parsePlugins, type PluginEntry } from "./plugins";
 
 /** Re-exported under the name used in the Settings interface. */
->>>>>>> upstream/master
 export type WatchdogSettings = WatchdogConfig;
 
 const HEARTBEAT_DIR = join(process.cwd(), ".claude", "claudeclaw");
@@ -89,15 +85,11 @@ const DEFAULT_SETTINGS: Settings = {
   security: { level: "moderate", allowedTools: [], disallowedTools: [] },
   web: { enabled: false, host: "127.0.0.1", port: 4632 },
   stt: { baseUrl: "", model: "" },
-<<<<<<< HEAD
-  watchdog: { maxConsecutiveTimeouts: null, maxRuntimeSeconds: null },
-=======
   sessionTimeoutMs: DEFAULT_SESSION_TIMEOUT_MS,
   timeouts: { telegram: 5, heartbeat: 15, job: 30, default: 5 },
   watchdog: { maxConsecutiveTimeouts: null, maxRuntimeSeconds: null },
   session: { autoRotate: false, maxMessages: 50, maxAgeHours: 24, summaryPath: "" },
   plugins: {},
->>>>>>> upstream/master
 };
 
 export interface HeartbeatExcludeWindow {
@@ -176,17 +168,12 @@ export interface Settings {
   security: SecurityConfig;
   web: WebConfig;
   stt: SttConfig;
-<<<<<<< HEAD
-  watchdog: WatchdogSettings;
-  sessionTimeoutMs?: number;
-=======
   apiToken?: string;
   sessionTimeoutMs: number;
   timeouts: TimeoutsConfig;
   watchdog: WatchdogSettings;
   plugins: Record<string, PluginEntry>;
   session: SessionConfig;
->>>>>>> upstream/master
   jobsDir?: string;
 }
 
@@ -393,10 +380,6 @@ function parseSettings(
         ? { delegateTool: raw.stt.delegateTool.trim() }
         : {}),
     },
-<<<<<<< HEAD
-    watchdog: parseWatchdogConfig(raw.watchdog),
-    ...(typeof raw.sessionTimeoutMs === "number" && raw.sessionTimeoutMs > 0 ? { sessionTimeoutMs: raw.sessionTimeoutMs } : {}),
-=======
     sessionTimeoutMs: typeof raw.sessionTimeoutMs === "number" && raw.sessionTimeoutMs > 0
       ? raw.sessionTimeoutMs
       : DEFAULT_SESSION_TIMEOUT_MS,
@@ -415,7 +398,6 @@ function parseSettings(
       summaryPath: typeof raw.session?.summaryPath === "string" ? raw.session.summaryPath.trim() : "",
     },
     apiToken: typeof raw.apiToken === "string" && raw.apiToken.trim() ? raw.apiToken.trim() : undefined,
->>>>>>> upstream/master
     ...(typeof raw.jobsDir === "string" && raw.jobsDir.trim() ? { jobsDir: raw.jobsDir.trim() } : {}),
   };
 }

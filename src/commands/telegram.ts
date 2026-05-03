@@ -10,11 +10,8 @@ import { resolveSkillPrompt, listSkills } from "../skills";
 import { fireJob, parseFireArgs } from "./fire";
 import { mkdir } from "node:fs/promises";
 import { extname, join } from "node:path";
-<<<<<<< HEAD
 import { submitTelegramToGateway } from "../gateway";
-=======
 import { isWizardTrigger, hasActiveWizard, handleWizardInput } from "./plugin-wizard";
->>>>>>> upstream/master
 
 // --- Markdown → Telegram HTML conversion (ported from nanobot) ---
 
@@ -1106,7 +1103,6 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
         "The user attached a document, but downloading it failed. Respond and ask them to resend."
       );
     }
-<<<<<<< HEAD
     // Check per-adapter feature flag for gateway routing
     if (process.env.USE_GATEWAY_TELEGRAM === "true") {
       const gatewayResult = await submitTelegramToGateway(message);
@@ -1116,15 +1112,8 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
       }
       // Gateway processed successfully - response handled by processor
       return;
-    } else {
-      // Legacy path - direct Claude invocation
-      const prompt = promptParts.join("\n");
-      const result = await runUserMessage("telegram", prompt);
+    }
 
-      if (result.exitCode !== 0) {
-        await sendMessage(config.token, chatId, `Error: ${result.stderr || "Unknown error"}`, threadId);
-        return;
-=======
     const prefixedPrompt = promptParts.join("\n");
     const result = await runUserMessage("telegram", prefixedPrompt);
 
@@ -1169,12 +1158,7 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
       }
       if (!cleanedText && !buttonRows && filePaths.length === 0 && voicePaths.length === 0 && !hadVoiceDirective) {
         await sendMessage(config.token, chatId, "(empty response)", threadId);
->>>>>>> upstream/master
       }
-
-      const responseText = result.stdout || "Done.";
-      await sendMessage(config.token, chatId, responseText, threadId);
-      return;
     }
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);

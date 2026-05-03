@@ -2,20 +2,13 @@ import { writeFile, unlink, mkdir } from "fs/promises";
 import { extractErrorDetail } from "../messaging";
 import { join } from "path";
 import { fileURLToPath } from "url";
-<<<<<<< HEAD
-import { run, runUserMessage, streamUserMessage, bootstrap, ensureProjectClaudeMd, loadHeartbeatPromptTemplate } from "../runner";
+import { run, runUserMessage, streamUserMessage, bootstrap, ensureProjectClaudeMd, loadHeartbeatPromptTemplate, isRateLimited, getRateLimitResetAt, wasRateLimitNotified, markRateLimitNotified } from "../runner";
 import { initGatewayProcessor } from "../event-processor";
 import { writeState, type StateData } from "../statusline";
 import { cronMatches, nextCronMatch } from "../cron";
-import { clearJobSchedule, loadJobs, resolveJobModel } from "../jobs";
+import { clearJobSchedule, loadJobs, resolveJobModel, snapshotJobFrontmatter } from "../jobs";
 import { migrateLegacyAgentJobs } from "../migrations";
 import { ensureUserSymlinks } from "../install";
-=======
-import { run, runUserMessage, streamUserMessage, bootstrap, ensureProjectClaudeMd, loadHeartbeatPromptTemplate, isRateLimited, getRateLimitResetAt, wasRateLimitNotified, markRateLimitNotified } from "../runner";
-import { writeState, type StateData } from "../statusline";
-import { cronMatches, nextCronMatch } from "../cron";
-import { clearJobSchedule, loadJobs, snapshotJobFrontmatter } from "../jobs";
->>>>>>> upstream/master
 import { writePidFile, cleanupPidFile, checkExistingDaemon } from "../pid";
 import { initConfig, loadSettings, reloadSettings, resolvePrompt, type HeartbeatConfig, type Settings } from "../config";
 import { getDayAndMinuteAtOffset, buildClockPromptPrefix } from "../timezone";
@@ -828,20 +821,14 @@ export async function start(args: string[] = []) {
     snapshotJobFrontmatter(job.name)
       .then((restoreFrontmatter) =>
         resolvePrompt(job.prompt)
-<<<<<<< HEAD
           .then(async (prompt) => {
             const modelOverride = await resolveJobModel(job);
-            return run(job.name, prompt, job.agent, modelOverride ? { modelOverride } : undefined);
-          })
-          .then((r) => {
-=======
-          .then((prompt) => {
             const clock = buildClockPromptPrefix(new Date(), currentSettings.timezoneOffsetMinutes);
             return run(
               job.name,
               `${clock}\n${prompt}`,
               job.agent ? `agent:${job.agent}` : job.name,
-              job.model,
+              modelOverride ?? job.model,
               timeoutMs,
               job.agent,
               "job"
@@ -866,7 +853,6 @@ export async function start(args: string[] = []) {
                 console.log(`[${ts()}] Job ${job.name} exhausted ${job.retry} retries`);
               }
             }
->>>>>>> upstream/master
             if (job.notify === false) return;
             if (job.notify === "error" && r.exitCode === 0) return;
             const forwardLabel = job.agent && job.label ? `${job.agent}: ${job.label}` : job.name;

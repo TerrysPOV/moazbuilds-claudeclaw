@@ -2,9 +2,6 @@ import { mkdir, readFile, writeFile, realpath } from "fs/promises";
 import { join, dirname, resolve, sep } from "path";
 import { execSync } from "child_process";
 import { existsSync } from "fs";
-<<<<<<< HEAD
-import { getSession, createSession, incrementTurn, markCompactWarned, resetSession } from "./sessions";
-=======
 import {
   getSession,
   createSession,
@@ -19,17 +16,14 @@ import {
   incrementMessageCount,
   backupSession,
 } from "./sessions";
-import { needsRotation, rotateSession, loadLatestSummary } from "./rotation";
->>>>>>> upstream/master
-import {
+import { needsRotation, rotateSession, loadLatestSummary } from "./rotation";import {
   getThreadSession,
   createThreadSession,
   removeThreadSession,
   incrementThreadTurn,
   markThreadCompactWarned,
 } from "./sessionManager";
-<<<<<<< HEAD
-import { getSettings, type ModelConfig, type SecurityConfig, type AgenticMode } from "./config";
+import { getSettings, DEFAULT_SESSION_TIMEOUT_MS, type ModelConfig, type SecurityConfig, type AgenticMode } from "./config";
 import { buildClockPromptPrefix } from "./timezone";
 import { selectModel as governanceSelectModel, configureRouter as configureGovernanceRouter } from "./governance/model-router";
 import { recordInvocationStart, recordInvocationCompletion, recordInvocationFailure } from "./governance/usage-tracker";
@@ -38,14 +32,9 @@ import { startSession as watchdogStart, recordResult as watchdogRecord, abortRea
 import { getGovernanceClient, type GovernanceClient } from "./governance/client";
 import { loadMemory, loadMemoryInstructions, ensureMemoryFile, getMemoryPath } from "./memory";
 import { loadAgent } from "./agents";
-=======
-import { getSettings, DEFAULT_SESSION_TIMEOUT_MS, type ModelConfig, type SecurityConfig } from "./config";
-import { buildClockPromptPrefix } from "./timezone";
 import { selectModel } from "./model-router";
 import { recordResult, abortReason, clearSession, startSession } from "./watchdog";
 import { getPluginManager, type EventContext } from "./plugins";
->>>>>>> upstream/master
-
 const LOGS_DIR = join(process.cwd(), ".claude/claudeclaw/logs");
 
 // Initialize governance router with agentic modes from settings
@@ -177,10 +166,6 @@ export interface RunResult {
   exitCode: number;
 }
 
-<<<<<<< HEAD
-const RATE_LIMIT_PATTERN = /you.ve hit your limit|out of extra usage/i;
-const STALE_THINKING_PATTERN = /Invalid.*signature.*thinking|thinking.*block.*signature/i;
-=======
 export interface AgentStreamEvent {
   type: "spawn" | "done";
   id: string;
@@ -268,7 +253,7 @@ export function wasRateLimitNotified(): boolean {
 export function markRateLimitNotified(): void {
   rateLimitNotified = true;
 }
->>>>>>> upstream/master
+const STALE_THINKING_PATTERN = /Invalid.*signature.*thinking|thinking.*block.*signature/i;
 
 // Serial queue — prevents concurrent --resume on the same session
 // Global queue for non-thread messages (backward compatible)
@@ -778,7 +763,6 @@ export async function compactCurrentSession(agentName?: string): Promise<{ succe
     : { success: false, message: `❌ Compact failed (${existing.sessionId.slice(0, 8)})` };
 }
 
-<<<<<<< HEAD
 /**
  * Policy-aware tool execution wrapper.
  * Evaluates tool requests against policy before allowing execution.
@@ -848,7 +832,7 @@ async function getPolicyContext(source: string): Promise<{
     eventId: crypto.randomUUID(),
     source,
     channelId: undefined, // Will be populated from event context
-    userId: settings.userId,
+    userId: undefined,
     skillName: undefined,
     sessionId: existing?.sessionId,
     claudeSessionId: existing?.sessionId ?? null,
@@ -874,14 +858,6 @@ async function loadAgentPrompts(agentName: string): Promise<string> {
   return parts.join("\n\n");
 }
 
-async function execClaude(name: string, prompt: string, agentName?: string, options?: RunOptions): Promise<RunResult> {
-  await mkdir(LOGS_DIR, { recursive: true });
-
-  // Ensure governance client is initialized
-  const gc = getGovernanceClient();
-
-  const existing = await getSession(agentName);
-=======
 // Compact a Discord thread session by threadId. Uses getThreadSession (not getSession)
 // because Discord threads have their own session store. agentName is used only for cwd isolation.
 export async function compactCurrentThreadSession(
@@ -911,7 +887,6 @@ export async function compactCurrentThreadSession(
     ? { success: true, message: `✅ Thread session compact complete (${existing.sessionId.slice(0, 8)})` }
     : { success: false, message: `❌ Compact failed (${existing.sessionId.slice(0, 8)})` };
 }
-
 async function execClaude(
   name: string,
   prompt: string,
@@ -938,7 +913,6 @@ async function execClaude(
   const existing = threadId
     ? await getThreadSession(threadId)
     : await getSession(agentName);
->>>>>>> upstream/master
   const isNew = !existing;
   // Start the watchdog clock for resumed sessions (we know the ID immediately).
   if (existing) startSession(existing.sessionId);
@@ -962,12 +936,12 @@ async function execClaude(
   let taskType = "unknown";
   let routingReasoning = "";
 
-  if (options?.modelOverride) {
-    primaryConfig = { model: options.modelOverride, api };
+  if (modelOverride) {
+    primaryConfig = { model: modelOverride, api };
     taskType = "job-override";
-    routingReasoning = `override: ${options.modelOverride}`;
+    routingReasoning = `override: ${modelOverride}`;
     console.log(
-      `[${new Date().toLocaleTimeString()}] Job model override: ${options.modelOverride}`,
+      `[${new Date().toLocaleTimeString()}] Job model override: ${modelOverride}`,
     );
   } else if (agentic.enabled) {
     ensureGovernanceRouter(agentic.modes, agentic.defaultMode);
@@ -1000,12 +974,7 @@ async function execClaude(
     api: fallback?.api ?? "",
   };
   const securityArgs = buildSecurityArgs(security);
-<<<<<<< HEAD
-  const timeoutMs = (getSettings() as any).sessionTimeoutMs || CLAUDE_TIMEOUT_MS;
-=======
   const timeoutMs = timeoutMsOverride ?? resolveTimeoutMs(timeoutCategory ?? name);
->>>>>>> upstream/master
-
   console.log(
     `[${new Date().toLocaleTimeString()}] Running: ${name} (${isNew ? "new session" : `resume ${existing.sessionId.slice(0, 8)}`}, security: ${security.level}, timeout: ${timeoutMs / 60_000}m)`
   );
@@ -1029,17 +998,28 @@ async function execClaude(
   // Build the appended system prompt: CLAUDE.md + directory scoping
   // This is passed on EVERY invocation (not just new sessions) because
   // --append-system-prompt does not persist across --resume.
-<<<<<<< HEAD
   const memPath = getMemoryPath(agentName);
-=======
   // Prompt files (IDENTITY.md, USER.md, SOUL.md) are already embedded in
   // CLAUDE.md by ensureProjectClaudeMd(), which runs before every call.
->>>>>>> upstream/master
   const appendParts: string[] = [
     `You are running inside ClaudeClaw. IMPORTANT: After completing any task, you MUST update your memory file at ${memPath} using the Write tool.`,
   ];
 
-<<<<<<< HEAD
+  if (rotationSummary) appendParts.push(`Context from the previous session:\n\n${rotationSummary}`);
+
+  try {
+    const claudeMd = await Bun.file(PROJECT_CLAUDE_MD).text();
+    if (claudeMd.trim()) appendParts.push(claudeMd.trim());
+  } catch (e) {
+    console.error(`[${new Date().toLocaleTimeString()}] Failed to read project CLAUDE.md:`, e);
+  }
+
+  // Plugins: before_prompt_build — lets plugins inject system context
+  if (pm) {
+    const pluginResult = await pm.emit("before_prompt_build", { prompt }, ctx);
+    if (pluginResult?.appendSystemContext) appendParts.push(pluginResult.appendSystemContext);
+  }
+
   if (agentName) {
     // Agent path: load only the agent's IDENTITY/SOUL/CLAUDE.md.
     const agentPrompts = await loadAgentPrompts(agentName);
@@ -1057,21 +1037,6 @@ async function execClaude(
         console.error(`[${new Date().toLocaleTimeString()}] Failed to read project CLAUDE.md:`, e);
       }
     }
-=======
-  if (rotationSummary) appendParts.push(`Context from the previous session:\n\n${rotationSummary}`);
-
-  try {
-    const claudeMd = await Bun.file(PROJECT_CLAUDE_MD).text();
-    if (claudeMd.trim()) appendParts.push(claudeMd.trim());
-  } catch (e) {
-    console.error(`[${new Date().toLocaleTimeString()}] Failed to read project CLAUDE.md:`, e);
-  }
-
-  // Plugins: before_prompt_build — lets plugins inject system context
-  if (pm) {
-    const pluginResult = await pm.emit("before_prompt_build", { prompt }, ctx);
-    if (pluginResult?.appendSystemContext) appendParts.push(pluginResult.appendSystemContext);
->>>>>>> upstream/master
   }
 
   // Load memory (put after static files for optimal prompt caching)
@@ -1091,7 +1056,6 @@ async function execClaude(
   const baseEnv = cleanSpawnEnv();
   const spawnCwd = agentName ? await ensureAgentDir(agentName) : undefined;
 
-<<<<<<< HEAD
   // Record invocation start
   const invocationContext = {
     sessionId: existing?.sessionId,
@@ -1114,18 +1078,7 @@ async function execClaude(
     }
   } catch {}
 
-  let exec: { rawStdout: string; stderr: string; exitCode: number };
-  try {
-    exec = await runClaudeOnce(args, primaryConfig.model, primaryConfig.api, baseEnv, timeoutMs);
-  } catch (err) {
-    // Record failure
-    await recordInvocationFailure(invocationId, { type: "execution-error", message: err instanceof Error ? err.message : String(err) });
-    throw err;
-  }
-
-=======
   let exec = await runClaudeStream(args, primaryConfig.model, primaryConfig.api, baseEnv, timeoutMs, spawnCwd);
->>>>>>> upstream/master
   const primaryRateLimit = extractRateLimitMessage(exec.rawStdout, exec.stderr);
   let usedFallback = false;
 
@@ -1143,11 +1096,6 @@ async function execClaude(
     }
     exec = await runClaudeStream(fallbackArgs, fallbackConfig.model, fallbackConfig.api, baseEnv, timeoutMs, spawnCwd);
     usedFallback = true;
-<<<<<<< HEAD
-    // If fallback also fails, record failure
-    if (extractRateLimitMessage(exec.rawStdout, exec.stderr)) {
-      await recordInvocationFailure(invocationId, { type: "rate-limit", message: "Both primary and fallback hit rate limit" });
-=======
     let fallbackRateLimit = extractRateLimitMessage(exec.rawStdout, exec.stderr);
 
     // If the fallback resumed a corrupted session, reset it and retry fresh.
@@ -1172,7 +1120,6 @@ async function execClaude(
       } else if (fallbackSession) {
         await incrementFallbackTurn(agentName, threadId);
       }
->>>>>>> upstream/master
     }
   }
 
@@ -1277,27 +1224,6 @@ async function execClaude(
     );
   }
 
-<<<<<<< HEAD
-  // Stale thinking block signatures cause exit 1 with an API 400 error.
-  // Auto-reset the session so the next invocation starts fresh.
-  if (!isNew && STALE_THINKING_PATTERN.test(rawStdout + stderr)) {
-    console.warn(`[${new Date().toLocaleTimeString()}] Stale thinking block signature — resetting session for ${agentName ?? "global"}`);
-    await resetSession(agentName);
-  }
-
-  // For new sessions, parse the JSON to extract session_id and result text
-  if (!rateLimitMessage && isNew && exitCode === 0) {
-    try {
-      const json = JSON.parse(rawStdout);
-      sessionId = json.session_id;
-      stdout = json.result ?? "";
-      // Save the real session ID from Claude Code
-      await createSession(sessionId, agentName);
-      console.log(`[${new Date().toLocaleTimeString()}] Session created: ${sessionId}`);
-      watchdogStart(sessionId);
-    } catch (e) {
-      console.error(`[${new Date().toLocaleTimeString()}] Failed to parse session from Claude output:`, e);
-=======
   // Surface stderr when the result event never arrived (abort, tool error, etc.)
   if (!rateLimitMessage && exitCode !== 0 && !stdout && stderr) {
     stdout = stderr;
@@ -1324,7 +1250,6 @@ async function execClaude(
         console.log(`[${new Date().toLocaleTimeString()}] Session created: ${sessionId}${label}`);
       }
       startSession(sessionId);
->>>>>>> upstream/master
     }
   }
 
@@ -1334,7 +1259,6 @@ async function execClaude(
     exitCode,
   };
 
-<<<<<<< HEAD
   // Record successful completion
   await recordInvocationCompletion(invocationId, undefined, undefined);
 
@@ -1350,13 +1274,13 @@ async function execClaude(
     } catch (escalationError) {
       console.error("[escalation] Failed to send watchdog notification:", escalationError);
     }
-=======
+  }
+
   // Plugins: agent_end — fire-and-forget, does not block response
   if (pm && exitCode === 0) {
     pm.emitAsync("agent_end", {
       messages: [{ role: "assistant", content: stdout }],
     }, ctx);
->>>>>>> upstream/master
   }
 
   const output = [
@@ -1378,7 +1302,6 @@ async function execClaude(
   if (!agentName && !threadId) await incrementMessageCount();
   console.log(`[${new Date().toLocaleTimeString()}] Done: ${name} → ${logFile}`);
 
-<<<<<<< HEAD
   // Fallback: append session log to MEMORY.md only if Claude didn't write it
   if (exitCode === 0 && stdout && name !== "bootstrap") {
     try {
@@ -1412,22 +1335,6 @@ async function execClaude(
     }
   }
 
-  // --- Minimal watchdog: track consecutive timeouts (opt-in via settings.watchdog) ---
-  const trackingId = sessionId !== "unknown" ? sessionId : null;
-  if (trackingId) {
-    const { watchdog } = getSettings();
-    if (exitCode === 0) {
-      watchdogClear(trackingId);
-    } else {
-      watchdogRecord(trackingId, exitCode);
-      const reason = watchdogAbortReason(trackingId, watchdog);
-      if (reason) {
-        console.warn(`[${new Date().toLocaleTimeString()}] ${reason}`);
-        watchdogClear(trackingId);
-        return result;
-      }
-      if (exitCode !== 124) watchdogClear(trackingId);
-=======
   // --- Watchdog: track consecutive timeouts ---
   // Skip tracking for unresolved session IDs ("unknown") to avoid cross-session
   // state collisions when a new session fails before its real ID is known.
@@ -1445,13 +1352,11 @@ async function execClaude(
       }
       // Non-timeout, non-zero exits: counter is already reset by recordResult.
       // Do NOT clearSession here — that would reset startedAt and weaken maxRuntimeSeconds.
->>>>>>> upstream/master
     }
   }
 
   // --- Auto-compact on timeout (exit 124) ---
-<<<<<<< HEAD
-  if (COMPACT_TIMEOUT_ENABLED && exitCode === 124 && !isNew && existing) {
+  if (COMPACT_TIMEOUT_ENABLED && exitCode === 124 && !isNew && existing && !recoveredFromStale) {
     // Save memory before compact wipes context
     try {
       const memPath = getMemoryPath(agentName);
@@ -1465,9 +1370,6 @@ async function execClaude(
       console.warn(`[${new Date().toLocaleTimeString()}] Pre-compact memory save failed:`, e);
     }
 
-=======
-  if (COMPACT_TIMEOUT_ENABLED && exitCode === 124 && !isNew && existing && !recoveredFromStale) {
->>>>>>> upstream/master
     emitCompactEvent({ type: "auto-compact-start" });
     const compactOk = await runCompact(
       existing.sessionId,
@@ -1498,11 +1400,7 @@ async function execClaude(
       });
 
       if (retryExec.exitCode === 0) {
-<<<<<<< HEAD
-        const count = await incrementTurn(agentName);
-=======
         const count = threadId ? await incrementThreadTurn(threadId) : await incrementTurn(agentName);
->>>>>>> upstream/master
         console.log(`[${new Date().toLocaleTimeString()}] Turn count: ${count} (after compact + retry)`);
         // Check watchdog after successful retry
         const retryWatchdogDecision = await checkLimits({ invocationId, sessionId: invocationSessionId });
@@ -1516,14 +1414,6 @@ async function execClaude(
   }
 
   // --- Turn tracking & compact warning ---
-<<<<<<< HEAD
-  if (exitCode === 0 && !isNew) {
-    const turnCount = await incrementTurn(agentName);
-    console.log(`[${new Date().toLocaleTimeString()}] Turn count: ${turnCount}`);
-
-    if (turnCount >= COMPACT_WARN_THRESHOLD && existing && !existing.compactWarned) {
-      await markCompactWarned(agentName);
-=======
   if (exitCode === 0 && !isNew && !recoveredFromStale) {
     const turnCount = threadId ? await incrementThreadTurn(threadId) : await incrementTurn(agentName);
     const turnLabel = threadId ? ` (thread ${threadId.slice(0, 8)})` : agentName ? ` (agent ${agentName})` : "";
@@ -1535,7 +1425,6 @@ async function execClaude(
       } else {
         await markCompactWarned(agentName);
       }
->>>>>>> upstream/master
       emitCompactEvent({ type: "warn", turnCount });
     }
   }
@@ -1543,10 +1432,6 @@ async function execClaude(
   return result;
 }
 
-<<<<<<< HEAD
-export async function run(name: string, prompt: string, agentName?: string, options?: RunOptions): Promise<RunResult> {
-  return enqueue(() => execClaude(name, prompt, agentName, options));
-=======
 export async function run(
   name: string,
   prompt: string,
@@ -1556,9 +1441,7 @@ export async function run(
   agentName?: string,
   timeoutCategory?: string
 ): Promise<RunResult> {
-  return enqueue(() => execClaude(name, prompt, threadId, modelOverride, timeoutMs, agentName, timeoutCategory), threadId);
->>>>>>> upstream/master
-}
+  return enqueue(() => execClaude(name, prompt, threadId, modelOverride, timeoutMs, agentName, timeoutCategory), threadId);}
 
 async function streamClaude(
   name: string,
@@ -1782,14 +1665,8 @@ function prefixUserMessageWithClock(prompt: string): string {
   }
 }
 
-<<<<<<< HEAD
-export async function runUserMessage(name: string, prompt: string, agentName?: string): Promise<RunResult> {
-  return run(name, prefixUserMessageWithClock(prompt), agentName);
-=======
 export async function runUserMessage(name: string, prompt: string, threadId?: string, agentName?: string): Promise<RunResult> {
-  return run(name, prefixUserMessageWithClock(prompt), threadId, undefined, undefined, agentName);
->>>>>>> upstream/master
-}
+  return run(name, prefixUserMessageWithClock(prompt), threadId, undefined, undefined, agentName);}
 
 /**
  * Bootstrap the session: fires Claude with the system prompt so the
