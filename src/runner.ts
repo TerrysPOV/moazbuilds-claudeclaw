@@ -111,6 +111,11 @@ const COMPACT_TIMEOUT_ENABLED = true;
  * - `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST`: tells the CLI "the host process
  *   manages provider auth — don't read local credentials." In a detached
  *   daemon there is no host to consult; the CLI errors with `Not logged in`.
+ * - `ANTHROPIC_API_KEY`: a raw API key in the daemon's environment (e.g. from
+ *   a .env file that also serves other tools like MCP servers). Claude Code
+ *   treats `ANTHROPIC_API_KEY` with higher priority than the credential store,
+ *   so if left in the child env it bypasses OAuth entirely and bills against
+ *   API credits rather than the user's Claude subscription.
  *
  * Cross-platform note: the helper just deletes keys from the inherited env
  * object — no shell, no OS-specific calls. The `claude` CLI it spawns then
@@ -121,6 +126,7 @@ function cleanSpawnEnv(): Record<string, string> {
     "CLAUDECODE",
     "CLAUDE_CODE_OAUTH_TOKEN",
     "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
+    "ANTHROPIC_API_KEY",  // see comment above — prevents accidental API-key billing
   ]);
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
