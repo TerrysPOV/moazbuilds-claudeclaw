@@ -24,7 +24,7 @@ episodic memory next to the existing semantic memory.
 
 ```bash
 cd tools/memory-search
-pip install -e .
+uv pip install -e .
 ```
 
 This installs a `memory-search` console script. The first run will download
@@ -121,7 +121,7 @@ print(result["summary"])
 ## Development
 
 ```bash
-pip install -e ".[dev]"
+uv pip install -e ".[dev]"
 pytest
 ```
 

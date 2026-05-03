@@ -17,7 +17,7 @@ import { initializeJobSystem } from "../orchestrator/resumable-jobs";
 import type { Job } from "../jobs";
 import { isWizardTrigger, hasActiveWizard, handleWizardInput } from "./plugin-wizard";
 import { PluginManager, setPluginManager } from "../plugins";
-import { indexSessions } from "../memory";
+import { indexSessionsBackground } from "../memory";
 
 const CLAUDE_DIR = join(process.cwd(), ".claude");
 const HEARTBEAT_DIR = join(CLAUDE_DIR, "claudeclaw");
@@ -340,20 +340,6 @@ export async function start(args: string[] = []) {
   // dev. Idempotent and non-destructive.
   try {
     const links = await ensureUserSymlinks();
-  // memory-search: incremental session re-index on boot (issue #19).
-  // Idempotent (skips files whose mtime is unchanged), so it is cheap to
-  // run every time. Runs synchronously to keep the deterministic R/W
-  // contract; failures are logged but never block daemon startup.
-  try {
-    const memSettings = (await loadSettings()) as { memorySearch?: any };
-    const idx = indexSessions(memSettings.memorySearch);
-    if (idx.indexed > 0) {
-      console.log(`[memory-search] indexed ${idx.indexed} new session(s) (${idx.skipped} up-to-date)`);
-    }
-  } catch (e) {
-    console.log(`[memory-search] index skipped on boot: ${(e as Error).message}`);
-  }
-
     const now = new Date().toLocaleTimeString();
     if (links.created.length > 0) {
       console.log(`[${now}] Installed ${links.created.length} user symlink(s): ${links.created.join(", ")}`);
@@ -365,6 +351,18 @@ export async function start(args: string[] = []) {
     }
   } catch (err) {
     console.error(`[${new Date().toLocaleTimeString()}] ensureUserSymlinks failed:`, err);
+  }
+
+  // memory-search: incremental session re-index on boot (issue #19).
+  // Async fire-and-forget — must NOT block the Bun event loop on first boot
+  // (model download + indexing of N sessions could otherwise freeze Telegram /
+  // Discord polling for tens of seconds). Top-level try so failures here are
+  // never confused with symlink-installation failures.
+  try {
+    const memSettings = (await loadSettings()) as { memorySearch?: any };
+    indexSessionsBackground(memSettings.memorySearch);
+  } catch (e) {
+    console.log(`[memory-search] background index could not be scheduled: ${(e as Error).message}`);
   }
 
   // Phase 17: migrate any Phase 16 single-job agents from flat dir into agents/<name>/jobs/default.md

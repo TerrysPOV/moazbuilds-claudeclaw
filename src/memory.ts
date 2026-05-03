@@ -107,7 +107,11 @@ export interface MemorySearchSettings {
   model?: string;
   /** Hybrid blend, 1.0=semantic only, 0.0=FTS5 only. Default: 0.5. */
   alpha?: number;
-  /** Re-index after every N runner turns. Default: 10. 0 disables. */
+  /**
+   * NYI — wired in a follow-up PR. Currently parsed but not enforced.
+   *
+   * Re-index after every N runner turns. Default: 10. 0 disables.
+   */
   reindexEveryNTurns?: number;
   /** Max seconds a search subprocess is allowed to run. Default: 60. */
   searchTimeoutSec?: number;
@@ -178,6 +182,44 @@ export function indexSessions(opts?: MemorySearchSettings): IndexResult {
   const indexed = parseInt(stdout.match(/indexed:\s*(\d+)/)?.[1] ?? "0", 10);
   const skipped = parseInt(stdout.match(/skipped[^:]*:\s*(\d+)/)?.[1] ?? "0", 10);
   return { found, indexed, skipped };
+}
+
+/**
+ * Async fire-and-forget variant of indexSessions, suitable for the daemon
+ * boot trigger where blocking the event loop is not acceptable.
+ *
+ * The first run downloads ~80MB of model weights and may walk hundreds of
+ * sessions; with spawnSync that froze the entire daemon (no Telegram /
+ * Discord during boot). Switching to spawn keeps the event loop responsive.
+ *
+ * Returns immediately. Logs completion / failure asynchronously.
+ */
+export function indexSessionsBackground(opts?: MemorySearchSettings): void {
+  if (opts?.enabled === false) return;
+  const { spawn } = require("child_process") as typeof import("child_process");
+  const proc = spawn(resolveBin(opts), ["index"], {
+    env: buildEnv(opts),
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  proc.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
+  proc.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+  proc.on("close", (code: number | null) => {
+    if (code === 0) {
+      const indexed = parseInt(stdout.match(/indexed:\s*(\d+)/)?.[1] ?? "0", 10);
+      const skipped = parseInt(stdout.match(/skipped[^:]*:\s*(\d+)/)?.[1] ?? "0", 10);
+      if (indexed > 0) {
+        console.log(`[memory-search] background index done: ${indexed} new, ${skipped} up-to-date`);
+      }
+    } else {
+      const detail = (stderr || stdout || "").trim().slice(0, 200);
+      console.log(`[memory-search] background index failed (exit ${code}): ${detail}`);
+    }
+  });
+  proc.on("error", (e: Error) => {
+    console.log(`[memory-search] background index could not start: ${e.message}`);
+  });
 }
 
 /**

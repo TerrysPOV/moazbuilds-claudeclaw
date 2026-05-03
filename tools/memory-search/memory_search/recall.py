@@ -42,10 +42,10 @@ def summarize(query: str, hits: list[dict]) -> Optional[str]:
         excerpts.append(f"--- Session {sid} ({ts}) ---\n{h.get('excerpt', '')}")
 
     prompt = (
-        f'Voici des extraits de sessions passées pertinentes pour la requête : "{query}"\n\n'
+        f'Here are excerpts from past Claude Code sessions relevant to the query: "{query}"\n\n'
         + "\n\n".join(excerpts)
-        + "\n\nRésume en 3-5 points concis ce qui a été fait ou discuté en lien avec cette requête. "
-          "Sois direct et factuel."
+        + "\n\nSummarize in 3-5 concise bullet points what was done or discussed "
+          "in relation to this query. Be direct and factual."
     )
 
     try:
@@ -95,31 +95,31 @@ def recall(
 def format_for_humans(result: dict) -> str:
     """Render the recall response for terminal output."""
     lines: list[str] = []
-    lines.append(f'🔍 Recherche : "{result["query"]}"')
+    lines.append(f'🔍 Search: "{result["query"]}"')
     if not result["hits"]:
-        lines.append("❌ Aucun résultat dans l'historique des sessions.")
+        lines.append("❌ No results in session history.")
         return "\n".join(lines)
 
     lines.append("")
-    lines.append(f"✅ {len(result['hits'])} session(s) trouvée(s) :")
+    lines.append(f"✅ {len(result['hits'])} session(s) found:")
     lines.append("")
     for h in result["hits"]:
         ts = (h.get("timestamp") or "?")[:16]
         lines.append(
-            f"  📅 {ts} | Score: {h['score']} | {h['turn_count']} tours"
+            f"  📅 {ts} | Score: {h['score']} | {h['turn_count']} turns"
         )
         excerpt = h.get("excerpt", "")
         lines.append(f"     {excerpt[:200]}{'...' if len(excerpt) > 200 else ''}")
         lines.append("")
 
     if result.get("summary"):
-        lines.append("💬 Résumé :")
+        lines.append("💬 Summary:")
         lines.append("-" * 40)
         lines.append(result["summary"])
     elif result["hits"]:
         # Be explicit so the user knows why there's no summary
         if not config.claude_cli_path():
-            lines.append("(claude CLI introuvable — résumé désactivé)")
+            lines.append("(claude CLI not found — summary disabled)")
     return "\n".join(lines)
 
 
