@@ -16,6 +16,8 @@ jobs:
     if: github.event.pull_request.user.login != 'github-actions[bot]' && !startsWith(github.head_ref, 'sync/')
 
     runs-on: ubuntu-latest
+    # Informational only — transient action infrastructure errors shouldn't block PRs
+    continue-on-error: true
     permissions:
       contents: read
       pull-requests: write
@@ -46,13 +48,12 @@ jobs:
       - name: Run Claude Code Review
         if: steps.token-check.outputs.configured == 'true'
         id: claude-review
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@fefa07e9c665b7320f08c3b525980457f22f58aa
         with:
           github_token: ${{ github.token }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           allowed_non_write_users: '*'
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
           prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
-          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
-          # or https://code.claude.com/docs/en/cli-reference for available options
