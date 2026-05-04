@@ -4,7 +4,10 @@ import { existsSync } from "fs";
 import { normalizeTimezoneName, resolveTimezoneOffsetMinutes } from "./timezone";
 import { parseWatchdogConfig, type WatchdogConfig } from "./watchdog";
 import { parsePlugins, type PluginEntry } from "./plugins";
+<<<<<<< HEAD
 import { parseMemorySearchSettings, type MemorySearchSettings } from "./memory";
+=======
+>>>>>>> upstream/master
 
 /** Re-exported under the name used in the Settings interface. */
 export type WatchdogSettings = WatchdogConfig;
@@ -91,7 +94,10 @@ const DEFAULT_SETTINGS: Settings = {
   watchdog: { maxConsecutiveTimeouts: null, maxRuntimeSeconds: null },
   session: { autoRotate: false, maxMessages: 50, maxAgeHours: 24, summaryPath: "" },
   plugins: {},
+<<<<<<< HEAD
   memorySearch: {},
+=======
+>>>>>>> upstream/master
 };
 
 export interface HeartbeatExcludeWindow {
@@ -176,7 +182,10 @@ export interface Settings {
   watchdog: WatchdogSettings;
   plugins: Record<string, PluginEntry>;
   session: SessionConfig;
+<<<<<<< HEAD
   memorySearch: MemorySearchSettings;
+=======
+>>>>>>> upstream/master
   jobsDir?: string;
 }
 
@@ -394,7 +403,10 @@ function parseSettings(
     },
     watchdog: parseWatchdogConfig(raw.watchdog),
     plugins: parsePlugins(raw.plugins),
+<<<<<<< HEAD
     memorySearch: parseMemorySearchSettings(raw.memorySearch),
+=======
+>>>>>>> upstream/master
     session: {
       autoRotate: raw.session?.autoRotate ?? false,
       maxMessages: Number.isFinite(raw.session?.maxMessages) ? Number(raw.session.maxMessages) : 50,

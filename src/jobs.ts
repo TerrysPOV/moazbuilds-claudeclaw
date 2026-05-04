@@ -1,6 +1,7 @@
 import { readdir } from "fs/promises";
 import { join } from "path";
 import { getJobsDir, getAgentsDir } from "./config";
+<<<<<<< HEAD
 
 const JOBS_DIR = join(process.cwd(), ".claude", "claudeclaw", "jobs");
 const AGENTS_DIR = join(process.cwd(), "agents");
@@ -37,6 +38,8 @@ export async function resolveJobModel(job: Job): Promise<string | undefined> {
 function ts(): string {
   return new Date().toLocaleTimeString();
 }
+=======
+>>>>>>> upstream/master
 
 export interface Job {
   /** Scheduler key. For standalone jobs this is the file stem. For agent-scoped jobs this is "agent/label". */
@@ -139,7 +142,10 @@ function parseJobFile(name: string, content: string): Job | null {
 export async function loadJobs(): Promise<Job[]> {
   const jobs: Job[] = [];
 
+<<<<<<< HEAD
   // 1. Flat-dir scan (legacy + standalone non-agent jobs)
+=======
+>>>>>>> upstream/master
   let flatFiles: string[] = [];
   try {
     flatFiles = await readdir(getJobsDir());
@@ -151,6 +157,7 @@ export async function loadJobs(): Promise<Job[]> {
     const content = await Bun.file(join(getJobsDir(), file)).text();
     const job = parseJobFile(file.replace(/\.md$/, ""), content);
     if (!job) continue;
+<<<<<<< HEAD
     try {
       validateModelString(job.model, `standalone/${job.label ?? job.name}`);
     } catch (err) {
@@ -222,10 +229,42 @@ export async function loadAgentJobsUnfiltered(agentName: string): Promise<Job[]>
     job.agent = agentName;
     job.label = labelFromFile;
     jobs.push(job);
+=======
+    if (job.enabled !== false) jobs.push(job);
+>>>>>>> upstream/master
   }
+
+  // agents/ lives at project root (outside .claude/), so agent-managed jobs are writable by Claude Code.
+  let agentDirs: string[] = [];
+  try {
+    agentDirs = await readdir(getAgentsDir());
+  } catch {
+    return jobs;
+  }
+  for (const agentName of agentDirs) {
+    const agentJobsDir = join(getAgentsDir(), agentName, "jobs");
+    let jobFiles: string[] = [];
+    try {
+      jobFiles = await readdir(agentJobsDir);
+    } catch {
+      continue;
+    }
+    for (const file of jobFiles) {
+      if (!file.endsWith(".md")) continue;
+      const labelFromFile = file.replace(/\.md$/, "");
+      const content = await Bun.file(join(agentJobsDir, file)).text();
+      const job = parseJobFile(`${agentName}/${labelFromFile}`, content);
+      if (!job) continue;
+      job.agent = agentName;
+      job.label = labelFromFile;
+      if (job.enabled !== false) jobs.push(job);
+    }
+  }
+
   return jobs;
 }
 
+<<<<<<< HEAD
 /** Returns true if `agents/<name>/` exists on disk. */
 export async function agentDirExists(agentName: string): Promise<boolean> {
   try {
@@ -236,6 +275,8 @@ export async function agentDirExists(agentName: string): Promise<boolean> {
   }
 }
 
+=======
+>>>>>>> upstream/master
 function resolveJobPath(jobName: string): string {
   const slash = jobName.indexOf("/");
   if (slash > 0 && slash < jobName.length - 1) {

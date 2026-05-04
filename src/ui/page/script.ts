@@ -1034,7 +1034,10 @@ export const pageScript = String.raw`    const $ = (id) => document.getElementBy
 
     if (tabDashboardBtn) tabDashboardBtn.addEventListener("click", () => setActiveTab("dashboard"));
     if (tabChatBtn) tabChatBtn.addEventListener("click", function() { setActiveTab("chat"); loadSessions(); });
+<<<<<<< HEAD
     if (tabKanbanBtn) tabKanbanBtn.addEventListener("click", () => setActiveTab("kanban"));
+=======
+>>>>>>> upstream/master
 
     // --- Session browser ---
 
