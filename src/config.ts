@@ -4,7 +4,10 @@ import { existsSync } from "fs";
 import { normalizeTimezoneName, resolveTimezoneOffsetMinutes } from "./timezone";
 import { parseWatchdogConfig, type WatchdogConfig } from "./watchdog";
 import { parsePlugins, type PluginEntry } from "./plugins";
+<<<<<<< HEAD
 import { parseMemorySearchSettings, type MemorySearchSettings } from "./memory";
+=======
+>>>>>>> upstream/master
 
 /** Re-exported under the name used in the Settings interface. */
 export type WatchdogSettings = WatchdogConfig;
@@ -80,7 +83,11 @@ const DEFAULT_SETTINGS: Settings = {
     forwardToTelegram: true,
     forwardToDiscord: true,
   },
+<<<<<<< HEAD
   telegram: { token: "", allowedUserIds: [], listenChats: [], receiveEnabled: true },
+=======
+  telegram: { token: "", allowedUserIds: [], listenChats: [], receiveEnabled: true, dmIsolation: "shared" },
+>>>>>>> upstream/master
   discord: { token: "", allowedUserIds: [], listenChannels: [], listenGuilds: [], imageOutputRoots: [] },
   slack: { botToken: "", appToken: "", allowedUserIds: [], listenChannels: [] },
   security: { level: "moderate", allowedTools: [], disallowedTools: [] },
@@ -91,7 +98,10 @@ const DEFAULT_SETTINGS: Settings = {
   watchdog: { maxConsecutiveTimeouts: null, maxRuntimeSeconds: null },
   session: { autoRotate: false, maxMessages: 50, maxAgeHours: 24, summaryPath: "" },
   plugins: {},
+<<<<<<< HEAD
   memorySearch: {},
+=======
+>>>>>>> upstream/master
 };
 
 export interface HeartbeatExcludeWindow {
@@ -115,6 +125,15 @@ export interface TelegramConfig {
   listenChats: number[];
   /** When false, skip Telegram polling (incoming messages). Useful for send-only instances. Default: true */
   receiveEnabled: boolean;
+<<<<<<< HEAD
+=======
+  /**
+   * Controls session isolation for Telegram DMs.
+   * - "shared": all DMs share the global session (matches Discord DM behaviour). Default.
+   * - "perUser": each DM user gets their own isolated session.
+   */
+  dmIsolation: "shared" | "perUser";
+>>>>>>> upstream/master
 }
 
 export interface DiscordConfig {
@@ -176,7 +195,10 @@ export interface Settings {
   watchdog: WatchdogSettings;
   plugins: Record<string, PluginEntry>;
   session: SessionConfig;
+<<<<<<< HEAD
   memorySearch: MemorySearchSettings;
+=======
+>>>>>>> upstream/master
   jobsDir?: string;
 }
 
@@ -333,6 +355,10 @@ function parseSettings(
       allowedUserIds: raw.telegram?.allowedUserIds ?? [],
       listenChats: Array.isArray(raw.telegram?.listenChats) ? raw.telegram.listenChats.map(Number) : [],
       receiveEnabled: raw.telegram?.receiveEnabled !== false,
+<<<<<<< HEAD
+=======
+      dmIsolation: raw.telegram?.dmIsolation === "perUser" ? "perUser" : "shared",
+>>>>>>> upstream/master
     },
     discord: {
       token: process.env.DISCORD_TOKEN?.trim() || (typeof raw.discord?.token === "string" ? raw.discord.token.trim() : ""),
@@ -394,7 +420,10 @@ function parseSettings(
     },
     watchdog: parseWatchdogConfig(raw.watchdog),
     plugins: parsePlugins(raw.plugins),
+<<<<<<< HEAD
     memorySearch: parseMemorySearchSettings(raw.memorySearch),
+=======
+>>>>>>> upstream/master
     session: {
       autoRotate: raw.session?.autoRotate ?? false,
       maxMessages: Number.isFinite(raw.session?.maxMessages) ? Number(raw.session.maxMessages) : 50,
