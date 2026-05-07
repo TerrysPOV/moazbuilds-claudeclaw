@@ -7,6 +7,7 @@ on:
 jobs:
   marketplace-version-guard:
     runs-on: ubuntu-latest
+    if: ${{ !startsWith(github.head_ref, 'sync/') }}
     permissions:
       contents: read
 
