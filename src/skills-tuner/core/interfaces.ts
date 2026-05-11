@@ -23,6 +23,20 @@ export abstract class TunableSubject {
   reclassifySignal(_verbatim: string, _knownEntities: Record<string, unknown>): string {
     return ORPHAN_SUBJECT;
   }
+
+  /**
+   * Compute a deterministic hash of this subject's managed state.
+   * Used by the engine to detect drift between cron ticks.
+   *
+   * Default returns empty string (no drift detection — opt-in per subject).
+   * Override to track changes in scan_dirs, plugin lists, RAG corpus, etc.
+   *
+   * Hash must be stable across runs (no clocks, no random) and reflect
+   * any meaningful change to what the subject would propose tuning.
+   */
+  currentStateHash(): string {
+    return '';
+  }
 }
 
 export abstract class Adapter {

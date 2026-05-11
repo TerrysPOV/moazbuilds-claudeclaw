@@ -6,7 +6,12 @@ import type { TunableSubject } from './interfaces.js';
 import type { Registry } from './registry.js';
 import type { ProposalsStore } from '../storage/proposals.js';
 import type { RefusedStore } from '../storage/refused.js';
-import type { BranchManager } from '../git_ops/branches.js';
+import { BranchManager } from '../git_ops/branches.js';
+import { homedir } from 'node:os';
+import { join, dirname } from 'node:path';
+import { appendFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs';
+
+const STATE_HASHES_PATH = join(homedir(), '.config', 'tuner', 'state-hashes.jsonl');
 
 export class SecurityError extends Error {
   constructor(message: string) {
@@ -17,15 +22,32 @@ export class SecurityError extends Error {
 
 export class Engine {
   private secret: Buffer;
+  private readonly _applying = new Set<number>(); // in-memory lock: prevents concurrent double-apply
+  private readonly _branchManagers = new Map<string, BranchManager>();
 
   constructor(
     public readonly config: TunerConfig,
     public readonly registry: Registry,
     public readonly proposals: ProposalsStore,
     public readonly refused: RefusedStore,
-    public readonly branches: BranchManager,
+    private readonly defaultBranches: BranchManager,
   ) {
     this.secret = loadSecret();
+  }
+
+  // Lazily instantiate a BranchManager per-subject, falling back to defaultBranches.
+  private getBranchManager(subjectName: string): BranchManager {
+    const cached = this._branchManagers.get(subjectName);
+    if (cached) return cached;
+    const subjectCfg = this.config.subjects?.[subjectName];
+    const repoPath = subjectCfg?.git_repo
+      ? subjectCfg.git_repo.replace(/^~/, homedir())
+      : this.defaultBranches.repoPath;
+    const bm = repoPath === this.defaultBranches.repoPath
+      ? this.defaultBranches
+      : new BranchManager(repoPath);
+    this._branchManagers.set(subjectName, bm);
+    return bm;
   }
 
   async runCycle(opts: { since?: Date; subjectName?: string; dryRun?: boolean } = {}): Promise<{ proposed: number; autoApplied: number }> {
@@ -46,7 +68,47 @@ export class Engine {
         console.error(`Error running subject ${subject.name}:`, err);
       }
     }
+    // Drift detection: compare each subject's state hash vs last recorded value
+    const allSubjects = opts.subjectName
+      ? [this.registry.getSubject(opts.subjectName)].filter((s): s is TunableSubject => s != null)
+      : this.registry.enabledSubjects(this.config);
+    for (const subject of allSubjects) {
+      try {
+        const currentHash = subject.currentStateHash();
+        if (!currentHash) continue;  // subject opted out (empty string = no-op)
+        const prevHash = this._lastStateHash(subject.name);
+        if (prevHash === currentHash) continue;  // no drift
+        auditLog('subject_state_drift_detected', {
+          subject: subject.name,
+          prev_hash: prevHash || null,
+          current_hash: currentHash,
+        });
+        this._recordStateHash(subject.name, currentHash);
+      } catch (err) {
+        auditLog('drift_detection_error', { subject: subject.name, error: String(err) });
+        // Non-fatal: drift detection is opportunistic, never crashes runCycle
+      }
+    }
+
     return totals;
+  }
+
+  private _lastStateHash(subjectName: string): string {
+    if (!existsSync(STATE_HASHES_PATH)) return '';
+    const lines = readFileSync(STATE_HASHES_PATH, 'utf8').trim().split('\n').filter(Boolean);
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        const entry = JSON.parse(lines[i]!);
+        if (entry.subject === subjectName) return entry.hash || '';
+      } catch { /* skip corrupted line */ }
+    }
+    return '';
+  }
+
+  private _recordStateHash(subjectName: string, hash: string): void {
+    mkdirSync(dirname(STATE_HASHES_PATH), { recursive: true });
+    const entry = { ts: new Date().toISOString(), subject: subjectName, hash };
+    appendFileSync(STATE_HASHES_PATH, JSON.stringify(entry) + '\n');
   }
 
   private async _runSubject(subjectName: string, since: Date, dryRun: boolean): Promise<{ proposed: number; autoApplied: number }> {
@@ -110,6 +172,19 @@ export class Engine {
   }
 
   async applyProposal(proposalId: number, alternativeId: string): Promise<void> {
+    // In-memory lock prevents concurrent double-apply from two simultaneous calls
+    if (this._applying.has(proposalId)) {
+      throw new Error(`Proposal #${proposalId} is already being applied — concurrent apply rejected`);
+    }
+    this._applying.add(proposalId);
+    try {
+      return await this._applyProposalInner(proposalId, alternativeId);
+    } finally {
+      this._applying.delete(proposalId);
+    }
+  }
+
+  private async _applyProposalInner(proposalId: number, alternativeId: string): Promise<void> {
     const all = this.proposals.readAll();
     const alreadyApplied = all.find(r => r?.proposal?.id === proposalId && r.event === 'applied');
     if (alreadyApplied) throw new Error(`Proposal #${proposalId} already applied — cannot re-apply`);
@@ -122,7 +197,8 @@ export class Engine {
     const subject = this.registry.getSubject(proposal.subject);
     if (!subject) throw new Error(`Subject ${proposal.subject} not registered`);
 
-    auditLog('apply_attempted', { proposal_id: proposalId, alternative_id: alternativeId });
+    const branches = this.getBranchManager(proposal.subject);
+    auditLog('apply_attempted', { proposal_id: proposalId, alternative_id: alternativeId, repo_path: branches.repoPath });
 
     if (!verifyProposalSignature(proposal, this.secret)) {
       auditLog('signature_mismatch', { proposal_id: proposalId });
@@ -137,8 +213,8 @@ export class Engine {
       throw new Error(`Validation failed: ${validation.reason ?? 'unknown'}`);
     }
 
-    await this.branches.createProposalBranch(proposalId);
-    const commitSha = await this.branches.commitPatch(patch, proposal, alternativeId);
+    await branches.createProposalBranch(proposalId);
+    const commitSha = await branches.commitPatch(patch, proposal, alternativeId);
 
     this.proposals.append({
       proposal,
@@ -148,7 +224,7 @@ export class Engine {
       commit_sha: commitSha,
       applied_target_path: patch.target_path,
     });
-    auditLog('apply_success', { proposal_id: proposalId, alternative_id: alternativeId, commit_sha: commitSha });
+    auditLog('apply_success', { proposal_id: proposalId, alternative_id: alternativeId, commit_sha: commitSha, repo_path: branches.repoPath });
   }
 
   async refuseProposal(proposalId: number, reason = 'refuse'): Promise<void> {
@@ -168,11 +244,14 @@ export class Engine {
     const commitSha = (appliedRecord as typeof appliedRecord & { commit_sha?: string }).commit_sha;
     if (!commitSha) throw new Error(`No commit SHA recorded for proposal #${proposalId}`);
 
+    const proposal = appliedRecord.proposal;
+    const branches = this.getBranchManager(proposal.subject);
+
     try {
       // Checkout the proposal branch so revert applies in the right context
-      await this.branches.checkoutProposalBranch(proposalId);
-      await this.branches.revertPatch(commitSha);
-      auditLog('reverted', { proposal_id: proposalId, commit_sha: commitSha });
+      await branches.checkoutProposalBranch(proposalId);
+      await branches.revertPatch(commitSha);
+      auditLog('reverted', { proposal_id: proposalId, commit_sha: commitSha, repo_path: branches.repoPath });
     } catch (err) {
       auditLog('revert_failed', { proposal_id: proposalId, commit_sha: commitSha, error: String(err) });
       throw err;

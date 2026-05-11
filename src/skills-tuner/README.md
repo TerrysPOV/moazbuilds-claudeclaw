@@ -184,6 +184,38 @@ The script backs up the original file to `proposals.jsonl.python-backup-<timesta
 
 ---
 
+## Per-subject git repositories
+
+Each subject can declare its own git repository in `~/.config/tuner/config.yaml`:
+
+```yaml
+storage:
+  git_repo: ~/agent/skills        # default fallback
+
+subjects:
+  skills:
+    enabled: true
+    git_repo: ~/agent/skills      # explicit (matches default here)
+    auto_merge: [patch, frontmatter]
+    scan_dirs: [~/agent/skills]
+  voice:
+    enabled: true
+    git_repo: ~/agent/voice-config  # different repo for voice
+    auto_merge: false
+    scan_dirs: [~/agent/voice-config/lexicons]
+  trader-ml-hp:
+    enabled: true
+    git_repo: ~/Projects/momentum_trader_v7  # trader's own repo
+    auto_merge: false                         # critical: never auto
+    scan_dirs: [~/Projects/momentum_trader_v7/strategies]
+```
+
+> Each subject can have its own `git_repo`. If absent, falls back to `storage.git_repo`. This lets you tune skills, voice config, and trader strategies — each in its own git repo with independent rollback.
+
+**Migration from single `storage.git_repo`**: existing configs continue to work — subjects without `git_repo` use the storage default. To benefit from per-subject isolation, add `git_repo:` per subject in `~/.config/tuner/config.yaml`.
+
+---
+
 ## Development
 
 ```bash

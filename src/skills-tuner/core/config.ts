@@ -16,10 +16,13 @@ const ModelConfigSchema = z.object({
 
 const SubjectConfigSchema = z.object({
   enabled: z.boolean().default(true),
+  git_repo: z.string().optional(),
   auto_merge: z.union([z.boolean(), z.array(z.string())]).default(false),
   proposer: z.string().optional(),
   proposer_for_create: z.string().optional(),
   scan_dirs: z.array(z.string()).default([]),
+  emotional_patterns: z.array(z.string()).optional(),
+  overrides: z.record(z.unknown()).optional(),
 });
 export type SubjectConfig = z.infer<typeof SubjectConfigSchema>;
 
@@ -79,6 +82,17 @@ export function loadConfig(path = DEFAULT_CONFIG_PATH): TunerConfig {
     for (const key of ['proposals_jsonl', 'refused_jsonl', 'git_repo']) {
       if (typeof storage[key] === 'string') {
         storage[key] = (storage[key] as string).replace(/^~/, homedir());
+      }
+    }
+  }
+  // Expand ~ in per-subject git_repo paths
+  if (raw['subjects'] && typeof raw['subjects'] === 'object') {
+    for (const subj of Object.values(raw['subjects'] as Record<string, unknown>)) {
+      if (subj && typeof subj === 'object') {
+        const s = subj as Record<string, unknown>;
+        if (typeof s['git_repo'] === 'string') {
+          s['git_repo'] = (s['git_repo'] as string).replace(/^~/, homedir());
+        }
       }
     }
   }

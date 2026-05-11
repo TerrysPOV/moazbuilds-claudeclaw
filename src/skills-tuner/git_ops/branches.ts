@@ -1,5 +1,5 @@
 import { simpleGit, type SimpleGit } from 'simple-git';
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync, existsSync, realpathSync } from 'node:fs';
 import { dirname, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import type { Patch, Proposal } from '../core/types.js';
@@ -51,6 +51,13 @@ export class BranchManager {
     const repoRoot = resolve(this.repoPath);
     if (!target.startsWith(repoRoot + sep) && target !== repoRoot) {
       throw new Error(`BranchManager refusing to write outside repo: target=${target}, repo=${repoRoot}`);
+    }
+    // Symlink traversal check: resolve the real path if the target already exists as a symlink
+    if (existsSync(target)) {
+      const resolvedTarget = realpathSync(target);
+      if (!resolvedTarget.startsWith(repoRoot + sep) && resolvedTarget !== repoRoot) {
+        throw new Error(`BranchManager refusing symlink traversal: target=${target} resolves to ${resolvedTarget} which is outside repo=${repoRoot}`);
+      }
     }
     if (patch.applied_content) {
       mkdirSync(dirname(target), { recursive: true });
