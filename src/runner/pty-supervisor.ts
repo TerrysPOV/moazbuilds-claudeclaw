@@ -216,6 +216,8 @@ export function __resetSupervisorForTests(): void {
   _ensureAgentDir = null;
   _cleanSpawnEnv = null;
   _buildSecurityArgs = null;
+  _maxConcurrentOverride = null;
+  _maxRetriesOverride = null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -435,7 +437,9 @@ function readSupervisorOptions(): SupervisorOptions {
   const settings = getSettings();
   return {
     idleReapMinutes: settings.pty.idleReapMinutes,
-    maxRetries: settings.pty.maxRetries,
+    maxRetries: _maxRetriesOverride != null
+      ? _maxRetriesOverride
+      : settings.pty.maxRetries,
     backoffMs: settings.pty.backoffMs,
     namedAgentsAlwaysAlive: settings.pty.namedAgentsAlwaysAlive,
   };
@@ -478,6 +482,23 @@ async function getOrCreateEntry(
   return entry;
 }
 
+/** Test-only override for the maxConcurrent cap. When non-null, takes
+ *  precedence over `settings.pty.maxConcurrent`. Cleared by
+ *  __resetSupervisorForTests. */
+let _maxConcurrentOverride: number | null = null;
+/** Test-only override for maxRetries. */
+let _maxRetriesOverride: number | null = null;
+
+/** For tests only. Override the maxConcurrent cap without writing to disk. */
+export function injectMaxConcurrentForTests(cap: number | null): void {
+  _maxConcurrentOverride = cap;
+}
+
+/** For tests only. Override maxRetries without writing to disk. */
+export function injectMaxRetriesForTests(n: number | null): void {
+  _maxRetriesOverride = n;
+}
+
 /**
  * Phase D fix #5 (FA-3a): cap the number of concurrent live PTYs to
  * `settings.pty.maxConcurrent`. When the cap is hit, evict the
@@ -491,8 +512,12 @@ async function getOrCreateEntry(
  * silently shrunk by a thread burst.
  */
 async function enforceMaxConcurrent(incomingKey: string): Promise<void> {
-  const settings = getSettings();
-  const cap = settings.pty.maxConcurrent;
+  let cap: number;
+  if (_maxConcurrentOverride != null) {
+    cap = _maxConcurrentOverride;
+  } else {
+    cap = getSettings().pty.maxConcurrent;
+  }
   if (!Number.isFinite(cap) || cap <= 0) return; // disabled
   if (state.ptys.has(incomingKey)) return; // existing key, no new allocation
   if (state.ptys.size < cap) return; // headroom available

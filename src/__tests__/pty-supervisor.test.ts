@@ -22,6 +22,8 @@ import {
   injectSleep,
   resetSleep,
   injectEnsureAgentDir,
+  injectMaxConcurrentForTests,
+  injectMaxRetriesForTests,
   killAllPtys,
   __resetSupervisorForTests,
 } from "../runner/pty-supervisor";
@@ -34,24 +36,6 @@ import {
   type SpawnPty,
 } from "../runner/pty-process";
 import { initConfig, loadSettings, reloadSettings } from "../config";
-import { mkdir } from "fs/promises";
-
-/**
- * Helper for the Phase D kill / LRU tests that need to tweak pty.* without
- * fighting the global settings reload. Writes the supplied object to the
- * worktree's settings.json then reloads. The afterEach hook below restores
- * the empty-object state so subsequent tests see the parser defaults.
- */
-async function writeRawSettingsForKill(obj: unknown): Promise<void> {
-  const settingsDir = join(process.cwd(), ".claude", "claudeclaw");
-  await mkdir(settingsDir, { recursive: true });
-  await Bun.write(join(settingsDir, "settings.json"), JSON.stringify(obj, null, 2) + "\n");
-  await reloadSettings();
-}
-
-async function restoreDefaultSettingsForKill(): Promise<void> {
-  await writeRawSettingsForKill({});
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Test fixtures.
@@ -186,9 +170,6 @@ afterEach(async () => {
   resetSleep();
   await shutdownSupervisor();
   __resetSupervisorForTests();
-  // Phase D: tests that wrote custom settings via writeRawSettingsForKill
-  // must restore defaults so the next test starts clean.
-  await restoreDefaultSettingsForKill();
   // Clean up agent session files created by persistSessionId. The supervisor
   // writes real session.json under agents/<name>/ via createSession, so we
   // remove anything created during the test to keep the repo clean.
@@ -650,7 +631,11 @@ describe("pty-supervisor snapshot", () => {
 
 describe("pty-supervisor maxConcurrent + LRU eviction (Phase D fix #5)", () => {
   it("evicts the LRU ad-hoc PTY when maxConcurrent is hit", async () => {
-    await writeRawSettingsForKill({ pty: { maxConcurrent: 3 } });
+    // Use the test-only override rather than writing to disk —
+    // settings.json is a shared file that other tests may overwrite,
+    // and bun:test runs files in the same process. Direct injection
+    // is deterministic.
+    injectMaxConcurrentForTests(3);
     let now = 1_000_000;
     injectClock(() => now);
 
@@ -680,7 +665,7 @@ describe("pty-supervisor maxConcurrent + LRU eviction (Phase D fix #5)", () => {
   });
 
   it("does not evict named agents — operator slate is sacrosanct", async () => {
-    await writeRawSettingsForKill({ pty: { maxConcurrent: 2 } });
+    injectMaxConcurrentForTests(2);
     let now = 1_000_000;
     injectClock(() => now);
 
@@ -712,7 +697,7 @@ describe("pty-supervisor maxConcurrent + LRU eviction (Phase D fix #5)", () => {
   it("maxConcurrent disabled (0 or negative) does not enforce any cap", async () => {
     // The parser falls back to 32 for invalid values, so we test the
     // "huge cap" case as a proxy for "effectively unbounded".
-    await writeRawSettingsForKill({ pty: { maxConcurrent: 1000 } });
+    injectMaxConcurrentForTests(1000);
 
     const { spawn } = makeSpawnTracker(() => makeFakePty("burst", {}));
     injectSpawnPty(spawn);
@@ -767,7 +752,7 @@ describe("pty-supervisor killAllPtys (Phase D fix #4)", () => {
   it("in-flight runOnPty receives a PtyClosedError when killed mid-turn", async () => {
     // Configure the supervisor with maxRetries=0 so the in-flight
     // PtyClosedError surfaces immediately rather than re-spawn-looping.
-    await writeRawSettingsForKill({ pty: { maxRetries: 0 } });
+    injectMaxRetriesForTests(0);
 
     // Hand-rolled FakePty whose runTurn awaits a manually-resolvable promise.
     // When dispose() fires, we reject the in-flight runTurn with a
