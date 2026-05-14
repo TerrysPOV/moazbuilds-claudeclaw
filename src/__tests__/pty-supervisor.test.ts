@@ -31,7 +31,7 @@ import {
   type PtyProcessOptions,
   type PtyTurnResult,
   type SpawnPty,
-} from "../runner/pty-process.types";
+} from "../runner/pty-process";
 import { initConfig, loadSettings, reloadSettings } from "../config";
 
 // ─────────────────────────────────────────────────────────────────────────────

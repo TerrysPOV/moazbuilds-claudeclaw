@@ -38,7 +38,7 @@ import type {
   PtyProcess,
   PtyProcessOptions,
   SpawnPty,
-} from "../runner/pty-process.types";
+} from "../runner/pty-process";
 
 const SETTINGS_DIR = join(process.cwd(), ".claude", "claudeclaw");
 const SETTINGS_FILE = join(SETTINGS_DIR, "settings.json");

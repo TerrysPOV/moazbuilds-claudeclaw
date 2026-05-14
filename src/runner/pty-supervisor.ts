@@ -36,8 +36,8 @@ import type {
   PtyProcess,
   PtyProcessOptions,
   SpawnPty,
-} from "./pty-process.types";
-import { PtyClosedError, PtyTurnTimeoutError } from "./pty-process.types";
+} from "./pty-process";
+import { PtyClosedError, PtyTurnTimeoutError } from "./pty-process";
 import { getSettings, type SecurityConfig } from "../config";
 import { getSession, createSession } from "../sessions";
 import { getThreadSession, createThreadSession } from "../sessionManager";

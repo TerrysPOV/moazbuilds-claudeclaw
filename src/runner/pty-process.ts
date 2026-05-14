@@ -119,6 +119,13 @@ export interface PtyTurnResult {
   sessionId: string;
 }
 
+/**
+ * Type of the `spawnPty` factory function. Exposed so the supervisor (and
+ * tests) can declare an injectable spawn seam (`injectSpawnPty`) without
+ * importing the concrete `spawnPty` symbol from this file at top-level.
+ */
+export type SpawnPty = (opts: PtyProcessOptions) => Promise<PtyProcess>;
+
 export class PtyTurnTimeoutError extends Error {
   constructor(
     public readonly label: string,
