@@ -133,14 +133,17 @@ console.log("personality updated (" + mode + ")");
 
 #### Option 3 — Add job
 
-Collect: label (validate via `validateJobLabel`), cron (validate via `parseScheduleToCron`), trigger prompt, model (`default`/`opus`/`haiku` — empty for default).
+Collect: label (validate via `validateJobLabel`), cron (validate via `parseScheduleToCron`), **recurring vs one-shot** (use AskUserQuestion — default `Recurring (cron)`; pick `One-shot` only when the user is clear they want a single fire), trigger prompt, model (`default`/`opus`/`haiku` — empty for default).
+
+The recurring step is non-optional: jobs without `recurring: true` are silently converted to one-shots by `src/jobs.ts:clearJobSchedule()` on first fire. Default to `recurring: true` if the user expresses any uncertainty.
 
 ```bash
 bun -e '
 import { readFileSync } from "fs";
 const { addJob } = await import(`${process.env.CLAUDECLAW_ROOT || "."}/src/agents.ts`);
 const j = JSON.parse(readFileSync("/tmp/claudeclaw-update.json", "utf8"));
-await addJob("AGENT_NAME", j.label, j.cron, j.trigger, j.model);
+// Pass recurring explicitly (default true) so the wizard never produces silent one-shots.
+await addJob("AGENT_NAME", j.label, j.cron, j.trigger, j.model, j.recurring ?? true);
 console.log("added " + j.label);
 '
 ```
@@ -159,7 +162,7 @@ console.log("updated " + label);
 '
 ```
 
-`patch` may contain any subset of `{ cron, trigger, enabled, model }`.
+`patch` may contain any subset of `{ cron, trigger, enabled, recurring, model }`. Flipping `recurring` from `false` to `true` re-arms a previously-cleared schedule; the daemon picks it up on the next hot-reload tick.
 
 #### Option 5 — Remove job
 

@@ -319,6 +319,7 @@ describe("Phase 17: multi-job agents", () => {
       expect(job.label).toBe("digest-scan");
       expect(job.cron).toBe("0 9 * * 1-5");
       expect(job.enabled).toBe(true);
+      expect(job.recurring).toBe(true);
       expect(job.model).toBe("opus");
 
       const path = join(AGENTS_DIR, name, "jobs", "digest-scan.md");
@@ -326,9 +327,28 @@ describe("Phase 17: multi-job agents", () => {
       const content = await readFile(path, "utf8");
       expect(content).toContain("label: digest-scan");
       expect(content).toContain("schedule: 0 9 * * 1-5");
+      expect(content).toContain("recurring: true");
       expect(content).toContain("enabled: true");
       expect(content).toContain("model: opus");
       expect(content).toContain("Run the daily digest");
+    });
+
+    it("defaults to recurring: true when caller omits the flag", async () => {
+      const name = uniq("recur-default");
+      await createAgent({ name, role: "x", personality: "y" });
+      const job = await addJob(name, "daily", "0 9 * * *", "fire");
+      expect(job.recurring).toBe(true);
+      const content = await readFile(join(AGENTS_DIR, name, "jobs", "daily.md"), "utf8");
+      expect(content).toContain("recurring: true");
+    });
+
+    it("emits recurring: false for explicit one-shot jobs", async () => {
+      const name = uniq("oneshot");
+      await createAgent({ name, role: "x", personality: "y" });
+      const job = await addJob(name, "once", "0 9 * * *", "fire once", undefined, false);
+      expect(job.recurring).toBe(false);
+      const content = await readFile(join(AGENTS_DIR, name, "jobs", "once.md"), "utf8");
+      expect(content).toContain("recurring: false");
     });
 
     it("throws on duplicate label", async () => {
@@ -393,6 +413,26 @@ describe("Phase 17: multi-job agents", () => {
       const name = uniq("missing");
       await createAgent({ name, role: "x", personality: "y" });
       await expect(updateJob(name, "ghost", { enabled: false })).rejects.toThrow();
+    });
+
+    it("preserves recurring across unrelated patches", async () => {
+      const name = uniq("recur-preserve");
+      await createAgent({ name, role: "x", personality: "y" });
+      await addJob(name, "task", "0 9 * * *", "body", undefined, true);
+      const updated = await updateJob(name, "task", { cron: "0 10 * * *" });
+      expect(updated.recurring).toBe(true);
+      const content = await readFile(join(AGENTS_DIR, name, "jobs", "task.md"), "utf8");
+      expect(content).toContain("recurring: true");
+    });
+
+    it("flips recurring when patched", async () => {
+      const name = uniq("recur-flip");
+      await createAgent({ name, role: "x", personality: "y" });
+      await addJob(name, "task", "0 9 * * *", "body", undefined, false);
+      const updated = await updateJob(name, "task", { recurring: true });
+      expect(updated.recurring).toBe(true);
+      const content = await readFile(join(AGENTS_DIR, name, "jobs", "task.md"), "utf8");
+      expect(content).toContain("recurring: true");
     });
   });
 

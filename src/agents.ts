@@ -211,6 +211,9 @@ export interface AgentJob {
   label: string;
   cron: string;
   enabled: boolean;
+  /** When true, the daemon keeps the cron schedule after each fire. When false,
+   *  jobs.ts:clearJobSchedule() strips the schedule line on first run (one-shot). */
+  recurring: boolean;
   model?: string;
   trigger: string;
   path: string;
@@ -473,11 +476,18 @@ function renderClaudeMd(opts: AgentCreateOpts): string {
   return lines.join("\n");
 }
 
-function renderJobFile(label: string, cron: string, trigger: string, model?: string): string {
+function renderJobFile(
+  label: string,
+  cron: string,
+  trigger: string,
+  model?: string,
+  recurring: boolean = true,
+): string {
   const lines = [
     `---`,
     `label: ${label}`,
     `schedule: ${cron}`,
+    `recurring: ${recurring}`,
     `enabled: true`,
   ];
   if (model) lines.push(`model: ${model}`);
@@ -491,7 +501,7 @@ function parseFrontmatterValue(raw: string): string {
 
 function parseJobFileContent(
   content: string
-): { label: string; cron: string; enabled: boolean; model?: string; trigger: string } | null {
+): { label: string; cron: string; enabled: boolean; recurring: boolean; model?: string; trigger: string } | null {
   const match = content.match(/^---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/);
   if (!match) return null;
   const fm = match[1];
@@ -518,10 +528,19 @@ function parseJobFileContent(
     if (v === "false" || v === "no" || v === "0") enabled = false;
   }
 
+  // Default false for legacy jobs without the field — preserves prior behaviour
+  // where jobs.ts:clearJobSchedule() strips schedule: on first fire.
+  const recurringLine = lines.find((l) => l.startsWith("recurring:"));
+  let recurring = false;
+  if (recurringLine) {
+    const v = parseFrontmatterValue(recurringLine.replace("recurring:", "")).toLowerCase();
+    recurring = v === "true" || v === "yes" || v === "1";
+  }
+
   const modelLine = lines.find((l) => l.startsWith("model:"));
   const model = modelLine ? parseFrontmatterValue(modelLine.replace("model:", "")) || undefined : undefined;
 
-  return { label, cron, enabled, model, trigger };
+  return { label, cron, enabled, recurring, model, trigger };
 }
 
 function validateCronOrThrow(cron: string): void {
@@ -551,7 +570,8 @@ export async function addJob(
   label: string,
   cron: string,
   trigger: string,
-  model?: string
+  model?: string,
+  recurring: boolean = true,
 ): Promise<AgentJob> {
   // Verify agent exists
   await loadAgent(agentName);
@@ -567,15 +587,15 @@ export async function addJob(
     throw new Error(`job ${label} already exists for agent ${agentName}`);
   }
 
-  await writeFile(path, renderJobFile(label, cron, trigger, model), "utf8");
+  await writeFile(path, renderJobFile(label, cron, trigger, model, recurring), "utf8");
 
-  return { label, cron, enabled: true, model, trigger, path };
+  return { label, cron, enabled: true, recurring, model, trigger, path };
 }
 
 export async function updateJob(
   agentName: string,
   label: string,
-  patch: { cron?: string; trigger?: string; enabled?: boolean; model?: string }
+  patch: { cron?: string; trigger?: string; enabled?: boolean; recurring?: boolean; model?: string }
 ): Promise<AgentJob> {
   const path = jobFilePath(agentName, label);
   if (!existsSync(path)) {
@@ -589,17 +609,19 @@ export async function updateJob(
     label: parsed.label,
     cron: patch.cron ?? parsed.cron,
     enabled: patch.enabled ?? parsed.enabled,
+    recurring: patch.recurring ?? parsed.recurring,
     model: patch.model !== undefined ? patch.model : parsed.model,
     trigger: patch.trigger ?? parsed.trigger,
   };
 
   if (patch.cron !== undefined) validateCronOrThrow(merged.cron);
 
-  // Render preserving enabled flag
+  // Render preserving recurring + enabled flags
   const lines = [
     `---`,
     `label: ${merged.label}`,
     `schedule: ${merged.cron}`,
+    `recurring: ${merged.recurring}`,
     `enabled: ${merged.enabled}`,
   ];
   if (merged.model) lines.push(`model: ${merged.model}`);

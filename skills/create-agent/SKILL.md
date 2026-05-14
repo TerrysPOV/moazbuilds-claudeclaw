@@ -101,8 +101,12 @@ For each task:
    bun -e 'const {parseScheduleToCron} = await import(`${process.env.CLAUDECLAW_ROOT || "."}/src/agents.ts`); console.log(parseScheduleToCron("USER_INPUT"));'
    ```
    If `null`, re-ask with examples.
-3. **Trigger prompt** — "What should the agent do when this fires? (multi-line ok — write to a temp file if helpful)"
-4. **Model** — "Which model? (`default` / `opus` / `haiku` — press enter for default)"
+3. **Recurring or one-shot** — "Should this fire on every schedule tick, or just once?"
+   - Use **AskUserQuestion** with options: `Recurring (cron)` (default) and `One-shot (fire once, then clear schedule)`.
+   - Set `recurring: true` for `Recurring`, `recurring: false` for `One-shot`.
+   - **Why this matters:** `src/jobs.ts:clearJobSchedule()` strips the `schedule:` line on the first fire of any job without `recurring: true`, converting it to a one-shot. A wizard job that the user expects to recur (the common case) MUST be written with `recurring: true` or it silently becomes a one-shot after the first run. Setting this explicitly is the fix for the silent-strip footgun.
+4. **Trigger prompt** — "What should the agent do when this fires? (multi-line ok — write to a temp file if helpful)"
+5. **Model** — "Which model? (`default` / `opus` / `haiku` — press enter for default)"
 
 Then: "Add another task? (y/n)" — loop or break out.
 
@@ -126,7 +130,7 @@ Once all answers are in and the user confirmed the review block, **write them to
 #      "dataSources": "...",
 #      "defaultModel": "opus",   // optional — omit for daemon default
 #      "jobs": [
-#        { "label": "digest-scan", "cron": "0 9 * * *", "trigger": "...", "model": "opus" },
+#        { "label": "digest-scan", "cron": "0 9 * * *", "recurring": true, "trigger": "...", "model": "opus" },
 #        ...
 #      ]
 #    }
@@ -146,7 +150,10 @@ const ctx = await createAgent({
   defaultModel: cfg.defaultModel,
 });
 for (const job of cfg.jobs) {
-  await addJob(ctx.name, job.label, job.cron, job.trigger, job.model);
+  // Pass recurring through so the wizard does not silently produce one-shot jobs.
+  // addJob defaults to recurring=true if omitted, but the wizard must capture the
+  // user choice explicitly per the Q3 step above.
+  await addJob(ctx.name, job.label, job.cron, job.trigger, job.model, job.recurring ?? true);
 }
 console.log(JSON.stringify({ agent: ctx.name, jobs: cfg.jobs.map(j => j.label) }, null, 2));
 '
@@ -154,7 +161,7 @@ console.log(JSON.stringify({ agent: ctx.name, jobs: cfg.jobs.map(j => j.label) }
 
 Notes:
 - `createAgent()` handles IDENTITY.md, SOUL.md (Personality + Workflow markers), CLAUDE.md, MEMORY.md, session.json, .gitignore.
-- `addJob()` writes each scheduled task to `agents/<name>/jobs/<label>.md` with frontmatter (label, cron, enabled, model).
+- `addJob()` writes each scheduled task to `agents/<name>/jobs/<label>.md` with frontmatter (label, cron, recurring, enabled, model). When `recurring: true` (the wizard default), the daemon preserves the schedule across fires. When `recurring: false`, the daemon clears the schedule on first fire (one-shot).
 - **Do not use the Write tool to write any of the agent files** — let the helpers do it. The only file you write is the temp JSON.
 - If there are zero jobs, the loop just doesn't execute and the agent is ad-hoc only.
 
