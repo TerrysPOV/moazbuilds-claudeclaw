@@ -1,0 +1,7 @@
+{
+  "markBeforePrompt": 3703,
+  "markAfterResponse": 16831,
+  "totalBytes": 34693,
+  "prompt1": "hello, please reply with the word ack\\r",
+  "prompt2": "say goodbye\\r"
+}
