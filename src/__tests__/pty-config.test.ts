@@ -149,11 +149,38 @@ describe("parseSettings — pty defaults", () => {
         turnIdleTimeoutMs: 5000,
         cols: 100,
         rows: 30,
+        maxConcurrent: 32,
       },
     };
     await writeRawSettings(explicitDefaults);
     await reloadSettings();
     expect(getSettings().pty).toEqual(explicitDefaults.pty);
+  });
+
+  it("defaults maxConcurrent to 32 when omitted", async () => {
+    await writeRawSettings({});
+    await reloadSettings();
+    expect(getSettings().pty.maxConcurrent).toBe(32);
+  });
+
+  it("accepts custom maxConcurrent when finite and positive", async () => {
+    await writeRawSettings({ pty: { maxConcurrent: 8 } });
+    await reloadSettings();
+    expect(getSettings().pty.maxConcurrent).toBe(8);
+  });
+
+  it("rejects invalid maxConcurrent values, falls back to default", async () => {
+    await writeRawSettings({ pty: { maxConcurrent: -5 } });
+    await reloadSettings();
+    expect(getSettings().pty.maxConcurrent).toBe(32);
+
+    await writeRawSettings({ pty: { maxConcurrent: 0 } });
+    await reloadSettings();
+    expect(getSettings().pty.maxConcurrent).toBe(32);
+
+    await writeRawSettings({ pty: { maxConcurrent: "lots" as unknown as number } });
+    await reloadSettings();
+    expect(getSettings().pty.maxConcurrent).toBe(32);
   });
 });
 

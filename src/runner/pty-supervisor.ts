@@ -31,6 +31,18 @@
  *   - Settings are re-read via getSettings() on every call — never cached
  *     across calls — so hot-reload works. The reap interval is rebuilt
  *     whenever initSupervisor() is called with a new idleReapMinutes.
+ *
+ *   - Phase D fix #5 (FA-3a): `settings.pty.maxConcurrent` (default 32) caps
+ *     the number of concurrent live PTYs. On overflow, the LRU AD-HOC PTY is
+ *     evicted (disposed + entry removed). Named agents are exempt — they're
+ *     the operator-configured slate and shouldn't shrink under thread burst.
+ *
+ *   - Phase D fix #4 (FA-6a): `killAllPtys()` is exposed so `runner.ts:
+ *     killActive()` (the `/kill` command) can dispose every live PTY. The
+ *     in-flight turn surfaces a `PtyClosedError`, mirroring how `/kill`
+ *     behaves against legacy `Bun.spawn` subprocesses. Session IDs survive
+ *     on disk via the Claude Code JSONL; the next event for the same key
+ *     re-spawns and `--resume`s.
  */
 import type {
   PtyProcess,
@@ -223,6 +235,9 @@ interface PtyEntry {
   spawnOpts: PtyProcessOptions | null;
   /** Per-key serial lock. The promise resolves once the in-flight turn finishes. */
   lock: Promise<void>;
+  /** Last time `runOnPty` was called against this key. Drives LRU eviction
+   *  when `pty.maxConcurrent` is hit. Adhoc-only — named agents are exempt. */
+  lastAccessedAt: number;
 }
 
 interface SupervisorState {
@@ -392,8 +407,14 @@ export async function runOnPty(
 ): Promise<RunOnPtyResult> {
   const supervisorOpts = readSupervisorOptions();
 
+  // Phase D fix #5: enforce maxConcurrent cap with LRU eviction BEFORE
+  // allocating a new entry. Named agents are exempt — they're always-alive
+  // by design.
+  await enforceMaxConcurrent(sessionKey);
+
   // Per-key serial lock. Different keys proceed in parallel.
   const entry = await getOrCreateEntry(sessionKey, opts);
+  entry.lastAccessedAt = _clock();
   const previousLock = entry.lock;
   let release: () => void = () => {};
   entry.lock = new Promise<void>((resolve) => {
@@ -451,9 +472,57 @@ async function getOrCreateEntry(
     pty: null,
     spawnOpts: null,
     lock: Promise.resolve(),
+    lastAccessedAt: _clock(),
   };
   state.ptys.set(sessionKey, entry);
   return entry;
+}
+
+/**
+ * Phase D fix #5 (FA-3a): cap the number of concurrent live PTYs to
+ * `settings.pty.maxConcurrent`. When the cap is hit, evict the
+ * least-recently-accessed AD-HOC PTY (named agents are exempt — they're
+ * marked `namedAgentsAlwaysAlive` by design). The evicted PTY is disposed
+ * and its entry removed from the state map.
+ *
+ * If the cap is hit but EVERY entry is exempt (all named agents) or the
+ * incoming key is for a named agent that doesn't yet exist, we let it through
+ * — the operator's named-agent slate is the source of truth and shouldn't be
+ * silently shrunk by a thread burst.
+ */
+async function enforceMaxConcurrent(incomingKey: string): Promise<void> {
+  const settings = getSettings();
+  const cap = settings.pty.maxConcurrent;
+  if (!Number.isFinite(cap) || cap <= 0) return; // disabled
+  if (state.ptys.has(incomingKey)) return; // existing key, no new allocation
+  if (state.ptys.size < cap) return; // headroom available
+
+  // Find LRU candidate among adhoc entries (skip named + global).
+  let lruEntry: PtyEntry | null = null;
+  for (const entry of state.ptys.values()) {
+    if (entry.kind !== "adhoc") continue;
+    if (!lruEntry || entry.lastAccessedAt < lruEntry.lastAccessedAt) {
+      lruEntry = entry;
+    }
+  }
+
+  if (!lruEntry) {
+    // Nothing evictable — let the new spawn proceed (operator-configured
+    // named agents are sacrosanct). The state.ptys.size will temporarily
+    // exceed cap; the next idle-reap pass will catch up if any entry
+    // becomes idle.
+    return;
+  }
+
+  // Dispose and remove. Errors are best-effort.
+  if (lruEntry.pty) {
+    try {
+      await lruEntry.pty.dispose();
+    } catch {
+      // ignore
+    }
+  }
+  state.ptys.delete(lruEntry.sessionKey);
 }
 
 async function buildSpawnOptions(

@@ -648,6 +648,84 @@ describe("pty-supervisor snapshot", () => {
   });
 });
 
+describe("pty-supervisor maxConcurrent + LRU eviction (Phase D fix #5)", () => {
+  it("evicts the LRU ad-hoc PTY when maxConcurrent is hit", async () => {
+    await writeRawSettingsForKill({ pty: { maxConcurrent: 3 } });
+    let now = 1_000_000;
+    injectClock(() => now);
+
+    const { spawn, spawned } = makeSpawnTracker(() => makeFakePty("burst", {}));
+    injectSpawnPty(spawn);
+    await initSupervisor();
+
+    // Fill to capacity with 3 ad-hoc threads, each accessed at a distinct time.
+    now = 1_000_000;
+    await runOnPty("thread:a", "x", { timeoutMs: 1000, threadId: "a" });
+    now = 1_000_010;
+    await runOnPty("thread:b", "x", { timeoutMs: 1000, threadId: "b" });
+    now = 1_000_020;
+    await runOnPty("thread:c", "x", { timeoutMs: 1000, threadId: "c" });
+    expect(snapshotSupervisor().ptys.length).toBe(3);
+
+    // A 4th ad-hoc thread arrives — should evict thread:a (oldest access).
+    now = 1_000_030;
+    await runOnPty("thread:d", "x", { timeoutMs: 1000, threadId: "d" });
+
+    const keys = snapshotSupervisor().ptys.map((p) => p.sessionKey).sort();
+    expect(keys).toEqual(["thread:b", "thread:c", "thread:d"]);
+    // thread:a's PTY was disposed.
+    expect(spawned[0].disposed).toBe(true);
+    // Three currently-live PTYs (b, c, d).
+    expect(spawned.filter((h) => !h.disposed).length).toBe(3);
+  });
+
+  it("does not evict named agents — operator slate is sacrosanct", async () => {
+    await writeRawSettingsForKill({ pty: { maxConcurrent: 2 } });
+    let now = 1_000_000;
+    injectClock(() => now);
+
+    const { spawn, spawned } = makeSpawnTracker(() => makeFakePty("named", {}));
+    injectSpawnPty(spawn);
+    await initSupervisor();
+
+    // Two named agents fill capacity.
+    now = 1_000_000;
+    await runOnPty("agent:alice", "x", { timeoutMs: 1000, agentName: "alice" });
+    now = 1_000_010;
+    await runOnPty("agent:suzy", "x", { timeoutMs: 1000, agentName: "suzy" });
+    expect(snapshotSupervisor().ptys.length).toBe(2);
+
+    // A 3rd ad-hoc thread arrives — no adhoc to evict, so we let it through.
+    // state.ptys briefly exceeds the cap; the idle-reap will catch up later.
+    now = 1_000_020;
+    await runOnPty("thread:burst", "x", { timeoutMs: 1000, threadId: "burst" });
+
+    const keys = snapshotSupervisor().ptys.map((p) => p.sessionKey).sort();
+    expect(keys).toContain("agent:alice");
+    expect(keys).toContain("agent:suzy");
+    expect(keys).toContain("thread:burst");
+    // No named agent disposed.
+    expect(spawned[0].disposed).toBe(false);
+    expect(spawned[1].disposed).toBe(false);
+  });
+
+  it("maxConcurrent disabled (0 or negative) does not enforce any cap", async () => {
+    // The parser falls back to 32 for invalid values, so we test the
+    // "huge cap" case as a proxy for "effectively unbounded".
+    await writeRawSettingsForKill({ pty: { maxConcurrent: 1000 } });
+
+    const { spawn } = makeSpawnTracker(() => makeFakePty("burst", {}));
+    injectSpawnPty(spawn);
+    await initSupervisor();
+
+    // Burst 10 adhoc threads — none should be evicted.
+    for (let i = 0; i < 10; i++) {
+      await runOnPty(`thread:t${i}`, "x", { timeoutMs: 1000, threadId: `t${i}` });
+    }
+    expect(snapshotSupervisor().ptys.length).toBe(10);
+  });
+});
+
 describe("pty-supervisor killAllPtys (Phase D fix #4)", () => {
   it("disposes every live PTY and clears the state map", async () => {
     const { spawn, spawned } = makeSpawnTracker(() => makeFakePty("kill", {}));

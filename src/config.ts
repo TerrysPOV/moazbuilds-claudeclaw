@@ -97,6 +97,7 @@ const DEFAULT_SETTINGS: Settings = {
     turnIdleTimeoutMs: 5000,
     cols: 100,
     rows: 30,
+    maxConcurrent: 32,
   },
   watchdog: { maxConsecutiveTimeouts: null, maxRuntimeSeconds: null },
   session: { autoRotate: false, maxMessages: 50, maxAgeHours: 24, summaryPath: "" },
@@ -208,6 +209,14 @@ export interface PtyConfig {
   cols: number;
   /** Initial PTY rows. Default: 30. */
   rows: number;
+  /**
+   * Hard cap on concurrent live PTYs. When the cap is hit, the supervisor
+   * evicts the LRU ad-hoc PTY (named agents are exempt — they're guarded by
+   * `namedAgentsAlwaysAlive`). Prevents a Discord/Telegram thread burst from
+   * accumulating dozens of idle `claude` processes faster than the 30-min
+   * idle-reaper can clear them. Default: 32.
+   */
+  maxConcurrent: number;
 }
 
 export interface Settings {
@@ -470,6 +479,8 @@ function parseSettings(
         ? Number(raw.pty.turnIdleTimeoutMs) : 5000,
       cols: Number.isFinite(raw.pty?.cols) && Number(raw.pty.cols) >= 40 ? Number(raw.pty.cols) : 100,
       rows: Number.isFinite(raw.pty?.rows) && Number(raw.pty.rows) >= 10 ? Number(raw.pty.rows) : 30,
+      maxConcurrent: Number.isFinite(raw.pty?.maxConcurrent) && Number(raw.pty.maxConcurrent) > 0
+        ? Number(raw.pty.maxConcurrent) : 32,
     },
     watchdog: parseWatchdogConfig(raw.watchdog),
     plugins: parsePlugins(raw.plugins),
