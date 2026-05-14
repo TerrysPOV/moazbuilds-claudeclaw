@@ -296,6 +296,48 @@ export async function shutdownSupervisor(): Promise<void> {
 }
 
 /**
+ * Phase D fix #4: dispose every live PTY managed by the supervisor.
+ *
+ * Called from `runner.ts:killActive()` so that `/kill` reaches PTY-mode
+ * sessions. Tradeoff:
+ *   - Destroying a PTY mid-turn surfaces `PtyClosedError` to the in-flight
+ *     `runOnPty` caller (the supervisor's per-key serial lock guarantees the
+ *     promise has a resolver). execClaude then propagates the failure to the
+ *     user just like a `/kill` against the legacy `Bun.spawn` path does today.
+ *   - The PTY is gone — the conversation session ID survives on disk (Claude
+ *     Code keeps the JSONL), so the next event for the same `sessionKey`
+ *     re-spawns and `--resume`s. Conversation context is preserved; the
+ *     in-flight turn alone is aborted.
+ *   - Named agents are NOT exempt here. `/kill` is an explicit operator
+ *     command and should resolve a stuck named-agent PTY just as it does a
+ *     stuck ad-hoc thread. The auditor's argument (FA-6a) is the load-bearing
+ *     one: silent no-op `/kill` is worse than session loss when an agent is
+ *     genuinely wedged.
+ *
+ * Returns the number of PTYs that were disposed. Best-effort: errors from
+ * `dispose()` are swallowed.
+ */
+export async function killAllPtys(): Promise<number> {
+  const entries = [...state.ptys.values()];
+  if (entries.length === 0) return 0;
+  let killed = 0;
+  const disposals: Promise<void>[] = [];
+  for (const entry of entries) {
+    if (entry.pty) {
+      killed += 1;
+      disposals.push(
+        entry.pty.dispose().catch(() => {
+          // best-effort
+        }),
+      );
+    }
+    state.ptys.delete(entry.sessionKey);
+  }
+  await Promise.allSettled(disposals);
+  return killed;
+}
+
+/**
  * Snapshot of supervisor state for /status and tests.
  * Order-stable: sorted by sessionKey.
  */

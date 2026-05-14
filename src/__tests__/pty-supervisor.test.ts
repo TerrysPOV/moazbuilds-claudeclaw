@@ -22,6 +22,7 @@ import {
   injectSleep,
   resetSleep,
   injectEnsureAgentDir,
+  killAllPtys,
   __resetSupervisorForTests,
 } from "../runner/pty-supervisor";
 import {
@@ -33,6 +34,24 @@ import {
   type SpawnPty,
 } from "../runner/pty-process";
 import { initConfig, loadSettings, reloadSettings } from "../config";
+import { mkdir } from "fs/promises";
+
+/**
+ * Helper for the Phase D kill / LRU tests that need to tweak pty.* without
+ * fighting the global settings reload. Writes the supplied object to the
+ * worktree's settings.json then reloads. The afterEach hook below restores
+ * the empty-object state so subsequent tests see the parser defaults.
+ */
+async function writeRawSettingsForKill(obj: unknown): Promise<void> {
+  const settingsDir = join(process.cwd(), ".claude", "claudeclaw");
+  await mkdir(settingsDir, { recursive: true });
+  await Bun.write(join(settingsDir, "settings.json"), JSON.stringify(obj, null, 2) + "\n");
+  await reloadSettings();
+}
+
+async function restoreDefaultSettingsForKill(): Promise<void> {
+  await writeRawSettingsForKill({});
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Test fixtures.
@@ -167,6 +186,9 @@ afterEach(async () => {
   resetSleep();
   await shutdownSupervisor();
   __resetSupervisorForTests();
+  // Phase D: tests that wrote custom settings via writeRawSettingsForKill
+  // must restore defaults so the next test starts clean.
+  await restoreDefaultSettingsForKill();
   // Clean up agent session files created by persistSessionId. The supervisor
   // writes real session.json under agents/<name>/ via createSession, so we
   // remove anything created during the test to keep the repo clean.
@@ -623,6 +645,101 @@ describe("pty-supervisor snapshot", () => {
       "global",
       "thread:b",
     ]);
+  });
+});
+
+describe("pty-supervisor killAllPtys (Phase D fix #4)", () => {
+  it("disposes every live PTY and clears the state map", async () => {
+    const { spawn, spawned } = makeSpawnTracker(() => makeFakePty("kill", {}));
+    injectSpawnPty(spawn);
+    await initSupervisor();
+
+    await runOnPty("global", "a", { timeoutMs: 1000 });
+    await runOnPty("thread:t1", "b", { timeoutMs: 1000, threadId: "t1" });
+    await runOnPty("agent:talon", "c", { timeoutMs: 1000, agentName: "talon" });
+    expect(snapshotSupervisor().ptys.length).toBe(3);
+
+    const killed = await killAllPtys();
+    expect(killed).toBe(3);
+    expect(snapshotSupervisor().ptys.length).toBe(0);
+    for (const handle of spawned) {
+      expect(handle.disposed).toBe(true);
+    }
+  });
+
+  it("returns 0 and is a no-op when no PTYs are alive", async () => {
+    await initSupervisor();
+    const killed = await killAllPtys();
+    expect(killed).toBe(0);
+  });
+
+  it("named-agent PTYs are NOT exempt from /kill (auditor's load-bearing argument)", async () => {
+    const { spawn, spawned } = makeSpawnTracker(() => makeFakePty("named", {}));
+    injectSpawnPty(spawn);
+    await initSupervisor();
+
+    await runOnPty("agent:stuck", "ping", { timeoutMs: 1000, agentName: "stuck" });
+    expect(snapshotSupervisor().ptys[0].kind).toBe("named");
+
+    await killAllPtys();
+    expect(spawned[0].disposed).toBe(true);
+    expect(snapshotSupervisor().ptys.length).toBe(0);
+  });
+
+  it("in-flight runOnPty receives a PtyClosedError when killed mid-turn", async () => {
+    // Configure the supervisor with maxRetries=0 so the in-flight
+    // PtyClosedError surfaces immediately rather than re-spawn-looping.
+    await writeRawSettingsForKill({ pty: { maxRetries: 0 } });
+
+    // Hand-rolled FakePty whose runTurn awaits a manually-resolvable promise.
+    // When dispose() fires, we reject the in-flight runTurn with a
+    // PtyClosedError to mirror real pty-process.ts semantics.
+    let rejectInFlight: ((err: Error) => void) | null = null;
+    let alive = true;
+    let disposed = false;
+    const handle = {
+      label: "in-flight",
+      pid: 4242,
+      sessionId: "s",
+      cwd: "/tmp",
+      isAlive: () => alive,
+      lastTurnEndedAt: () => 0,
+      async runTurn() {
+        return new Promise((_resolve, reject) => {
+          rejectInFlight = reject;
+        });
+      },
+      async dispose() {
+        alive = false;
+        disposed = true;
+        if (rejectInFlight) {
+          rejectInFlight(new PtyClosedError("in-flight", null, "SIGTERM"));
+          rejectInFlight = null;
+        }
+      },
+    } as unknown as FakePtyHandle;
+
+    const spawn: SpawnPty = async () => handle;
+    injectSpawnPty(spawn);
+    injectSleep(async () => {});
+    await initSupervisor();
+
+    // Run a turn that will block on the manual promise.
+    const inflight = runOnPty("global", "block", { timeoutMs: 60_000 });
+    // Let the supervisor place the spawn and start runTurn.
+    await new Promise<void>((r) => setTimeout(r, 30));
+
+    // Now kill — the dispose() above will reject the in-flight promise.
+    const killed = await killAllPtys();
+    expect(killed).toBe(1);
+    expect(disposed).toBe(true);
+
+    // With maxRetries=0, PtyClosedError surfaces as the structured
+    // errorResult (exitCode=1) — that's the contract the operator-facing
+    // /kill needs to surface.
+    const result = await inflight;
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toMatch(/max retries|PTY|closed/i);
   });
 });
 
