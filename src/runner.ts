@@ -35,6 +35,7 @@ import { loadAgent } from "./agents";
 import { selectModel } from "./model-router";
 import { recordResult, abortReason, clearSession, startSession } from "./watchdog";
 import { getPluginManager, type EventContext } from "./plugins";
+import { runOnPty } from "./runner/pty-supervisor";
 
 const LOGS_DIR = join(process.cwd(), ".claude/claudeclaw/logs");
 
@@ -1348,7 +1349,40 @@ async function execClaude(
     }
   } catch {}
 
-  let exec = await runClaudeStream(args, primaryConfig.model, primaryConfig.api, baseEnv, timeoutMs, spawnCwd, onChunk, onToolEvent);
+  // ──────────────────────────────────────────────────────────────────────────
+  // PTY routing decision (SPEC §5.2 + §7.1).
+  //
+  // Order of precedence:
+  //   1. `name === "bootstrap"` → ALWAYS legacy `runClaudeStream` (§7.1).
+  //      The bootstrap call seeds a fresh global session and is low-volume;
+  //      keeping it on the legacy path simplifies the supervisor.
+  //   2. `settings.pty.enabled === false` → legacy `runClaudeStream` (§5.2).
+  //   3. Otherwise → `runOnPty(sessionKey, …)` against the supervisor.
+  //
+  // Downstream logic (rate-limit fallback, corruption recovery, stale-session
+  // recovery) is unchanged — it consumes `exec` with the same shape regardless.
+  // Per §5.3 the stale-session retry path explicitly uses runClaudeStream
+  // directly, so we don't compound supervisor recovery with downstream recovery.
+  const isInfraCall = name === "bootstrap";
+  const useLegacyPath = !settings.pty.enabled || isInfraCall;
+  let exec: { rawStdout: string; stderr: string; exitCode: number; sessionId?: string };
+  if (useLegacyPath) {
+    exec = await runClaudeStream(args, primaryConfig.model, primaryConfig.api, baseEnv, timeoutMs, spawnCwd, onChunk, onToolEvent);
+  } else {
+    const sessionKey = threadId
+      ? `thread:${threadId}`
+      : agentName
+        ? `agent:${agentName}`
+        : "global";
+    exec = await runOnPty(sessionKey, prompt, {
+      timeoutMs,
+      threadId,
+      agentName,
+      modelOverride: modelOverride ?? undefined,
+      onChunk,
+      onToolEvent,
+    });
+  }
   const primaryRateLimit = extractRateLimitMessage(exec.rawStdout, exec.stderr);
   let usedFallback = false;
 
