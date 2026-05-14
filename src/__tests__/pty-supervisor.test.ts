@@ -625,3 +625,49 @@ describe("pty-supervisor snapshot", () => {
     ]);
   });
 });
+
+describe("pty-supervisor env-sanitisation (Phase D fix #1)", () => {
+  it("strips ANTHROPIC_API_KEY (and the other Claude Code internals) from spawned PTY env", async () => {
+    // Capture the env that the supervisor passes through to spawn.
+    let capturedEnv: Record<string, string> | undefined;
+    const { spawn } = makeSpawnTracker((opts) => {
+      capturedEnv = opts.env;
+      return makeFakePty("env-check", {});
+    });
+    injectSpawnPty(spawn);
+    await initSupervisor();
+
+    // Pollute process.env with the keys that MUST be stripped.
+    const originals: Record<string, string | undefined> = {};
+    const polluted = {
+      ANTHROPIC_API_KEY: "sk-ant-test-secret-do-not-leak",
+      CLAUDECODE: "1",
+      CLAUDE_CODE_OAUTH_TOKEN: "oauth-test-token",
+      CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "true",
+      // Control key — should NOT be stripped.
+      __PTY_TEST_BENIGN_KEY: "stay-in-env",
+    };
+    for (const [k, v] of Object.entries(polluted)) {
+      originals[k] = process.env[k];
+      process.env[k] = v;
+    }
+
+    try {
+      await runOnPty("global", "test prompt", { timeoutMs: 1000 });
+      expect(capturedEnv).toBeDefined();
+      // The whole point of this fix: ANTHROPIC_API_KEY must NOT leak through.
+      expect(capturedEnv!["ANTHROPIC_API_KEY"]).toBeUndefined();
+      // The other Claude Code internals must also be stripped.
+      expect(capturedEnv!["CLAUDECODE"]).toBeUndefined();
+      expect(capturedEnv!["CLAUDE_CODE_OAUTH_TOKEN"]).toBeUndefined();
+      expect(capturedEnv!["CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST"]).toBeUndefined();
+      // Unrelated env vars should pass through unmodified.
+      expect(capturedEnv!["__PTY_TEST_BENIGN_KEY"]).toBe("stay-in-env");
+    } finally {
+      for (const [k, v] of Object.entries(originals)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+  });
+});

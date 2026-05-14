@@ -64,6 +64,27 @@ export function injectEnsureAgentDir(fn: EnsureAgentDirFn | null): void {
   _ensureAgentDir = fn;
 }
 
+// Lazy import of the canonical env-sanitiser from runner.ts (same
+// circular-import dance as ensureAgentDir). Phase D fix #1: keep one source
+// of truth for the strip list so ANTHROPIC_API_KEY can't silently leak into
+// PTY spawns and bypass the OAuth billing path.
+type CleanSpawnEnvFn = () => Record<string, string>;
+let _cleanSpawnEnv: CleanSpawnEnvFn | null = null;
+async function getCleanSpawnEnv(): Promise<CleanSpawnEnvFn> {
+  if (_cleanSpawnEnv) return _cleanSpawnEnv;
+  const mod = (await import("../runner")) as { cleanSpawnEnv?: CleanSpawnEnvFn };
+  if (!mod.cleanSpawnEnv) {
+    throw new Error("[pty-supervisor] runner.ts does not export cleanSpawnEnv");
+  }
+  _cleanSpawnEnv = mod.cleanSpawnEnv;
+  return _cleanSpawnEnv;
+}
+
+/** For tests only. Stub the runner helper (cleanSpawnEnv). */
+export function injectCleanSpawnEnv(fn: CleanSpawnEnvFn | null): void {
+  _cleanSpawnEnv = fn;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Types — frozen by SPEC §3.2.
 
@@ -154,6 +175,7 @@ export function __resetSupervisorForTests(): void {
   state.initialised = false;
   _spawnPty = null;
   _ensureAgentDir = null;
+  _cleanSpawnEnv = null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -379,13 +401,17 @@ async function buildSpawnOptions(
     sessionId = g?.sessionId ?? "";
   }
 
+  // Phase D fix #1: canonical env-sanitiser from runner.ts. Don't reinvent
+  // the strip list — divergence here re-introduces the ANTHROPIC_API_KEY
+  // billing leak.
+  const cleanEnv = await getCleanSpawnEnv();
   return {
     sessionId,
     cwd,
     agentName: entry.agentName,
     modelOverride: modelOverride ?? undefined,
     security: cloneSecurity(security),
-    env: cleanSpawnEnv(),
+    env: cleanEnv(),
     cols: settings.pty.cols,
     rows: settings.pty.rows,
     turnIdleTimeoutMs: settings.pty.turnIdleTimeoutMs,
@@ -400,23 +426,12 @@ function cloneSecurity(security: SecurityConfig): SecurityConfig {
   };
 }
 
-/**
- * Build a child env dict from process.env, dropping the Claude Code internal
- * vars that would confuse the spawned `claude` if leaked. Mirrors what
- * `runner.ts:cleanSpawnEnv()` does for the legacy path, but kept local so the
- * supervisor doesn't need to import internal helpers from runner.ts.
- */
-function cleanSpawnEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [k, v] of Object.entries(process.env)) {
-    if (v === undefined) continue;
-    if (k === "CLAUDECODE") continue;
-    if (k === "CLAUDE_CODE_OAUTH_TOKEN") continue;
-    if (k.startsWith("CLAUDE_CODE_")) continue;
-    env[k] = v;
-  }
-  return env;
-}
+// Note: the supervisor consumes runner.ts's `cleanSpawnEnv` via the lazy
+// import in `getCleanSpawnEnv()`. The old local copy was deleted in Phase D
+// because it diverged from the canonical strip list (missing
+// `ANTHROPIC_API_KEY`), which silently re-introduced API-credit billing on
+// every PTY spawn. Don't add a local copy — always go through
+// `getCleanSpawnEnv()`.
 
 async function ensureSpawnPty(): Promise<SpawnPty> {
   if (_spawnPty) return _spawnPty;

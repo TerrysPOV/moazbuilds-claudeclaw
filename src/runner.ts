@@ -126,7 +126,14 @@ const COMPACT_TIMEOUT_ENABLED = true;
  * object — no shell, no OS-specific calls. The `claude` CLI it spawns then
  * resolves credentials using its own per-platform code path.
  */
-function cleanSpawnEnv(): Record<string, string> {
+/**
+ * Build a sanitised env dict for any spawned `claude` (both `claude -p`
+ * subprocess and PTY supervisor). Exported as the single source of truth —
+ * the supervisor MUST import this rather than maintain a parallel strip list,
+ * or `ANTHROPIC_API_KEY` will silently leak into PTY-mode spawns and bill
+ * against raw API credits instead of the operator's subscription.
+ */
+export function cleanSpawnEnv(): Record<string, string> {
   const stripped = new Set([
     "CLAUDECODE",
     "CLAUDE_CODE_OAUTH_TOKEN",
