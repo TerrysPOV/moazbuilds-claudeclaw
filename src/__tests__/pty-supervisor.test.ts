@@ -626,6 +626,35 @@ describe("pty-supervisor snapshot", () => {
   });
 });
 
+describe("pty-supervisor security-args (Phase D fix #3)", () => {
+  it("threads caller-supplied securityArgs through to PtyProcessOptions verbatim", async () => {
+    let captured: PtyProcessOptions | undefined;
+    const { spawn } = makeSpawnTracker((opts) => {
+      captured = opts;
+      return makeFakePty("security-args", {});
+    });
+    injectSpawnPty(spawn);
+    await initSupervisor();
+
+    // Simulate the canonical runner.ts:buildSecurityArgs output for
+    // permissionMode = "plan" + security.level = "locked".
+    const expectedArgs = [
+      "--permission-mode", "plan",
+      "--tools", "Read,Grep,Glob,Write",
+    ];
+
+    await runOnPty("global", "test", {
+      timeoutMs: 1000,
+      securityArgs: expectedArgs,
+    });
+
+    expect(captured).toBeDefined();
+    expect(captured!.securityArgs).toEqual(expectedArgs);
+    // The supervisor must NOT inject --dangerously-skip-permissions itself.
+    expect(captured!.securityArgs).not.toContain("--dangerously-skip-permissions");
+  });
+});
+
 describe("pty-supervisor env-sanitisation (Phase D fix #1)", () => {
   it("strips ANTHROPIC_API_KEY (and the other Claude Code internals) from spawned PTY env", async () => {
     // Capture the env that the supervisor passes through to spawn.

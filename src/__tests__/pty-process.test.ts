@@ -5,6 +5,7 @@ import {
   PtyClosedError,
   type PtyProcessOptions,
 } from "../runner/index";
+import { __buildClaudeArgsForTests } from "../runner/pty-process";
 import type { SecurityConfig } from "../config";
 
 // ─── Shared test helpers ────────────────────────────────────────────────────
@@ -245,6 +246,47 @@ describe("PtyProcess — runTurn on closed PTY", () => {
 });
 
 // ─── sessionId propagation ──────────────────────────────────────────────────
+
+describe("PtyProcess — buildClaudeArgs honours securityArgs (Phase D fix #3)", () => {
+  test("when securityArgs is provided, it's used verbatim instead of derived flags", () => {
+    const explicitArgs = [
+      "--permission-mode", "plan",
+      "--tools", "Read,Grep,Glob,Write",
+    ];
+    const opts: PtyProcessOptions = {
+      sessionId: "",
+      cwd: "/tmp",
+      // Even though security.level=locked would normally inject
+      // --dangerously-skip-permissions and --tools Read,Grep,Glob,Write
+      // from the local fallback, the explicit securityArgs path takes
+      // precedence.
+      security: { level: "locked", allowedTools: [], disallowedTools: [] },
+      securityArgs: explicitArgs,
+      env: {},
+    };
+    const args = __buildClaudeArgsForTests(opts);
+    // The explicit args land first, in order.
+    expect(args.slice(0, explicitArgs.length)).toEqual(explicitArgs);
+    // The fallback's --dangerously-skip-permissions is NOT present.
+    expect(args).not.toContain("--dangerously-skip-permissions");
+  });
+
+  test("locked-mode fallback emits Write tool so memory persistence still works", () => {
+    // No securityArgs supplied — exercise the local fallback path that
+    // unit tests historically used. The Phase D fix for MAJOR-3 is that
+    // the fallback now includes Write in the locked-mode --tools list.
+    const opts: PtyProcessOptions = {
+      sessionId: "",
+      cwd: "/tmp",
+      security: { level: "locked", allowedTools: [], disallowedTools: [] },
+      env: {},
+    };
+    const args = __buildClaudeArgsForTests(opts);
+    const toolsIdx = args.indexOf("--tools");
+    expect(toolsIdx).toBeGreaterThanOrEqual(0);
+    expect(args[toolsIdx + 1]).toBe("Read,Grep,Glob,Write");
+  });
+});
 
 describe("PtyProcess — sessionId", () => {
   test("sessionId from opts.sessionId is exposed verbatim", async () => {

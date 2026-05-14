@@ -909,7 +909,15 @@ export function setPermissionMode(mode: PermissionMode): void {
   }
 }
 
-function buildSecurityArgs(security: SecurityConfig): string[] {
+/**
+ * Build the security-related argv for a `claude` invocation (both `claude -p`
+ * and PTY-mode). Reads `getPermissionMode()` to decide between
+ * `--dangerously-skip-permissions` and `--permission-mode <mode>`, then
+ * appends tool gating per `security.level`. Exported so the PTY supervisor
+ * can pass the same argv to its spawned `claude` rather than reinventing the
+ * logic — this is the only place permission-mode policy lives.
+ */
+export function buildSecurityArgs(security: SecurityConfig): string[] {
   const permissionMode = getPermissionMode();
   const args: string[] = permissionMode === "bypassPermissions"
     ? ["--dangerously-skip-permissions"]
@@ -1381,11 +1389,15 @@ async function execClaude(
       : agentName
         ? `agent:${agentName}`
         : "global";
+    // Phase D fix #3: thread the canonical securityArgs through to the PTY
+    // path so the operator's permissionMode is honoured (previously every
+    // PTY spawn unconditionally bypassed permissions).
     exec = await runOnPty(sessionKey, prompt, {
       timeoutMs,
       threadId,
       agentName,
       modelOverride: modelOverride ?? undefined,
+      securityArgs,
       onChunk,
       onToolEvent,
     });

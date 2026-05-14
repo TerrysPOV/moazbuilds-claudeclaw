@@ -64,23 +64,50 @@ export function injectEnsureAgentDir(fn: EnsureAgentDirFn | null): void {
   _ensureAgentDir = fn;
 }
 
-// Lazy import of the canonical env-sanitiser from runner.ts (same
-// circular-import dance as ensureAgentDir). Phase D fix #1: keep one source
-// of truth for the strip list so ANTHROPIC_API_KEY can't silently leak into
-// PTY spawns and bypass the OAuth billing path.
+// Lazy imports of the canonical env-sanitiser + security-args builder from
+// runner.ts (same circular-import dance as ensureAgentDir). Phase D fixes
+// #1 / #3: keep one source of truth for the strip list AND for permission-
+// mode argv so the PTY path can't silently diverge from `claude -p` policy.
 type CleanSpawnEnvFn = () => Record<string, string>;
+type BuildSecurityArgsFn = (security: SecurityConfig) => string[];
 let _cleanSpawnEnv: CleanSpawnEnvFn | null = null;
-async function getCleanSpawnEnv(): Promise<CleanSpawnEnvFn> {
-  if (_cleanSpawnEnv) return _cleanSpawnEnv;
-  const mod = (await import("../runner")) as { cleanSpawnEnv?: CleanSpawnEnvFn };
+let _buildSecurityArgs: BuildSecurityArgsFn | null = null;
+async function getRunnerHelpers(): Promise<{
+  cleanSpawnEnv: CleanSpawnEnvFn;
+  buildSecurityArgs: BuildSecurityArgsFn;
+}> {
+  if (_cleanSpawnEnv && _buildSecurityArgs) {
+    return { cleanSpawnEnv: _cleanSpawnEnv, buildSecurityArgs: _buildSecurityArgs };
+  }
+  const mod = (await import("../runner")) as {
+    cleanSpawnEnv?: CleanSpawnEnvFn;
+    buildSecurityArgs?: BuildSecurityArgsFn;
+  };
   if (!mod.cleanSpawnEnv) {
     throw new Error("[pty-supervisor] runner.ts does not export cleanSpawnEnv");
   }
-  _cleanSpawnEnv = mod.cleanSpawnEnv;
-  return _cleanSpawnEnv;
+  if (!mod.buildSecurityArgs) {
+    throw new Error("[pty-supervisor] runner.ts does not export buildSecurityArgs");
+  }
+  _cleanSpawnEnv = _cleanSpawnEnv ?? mod.cleanSpawnEnv;
+  _buildSecurityArgs = _buildSecurityArgs ?? mod.buildSecurityArgs;
+  return { cleanSpawnEnv: _cleanSpawnEnv, buildSecurityArgs: _buildSecurityArgs };
+}
+async function getCleanSpawnEnv(): Promise<CleanSpawnEnvFn> {
+  const h = await getRunnerHelpers();
+  return h.cleanSpawnEnv;
 }
 
-/** For tests only. Stub the runner helper (cleanSpawnEnv). */
+/** For tests only. Stub the runner helpers (cleanSpawnEnv + buildSecurityArgs). */
+export function injectRunnerHelpers(opts: {
+  cleanSpawnEnv?: CleanSpawnEnvFn | null;
+  buildSecurityArgs?: BuildSecurityArgsFn | null;
+}): void {
+  if (opts.cleanSpawnEnv !== undefined) _cleanSpawnEnv = opts.cleanSpawnEnv;
+  if (opts.buildSecurityArgs !== undefined) _buildSecurityArgs = opts.buildSecurityArgs;
+}
+
+/** Back-compat shim — fix #1's test used this name. Same behaviour. */
 export function injectCleanSpawnEnv(fn: CleanSpawnEnvFn | null): void {
   _cleanSpawnEnv = fn;
 }
@@ -176,6 +203,7 @@ export function __resetSupervisorForTests(): void {
   _spawnPty = null;
   _ensureAgentDir = null;
   _cleanSpawnEnv = null;
+  _buildSecurityArgs = null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -294,6 +322,12 @@ export function snapshotSupervisor(): SupervisorSnapshot {
 /**
  * Run a single turn on the PTY associated with `sessionKey`.
  * See SPEC §3.2 for the contract.
+ *
+ * Phase D addition:
+ *   - `securityArgs`: pre-built argv from runner.ts:buildSecurityArgs(), so
+ *     the supervisor honours the operator's permissionMode + locked-mode
+ *     Write tool. Without this, every PTY spawn unconditionally bypassed
+ *     permissions via `--dangerously-skip-permissions`.
  */
 export async function runOnPty(
   sessionKey: string,
@@ -303,6 +337,8 @@ export async function runOnPty(
     threadId?: string;
     agentName?: string;
     modelOverride?: string;
+    /** Phase D fix #3: pre-built security argv from runner.ts:buildSecurityArgs. */
+    securityArgs?: string[];
     onChunk?: (text: string) => void;
     onToolEvent?: (line: string) => void;
   },
@@ -376,6 +412,7 @@ async function getOrCreateEntry(
 async function buildSpawnOptions(
   entry: PtyEntry,
   modelOverride: string | undefined,
+  securityArgs: string[] | undefined,
 ): Promise<PtyProcessOptions> {
   const settings = getSettings();
   const { security } = settings;
@@ -404,13 +441,30 @@ async function buildSpawnOptions(
   // Phase D fix #1: canonical env-sanitiser from runner.ts. Don't reinvent
   // the strip list — divergence here re-introduces the ANTHROPIC_API_KEY
   // billing leak.
+  //
+  // Phase D fix #3: derive securityArgs from runner.ts:buildSecurityArgs
+  // when the caller didn't pre-build them (e.g. legacy tests). The supervisor
+  // is otherwise allowed to pass through whatever the caller assembled.
   const cleanEnv = await getCleanSpawnEnv();
+  let resolvedSecurityArgs = securityArgs;
+  if (!resolvedSecurityArgs) {
+    try {
+      const { buildSecurityArgs } = await getRunnerHelpers();
+      resolvedSecurityArgs = buildSecurityArgs(security);
+    } catch {
+      // Fall through — buildClaudeArgs will use its internal legacy
+      // derivation when securityArgs is undefined.
+      resolvedSecurityArgs = undefined;
+    }
+  }
+
   return {
     sessionId,
     cwd,
     agentName: entry.agentName,
     modelOverride: modelOverride ?? undefined,
     security: cloneSecurity(security),
+    securityArgs: resolvedSecurityArgs,
     env: cleanEnv(),
     cols: settings.pty.cols,
     rows: settings.pty.rows,
@@ -464,9 +518,10 @@ async function ensureSpawnPty(): Promise<SpawnPty> {
 async function spawnEntry(
   entry: PtyEntry,
   modelOverride: string | undefined,
+  securityArgs: string[] | undefined,
 ): Promise<void> {
   const spawn = await ensureSpawnPty();
-  const spawnOpts = await buildSpawnOptions(entry, modelOverride);
+  const spawnOpts = await buildSpawnOptions(entry, modelOverride, securityArgs);
   entry.spawnOpts = spawnOpts;
   entry.pty = await spawn(spawnOpts);
 }
@@ -504,6 +559,7 @@ async function runTurnWithRetries(
     threadId?: string;
     agentName?: string;
     modelOverride?: string;
+    securityArgs?: string[];
     onChunk?: (text: string) => void;
     onToolEvent?: (line: string) => void;
   },
@@ -512,7 +568,7 @@ async function runTurnWithRetries(
   // Lazy spawn on first turn for this key.
   if (!entry.pty) {
     try {
-      await spawnEntry(entry, callOpts.modelOverride);
+      await spawnEntry(entry, callOpts.modelOverride, callOpts.securityArgs);
     } catch (err) {
       return errorResult(
         `[pty-supervisor] failed to spawn PTY for ${entry.sessionKey}: ${(err as Error).message}`,

@@ -46,8 +46,16 @@ export interface PtyProcessOptions {
   agentName?: string;
   /** Model alias/name to pass via `--model`. Empty → no flag. */
   modelOverride?: string;
-  /** Security profile mirroring `buildSecurityArgs` for `claude -p`. */
+  /** Security profile mirroring `buildSecurityArgs` for `claude -p`.
+   *  Used as a fallback when `securityArgs` is not provided. */
   security: SecurityConfig;
+  /**
+   * Pre-built argv produced by runner.ts:`buildSecurityArgs(security)`. When
+   * provided, the PTY wrapper uses these flags verbatim instead of deriving
+   * them from `security`. This is the canonical path — the supervisor passes
+   * this to honour the operator's `permissionMode` and locked-mode Write tool
+   * inclusion. (Phase D fix #3 for MAJOR-2/MAJOR-3.) */
+  securityArgs?: string[];
   /** Env vars to pass to the child. Caller is responsible for a sanitised env. */
   env: Record<string, string>;
   /** Initial PTY columns. Default 100. */
@@ -157,27 +165,42 @@ const DEFAULT_ROWS = 30;
 const DEFAULT_PERMISSION_MODE_ARGS = ["--dangerously-skip-permissions"];
 
 /** Build the argv for spawning `claude` based on options.
- *  Mirrors a subset of buildSecurityArgs in runner.ts but is intentionally
- *  simpler — the supervisor passes through a pre-validated security config. */
+ *  When `opts.securityArgs` is provided (the canonical Phase D path), those
+ *  flags are used verbatim — they come from runner.ts:`buildSecurityArgs`,
+ *  which is the single source of truth for permission-mode + tool gating.
+ *  Otherwise this falls back to a minimal local derivation kept for tests
+ *  that exercise the security-config path directly. */
 function buildClaudeArgs(opts: PtyProcessOptions): string[] {
   if (opts._argsOverride) return opts._argsOverride;
   if (opts._skipClaudeArgs) return [];
 
-  const args: string[] = [...DEFAULT_PERMISSION_MODE_ARGS];
+  const args: string[] = [];
 
-  switch (opts.security.level) {
-    case "locked":
-      args.push("--tools", "Read,Grep,Glob");
-      break;
-    case "strict":
-      args.push("--disallowedTools", "Bash,WebSearch,WebFetch");
-      break;
-  }
-  if (opts.security.allowedTools.length > 0) {
-    args.push("--allowedTools", opts.security.allowedTools.join(" "));
-  }
-  if (opts.security.disallowedTools.length > 0) {
-    args.push("--disallowedTools", opts.security.disallowedTools.join(" "));
+  if (opts.securityArgs && opts.securityArgs.length > 0) {
+    // Canonical path: trust runner.ts:buildSecurityArgs verbatim.
+    args.push(...opts.securityArgs);
+  } else {
+    // Fallback: legacy local derivation. Note this branch is reached only
+    // when callers (typically unit tests) skip the supervisor and pass a
+    // bare PtyProcessOptions. The supervisor ALWAYS sets securityArgs.
+    args.push(...DEFAULT_PERMISSION_MODE_ARGS);
+
+    switch (opts.security.level) {
+      case "locked":
+        // Include Write so memory-persistence still works in locked mode —
+        // matches runner.ts:buildSecurityArgs.
+        args.push("--tools", "Read,Grep,Glob,Write");
+        break;
+      case "strict":
+        args.push("--disallowedTools", "Bash,WebSearch,WebFetch");
+        break;
+    }
+    if (opts.security.allowedTools.length > 0) {
+      args.push("--allowedTools", opts.security.allowedTools.join(" "));
+    }
+    if (opts.security.disallowedTools.length > 0) {
+      args.push("--disallowedTools", opts.security.disallowedTools.join(" "));
+    }
   }
 
   if (opts.sessionId && opts.sessionId.length > 0) {
@@ -192,6 +215,16 @@ function buildClaudeArgs(opts: PtyProcessOptions): string[] {
   }
 
   return args;
+}
+
+/**
+ * Test-only re-export of `buildClaudeArgs`. NOT part of the SPEC §3.1 public
+ * contract — exists so Phase D fixes #2 and #3 can pin the argv shape
+ * deterministically (verifying `--append-system-prompt` is emitted, that
+ * `securityArgs` is used verbatim, etc.).
+ */
+export function __buildClaudeArgsForTests(opts: PtyProcessOptions): string[] {
+  return buildClaudeArgs(opts);
 }
 
 // ─── PtyProcess implementation ──────────────────────────────────────────────
