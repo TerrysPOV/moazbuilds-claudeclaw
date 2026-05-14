@@ -86,6 +86,32 @@ The setup wizard covers model, heartbeat, Telegram, Discord, Slack, and security
 
 These features originated as PRs to `moazbuilds/claudeclaw` and have been closed upstream — they're out of scope for the lightweight core and live here permanently. Links below point to the originating PRs so you can read the full rationale.
 
+### PTY runner mode — interactive billing for the daemon (opt-in, beta)
+
+**Tracking issue: [#61](https://github.com/TerrysPOV/ClaudeClaw-Plus/issues/61)**
+
+From 2026-06-15, Anthropic splits Claude Code billing: `claude -p` non-interactive calls draw from a separate Agent SDK credit pool (Pro $20 / Max-5 $100 / Max-20 $200) rather than your subscription. ClaudeClaw+ today invokes `claude -p` for every event, which after the split would exhaust the Agent SDK pool for any moderate-usage daemon.
+
+The PTY runner replaces per-event `claude -p` subprocesses with long-lived interactive `claude` PTY processes (one per named agent + on-demand for ad-hoc threads). Interactive billing applies → subscription pool covers all daemon work → Agent SDK pool stays untouched.
+
+**Status: opt-in, behind a feature flag (`settings.pty.enabled`, default `false`).** The runner is fully tested and audited, but production rollout depends on a follow-up MCP multiplexer to avoid per-PTY memory explosion (N × claude × M MCP servers). **Do not flip `pty.enabled: true` in production until the MCP multiplexer milestone ships.** Validate OAuth refresh and RAM footprint on a test deployment first.
+
+Settings block (defaults shown):
+```json
+"pty": {
+  "enabled": false,
+  "idleReapMinutes": 30,
+  "maxConcurrent": 32,
+  "maxRetries": 5,
+  "backoffMs": [1000, 2000, 4000, 8000, 16000],
+  "namedAgentsAlwaysAlive": true
+}
+```
+
+Architecture: [`.planning/pty-migration/SPEC.md`](.planning/pty-migration/SPEC.md). Phase D audit reports under the same directory.
+
+---
+
 ### Policy Engine — fine-grained tool governance
 
 **[PR #71 — closed upstream — lives here](https://github.com/moazbuilds/claudeclaw/pull/71)**
