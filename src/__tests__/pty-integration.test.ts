@@ -24,9 +24,10 @@
  * subscription account). The synthetic-crash and idle-reap tests run
  * unconditionally — they use the injectSpawnPty seam.
  *
- * Each real-claude test bounds its work with a sensible timeout (default 60s,
- * individual asserts <=10s). Idle-reap tests advance virtual time so they
- * stay deterministic regardless of host load.
+ * Each real-claude test bounds its work with a generous per-turn timeout
+ * (TURN_TIMEOUT_MS = 120s, matching settings.timeouts.* defaults) and a
+ * per-test envelope of 3 turns + 60s headroom. Synthetic tests use the fake
+ * clock + fake sleep seams so they finish in milliseconds.
  */
 
 import {
