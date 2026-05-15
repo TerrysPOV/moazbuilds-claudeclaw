@@ -36,10 +36,18 @@ function json(body: unknown, status = 200): Response {
   return Response.json(body, { status });
 }
 
+/** Per-server MCP request handler signature. Registered by the
+ *  multiplexer; consumed by the `/mcp/<server-name>` route delegation
+ *  below. See `mcp-multiplexer/index.ts`. */
+export type McpRouteHandler = (req: Request) => Promise<Response>;
+
 export class PluginHttpGateway {
   private plugins = new Map<string, RegisteredPlugin>();
   private bootstrapToken: Buffer;
   private allowedCallbackHosts: Set<string>;
+  /** Per-server-name MCP route handlers registered by the multiplexer.
+   *  Key is the lowercase kebab server name (matches `mcp-proxy.json`). */
+  private mcpHandlers = new Map<string, McpRouteHandler>();
 
   constructor(opts: { allowedHosts?: string[] } = {}) {
     this.allowedCallbackHosts = new Set(['localhost', '127.0.0.1', '::1', ...(opts.allowedHosts ?? [])]);
@@ -50,6 +58,18 @@ export class PluginHttpGateway {
   async handleRequest(req: Request, url: URL): Promise<Response | null> {
     const path = url.pathname;
     const method = req.method;
+
+    // MCP multiplexer routes — delegate to the per-server handler the
+    // multiplexer registered via `registerMcpHandler`. Path may be either
+    // bare (`/mcp/<server>`) or sub-pathed (`/mcp/<server>/...`); the SDK
+    // transport handles internal routing.
+    if (path.startsWith('/mcp/')) {
+      const segments = path.slice('/mcp/'.length).split('/');
+      const serverName = segments[0] ?? '';
+      const handler = this.mcpHandlers.get(serverName);
+      if (handler) return handler(req);
+      return json({ error: { code: 'mcp_server_not_registered', server: serverName } }, 404);
+    }
 
     if (path === '/api/plugin/register' && method === 'POST') return this.handleRegister(req);
     if (path === '/api/plugin/list' && method === 'GET') return this.handleList(req);
@@ -67,6 +87,32 @@ export class PluginHttpGateway {
     if (nameM && method === 'DELETE') return this.handleUnregister(req, nameM[1]!);
 
     return null; // not a plugin endpoint
+  }
+
+  /**
+   * Register a per-server MCP route handler. The multiplexer
+   * (`mcp-multiplexer/index.ts`) calls this at startup for each
+   * upstream child it brings up. The route mounted is
+   * `/mcp/<serverName>` (and any sub-paths).
+   *
+   * Server names must match `mcp-proxy.json` keys (lowercase kebab).
+   * Re-registering a name replaces the previous handler.
+   */
+  registerMcpHandler(serverName: string, handler: McpRouteHandler): void {
+    if (!/^[a-z][a-z0-9-]{0,63}$/.test(serverName)) {
+      throw new Error(`invalid mcp server name: ${JSON.stringify(serverName)}`);
+    }
+    this.mcpHandlers.set(serverName, handler);
+  }
+
+  /** Inverse of `registerMcpHandler`. Idempotent. */
+  unregisterMcpHandler(serverName: string): void {
+    this.mcpHandlers.delete(serverName);
+  }
+
+  /** Test seam — exposed for the multiplexer test slice. */
+  hasMcpHandler(serverName: string): boolean {
+    return this.mcpHandlers.has(serverName);
   }
 
   private requestId(req: Request): string {
