@@ -192,6 +192,25 @@ describe("extractResponseText", () => {
   test("falls back to whole text when ⏺ absent", () => {
     expect(extractResponseText("  some text  ")).toBe("some text");
   });
+
+  // Codex Phase D #4 regression: a literal `❯` inside the assistant response
+  // (e.g. a shell-prompt example) must NOT split the response. Spinner glyphs
+  // remain the only terminators.
+  test("does not truncate when response contains a literal `❯` glyph", () => {
+    const text =
+      "⏺ Try running `❯ bun install` in your shell and then re-run the build.✻ Worked for 1s";
+    expect(extractResponseText(text)).toBe(
+      "Try running `❯ bun install` in your shell and then re-run the build."
+    );
+  });
+
+  test("does not truncate when `❯` appears mid-sentence without a spinner", () => {
+    // No spinner terminator — should return the whole post-⏺ tail trimmed.
+    const text = "⏺ The prompt looked like `user@host ❯` when I tested it.";
+    expect(extractResponseText(text)).toBe(
+      "The prompt looked like `user@host ❯` when I tested it."
+    );
+  });
 });
 
 // ─── Idle-timeout fallback (parser-level decision, used by pty-process) ──────

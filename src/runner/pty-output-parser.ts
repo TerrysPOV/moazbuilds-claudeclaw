@@ -174,9 +174,11 @@ export function extractResponseText(strippedNormalised: string): string {
   const marker = "⏺"; // ⏺
   // Terminators that immediately follow the assistant text in the TUI.
   // We INTENTIONALLY do not include "❯" alone — its presence elsewhere on the
-  // screen would split too early. Instead we anchor on the spinner glyphs
-  // that always appear right after the assistant message.
-  const terminatorRe = /[✻✶✳✢✽✺✷·◉]| {2,}⎿|❯/u;
+  // screen (e.g. a literal `❯` appearing inside Claude's own response text,
+  // such as a shell-prompt example) would split the response too early. The
+  // spinner glyphs that always appear right after the assistant message are
+  // sufficient to anchor the turn boundary.
+  const terminatorRe = /[✻✶✳✢✽✺✷·◉]| {2,}⎿/u;
   const idx = strippedNormalised.lastIndexOf(marker);
   if (idx < 0) return strippedNormalised.trim();
 
