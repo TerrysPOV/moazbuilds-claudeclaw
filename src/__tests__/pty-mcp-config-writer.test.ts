@@ -25,13 +25,22 @@ import {
 
 // ─── Fixtures ───────────────────────────────────────────────────────────────
 
-/** Deterministic identity for golden-file tests. */
-function fakeIdentity(ptyId: string, hexSecret: string): PtyIdentity {
+/** Deterministic identity for golden-file tests. Mirrors W1's
+ *  `_toPublic` shape from src/plugins/mcp-multiplexer/pty-identity.ts. */
+function fakeIdentity(
+  ptyId: string,
+  hexSecret: string,
+  issuedAt: number = 1_700_000_000_000,
+): PtyIdentity {
+  const bearer = `Bearer ${hexSecret}`;
   return {
     ptyId,
-    secret: Buffer.from(hexSecret, "hex"),
-    buildAuthHeader() {
-      return { name: "Authorization", value: `Bearer ${hexSecret}` };
+    issuedAt,
+    bearer,
+    headers: {
+      Authorization: bearer,
+      "X-Claudeclaw-Pty-Id": ptyId,
+      "X-Claudeclaw-Ts": String(issuedAt),
     },
   };
 }
@@ -96,6 +105,7 @@ describe("writeConfigForPty — basic shape", () => {
           headers: {
             Authorization: `Bearer ${"a".repeat(64)}`,
             "X-Claudeclaw-Pty-Id": "suzy",
+            "X-Claudeclaw-Ts": "1700000000000",
           },
         },
       },

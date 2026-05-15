@@ -21,6 +21,8 @@ import { isWizardTrigger, hasActiveWizard, handleWizardInput } from "./plugin-wi
 import { PluginManager, setPluginManager } from "../plugins";
 import { indexSessionsBackground } from "../memory";
 import { getMcpProxyPlugin } from "../plugins/mcp-proxy/index.js";
+import { getMcpMultiplexerPlugin } from "../plugins/mcp-multiplexer/index.js";
+import { injectMcpIdentityIssuer } from "../runner/pty-supervisor";
 
 const CLAUDE_DIR = join(process.cwd(), ".claude");
 const HEARTBEAT_DIR = join(CLAUDE_DIR, "claudeclaw");
@@ -576,44 +578,22 @@ export async function start(args: string[] = []) {
 
   // MCP multiplexer (SPEC §4.5, §6.3): start BEFORE mcp-proxy so the proxy
   // can read settings.mcp.shared to skip servers the multiplexer owns. Also
-  // wires the multiplexer's issue/revoke functions into the PTY supervisor.
+  // wires the multiplexer's issue/release functions into the PTY supervisor.
   //
   // Activation rule (SPEC §6.3): only attempt to start when shared is
   // non-empty AND web.enabled is true. Otherwise the plugin would have
   // nothing to mount routes on.
-  //
-  // TODO(coord): replace the dynamic import with a static import once the
-  // mcp-multiplexer module from W1 lands on master. Today it's dynamic so
-  // this worktree compiles standalone while W1's worktree owns the file.
   if (settings.mcp.shared.length > 0 && settings.web.enabled) {
     try {
-      // @ts-expect-error TODO(coord): W1 module not yet present in this worktree.
-      // Replace with static import once src/plugins/mcp-multiplexer/index.ts
-      // lands on master.
-      const mod = (await import("../plugins/mcp-multiplexer/index.js")) as {
-        getMcpMultiplexerPlugin?: () => {
-          start: () => Promise<void>;
-          issueIdentity: (ptyId: string) => unknown;
-          revokeIdentity: (ptyId: string) => void | Promise<void>;
-        };
-      };
-      if (mod.getMcpMultiplexerPlugin) {
-        const plugin = mod.getMcpMultiplexerPlugin();
-        await plugin.start();
-        // Wire the supervisor seam so PTY spawns synthesize per-PTY configs.
-        const sup = await import("../runner/pty-supervisor.js");
-        sup.injectMcpIdentityIssuer({
-          issue: plugin.issueIdentity as (ptyId: string) => never,
-          revoke: plugin.revokeIdentity,
-        });
-        console.log("[mcp-multiplexer] started");
-      } else {
-        console.warn(
-          "[mcp-multiplexer] settings.mcp.shared is non-empty but the multiplexer plugin module has no getMcpMultiplexerPlugin export",
-        );
-      }
+      const plugin = getMcpMultiplexerPlugin();
+      await plugin.start();
+      // Wire the supervisor seam so PTY spawns synthesize per-PTY configs.
+      injectMcpIdentityIssuer({
+        issue: (ptyId) => plugin.issueIdentity(ptyId),
+        revoke: (ptyId) => plugin.releaseIdentity(ptyId),
+      });
+      console.log("[mcp-multiplexer] started");
     } catch (err) {
-      // Module not found = W1 hasn't merged yet OR operator hasn't pulled it.
       // Don't crash the daemon — log clearly and fall back to per-PTY MCP
       // discovery (settings.mcp.shared becomes effectively dormant).
       const msg = err instanceof Error ? err.message : String(err);

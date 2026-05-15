@@ -164,11 +164,16 @@ function makeFakeIssuer(): FakeIssuerHandle {
       const hex = _secretCounter.toString(16).padStart(64, "0");
       currentSecret.set(ptyId, hex);
       issued.push(ptyId);
+      const issuedAt = 1_700_000_000_000 + _secretCounter;
+      const bearer = `Bearer ${hex}`;
       return {
         ptyId,
-        secret: Buffer.from(hex, "hex"),
-        buildAuthHeader() {
-          return { name: "Authorization", value: `Bearer ${hex}` };
+        issuedAt,
+        bearer,
+        headers: {
+          Authorization: bearer,
+          "X-Claudeclaw-Pty-Id": ptyId,
+          "X-Claudeclaw-Ts": String(issuedAt),
         },
       };
     },

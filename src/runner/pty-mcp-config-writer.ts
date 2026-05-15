@@ -12,10 +12,10 @@
  *       { "type": "stdio", "command", "args", "env" }
  *
  * The writer is the consumer of the multiplexer's `issueIdentity(ptyId)` /
- * `revokeIdentity(ptyId)` interface (W1, src/plugins/mcp-multiplexer/
- * pty-identity.ts). That file does not yet exist in this worktree; we mirror
- * the contract here so W2 compiles in isolation. At merge time the local
- * type alias is replaced with the real import (see TODO(coord) below).
+ * `releaseIdentity(ptyId)` interface — see
+ * src/plugins/mcp-multiplexer/pty-identity.ts. The supervisor minted-and-passes
+ * the identity; the writer splats `identity.headers` verbatim into the
+ * synthesized JSON.
  */
 import {
   existsSync,
@@ -25,31 +25,10 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 
-// ─── Coordination boundary with W1 ──────────────────────────────────────────
-// Mirrors src/plugins/mcp-multiplexer/pty-identity.ts — see SPEC §4.3.
-// TODO(coord): replace with real import after W1 merges:
-//   import { issueIdentity, revokeIdentity, type PtyIdentity } from
-//     "../plugins/mcp-multiplexer/pty-identity.js";
+import type { PtyIdentity } from "../plugins/mcp-multiplexer/pty-identity";
 
-export interface PtyIdentity {
-  readonly ptyId: string;
-  readonly secret: Buffer;
-  /** Returns the literal Authorization header value (e.g. "Bearer <hex>")
-   *  to embed in the synthesized `--mcp-config` JSON. */
-  buildAuthHeader(): { name: "Authorization"; value: string };
-}
-
-/**
- * Issue a fresh per-PTY identity. The multiplexer mints a 32-byte secret,
- * caches it in-memory keyed by ptyId, and returns the bearer-header value.
- *
- * In this worktree (Phase B / W2), `issueIdentity` is not yet importable
- * because the multiplexer plugin lives in W1. Callers (the supervisor) MUST
- * pass an `identity` already minted by W1 via `injectIdentityIssuer` for
- * tests, or via the real import once W1 merges. The local fallback
- * `_localIdentityForTests` exists so the writer's unit tests can pin a
- * deterministic secret without instantiating the real multiplexer.
- */
+// Re-export so callers can import the type from a single neighbour module.
+export type { PtyIdentity };
 
 // ─── Public types ───────────────────────────────────────────────────────────
 
@@ -85,9 +64,8 @@ export interface WriteConfigInput {
   /** Multiplexer's HTTP listener base URL, e.g. "http://127.0.0.1:4632".
    *  Combined with `/mcp/<server-name>` for each shared entry. */
   bridgeBaseUrl: string;
-  /** Per-PTY identity (HMAC secret + auth header). Pre-minted by the
-   *  multiplexer; the writer reads `buildAuthHeader()` and embeds the
-   *  Authorization header literal in the JSON. */
+  /** Per-PTY identity. Pre-minted by the multiplexer; the writer splats
+   *  `identity.headers` verbatim into each shared server's `headers` field. */
   identity: PtyIdentity;
 }
 
@@ -153,16 +131,15 @@ export function writeConfigForPty(
   // makes the file easier to read for operators.
   const mcpServers: Record<string, unknown> = {};
 
-  const authHeader = identity.buildAuthHeader();
   for (const { name } of sharedServers) {
     if (!name || name.length === 0) continue;
     mcpServers[name] = {
       type: "http",
       url: `${baseUrl}/mcp/${name}`,
-      headers: {
-        [authHeader.name]: authHeader.value,
-        "X-Claudeclaw-Pty-Id": ptyId,
-      },
+      // Splat W1's headers map — includes Authorization (Bearer <hex>),
+      // X-Claudeclaw-Pty-Id, and X-Claudeclaw-Ts. Single source of truth
+      // for what claude sends; the bridge expects exactly these.
+      headers: { ...identity.headers },
     };
   }
 
