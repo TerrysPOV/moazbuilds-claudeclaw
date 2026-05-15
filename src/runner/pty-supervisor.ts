@@ -44,11 +44,7 @@
  *     on disk via the Claude Code JSONL; the next event for the same key
  *     re-spawns and `--resume`s.
  */
-import type {
-  PtyProcess,
-  PtyProcessOptions,
-  SpawnPty,
-} from "./pty-process";
+import type { PtyProcess, PtyProcessOptions, SpawnPty } from "./pty-process";
 import { PtyClosedError, PtyTurnTimeoutError } from "./pty-process";
 import { getSettings, type SecurityConfig } from "../config";
 import { getSession, createSession } from "../sessions";
@@ -185,8 +181,7 @@ export interface SupervisorSnapshot {
 
 let _spawnPty: SpawnPty | null = null;
 let _clock: () => number = () => Date.now();
-let _sleep: (ms: number) => Promise<void> = (ms) =>
-  new Promise<void>((r) => setTimeout(r, ms));
+let _sleep: (ms: number) => Promise<void> = (ms) => new Promise<void>((r) => setTimeout(r, ms));
 /** Injectable UUID generator. Used to pre-allocate a session ID for fresh
  *  PTY spawns so the conversation survives daemon restart. Phase D fix
  *  (Codex HIGH #2). */
@@ -527,19 +522,13 @@ function readSupervisorOptions(): SupervisorOptions {
   const settings = getSettings();
   return {
     idleReapMinutes: settings.pty.idleReapMinutes,
-    maxRetries: _maxRetriesOverride != null
-      ? _maxRetriesOverride
-      : settings.pty.maxRetries,
+    maxRetries: _maxRetriesOverride != null ? _maxRetriesOverride : settings.pty.maxRetries,
     backoffMs: settings.pty.backoffMs,
     namedAgentsAlwaysAlive: settings.pty.namedAgentsAlwaysAlive,
   };
 }
 
-function classifyKey(
-  sessionKey: string,
-  threadId?: string,
-  agentName?: string,
-): SessionKind {
+function classifyKey(sessionKey: string, threadId?: string, agentName?: string): SessionKind {
   // Match the conventions in SPEC §3.2 + §5.2.
   if (sessionKey.startsWith("thread:") || threadId) return "adhoc";
   if (sessionKey.startsWith("agent:") || agentName) return "named";
@@ -654,9 +643,7 @@ async function buildSpawnOptions(
   //   - agent  → agents/<name> (created if needed)
   //   - thread → repo root (process.cwd())
   //   - global → repo root
-  const cwd = entry.agentName
-    ? await ensureAgentDirLazy(entry.agentName)
-    : process.cwd();
+  const cwd = entry.agentName ? await ensureAgentDirLazy(entry.agentName) : process.cwd();
 
   // Resume from stored session ID where available.
   let sessionId = "";
@@ -700,11 +687,7 @@ async function buildSpawnOptions(
   // the daemon's raw env regardless of the resolved model/provider.
   const runnerHelpers = await getRunnerHelpers();
   const cleanEnv = runnerHelpers.cleanSpawnEnv();
-  const childEnv = runnerHelpers.buildChildEnv(
-    cleanEnv,
-    modelOverride ?? "",
-    api ?? "",
-  );
+  const childEnv = runnerHelpers.buildChildEnv(cleanEnv, modelOverride ?? "", api ?? "");
 
   let resolvedSecurityArgs = securityArgs;
   if (!resolvedSecurityArgs) {
@@ -812,7 +795,9 @@ async function spawnEntry(
 
 async function respawnEntry(entry: PtyEntry): Promise<void> {
   if (!entry.spawnOpts) {
-    throw new Error(`[pty-supervisor] cannot respawn ${entry.sessionKey} — no cached spawn options`);
+    throw new Error(
+      `[pty-supervisor] cannot respawn ${entry.sessionKey} — no cached spawn options`,
+    );
   }
   // Always resume against the last-known session ID — Claude Code keeps the
   // JSONL on disk after a crash, so --resume <id> picks up where we left off.
@@ -892,8 +877,7 @@ async function runTurnWithRetries(
       };
     } catch (err) {
       lastErr = err;
-      const retryable =
-        err instanceof PtyClosedError || err instanceof PtyTurnTimeoutError;
+      const retryable = err instanceof PtyClosedError || err instanceof PtyTurnTimeoutError;
       if (!retryable) {
         return errorResult(
           `[pty-supervisor] non-retryable error on ${entry.sessionKey}: ${(err as Error).message}`,

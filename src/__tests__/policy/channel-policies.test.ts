@@ -1,6 +1,6 @@
 /**
  * Tests for policy/channel-policies.ts
- * 
+ *
  * Run with: bun test src/__tests__/policy/channel-policies.test.ts
  */
 
@@ -43,17 +43,17 @@ describe("Channel Policies - Scoped Rules", () => {
   beforeEach(async () => {
     // Clear any cached config
     reloadScopedPolicy();
-    
+
     // Ensure directory exists
     await mkdir(POLICY_DIR, { recursive: true });
-    
+
     // Clean up
     try {
       await rm(SCOPED_POLICY_FILE, { force: true });
     } catch {
       // Ignore
     }
-    
+
     await loadRules();
   });
 
@@ -96,15 +96,15 @@ describe("Channel Policies - Scoped Rules", () => {
       globalRules: [],
       updatedAt: new Date().toISOString(),
     };
-    
+
     await writeFile(SCOPED_POLICY_FILE, JSON.stringify(scopedConfig, null, 2), "utf8");
     reloadScopedPolicy();
-    
+
     const request = createRequest({ toolName: "Bash" });
     const rules = getScopedRules(request);
-    
+
     // Should have the channel deny rule
-    const denyRule = rules.find(r => r.id === "channel-deny-bash");
+    const denyRule = rules.find((r) => r.id === "channel-deny-bash");
     expect(denyRule).toBeDefined();
     expect(denyRule?.action).toBe("deny");
   });
@@ -139,14 +139,14 @@ describe("Channel Policies - Scoped Rules", () => {
       globalRules: [],
       updatedAt: new Date().toISOString(),
     };
-    
+
     await writeFile(SCOPED_POLICY_FILE, JSON.stringify(scopedConfig, null, 2), "utf8");
     reloadScopedPolicy();
-    
+
     const request = createRequest({ userId: "admin-user", toolName: "Bash" });
     const rules = getScopedRules(request);
-    
-    const adminRule = rules.find(r => r.id === "admin-allow-all");
+
+    const adminRule = rules.find((r) => r.id === "admin-allow-all");
     expect(adminRule).toBeDefined();
     expect(adminRule?.action).toBe("allow");
   });
@@ -181,50 +181,42 @@ describe("Channel Policies - Scoped Rules", () => {
       globalRules: [],
       updatedAt: new Date().toISOString(),
     };
-    
+
     await writeFile(SCOPED_POLICY_FILE, JSON.stringify(scopedConfig, null, 2), "utf8");
     reloadScopedPolicy();
-    
+
     const telegramRequest = createRequest({ source: "telegram", toolName: "Bash" });
     const telegramRules = getScopedRules(telegramRequest);
-    const telegramDeny = telegramRules.find(r => r.id === "telegram-deny-bash");
+    const telegramDeny = telegramRules.find((r) => r.id === "telegram-deny-bash");
     expect(telegramDeny?.action).toBe("deny");
-    
+
     const discordRequest = createRequest({ source: "discord", toolName: "Bash" });
     const discordRules = getScopedRules(discordRequest);
-    const discordAllow = discordRules.find(r => r.id === "discord-allow-bash");
+    const discordAllow = discordRules.find((r) => r.id === "discord-allow-bash");
     expect(discordAllow?.action).toBe("allow");
   });
 });
 
 describe("Channel Policies - Merge Scoped Policies", () => {
   it("should merge global and scoped rules without duplicates", () => {
-    const globalRules: PolicyRule[] = [
-      { id: "global-allow", tool: "View", action: "allow" },
-    ];
-    
-    const scopedRules: PolicyRule[] = [
-      { id: "scoped-deny", tool: "Edit", action: "deny" },
-    ];
-    
+    const globalRules: PolicyRule[] = [{ id: "global-allow", tool: "View", action: "allow" }];
+
+    const scopedRules: PolicyRule[] = [{ id: "scoped-deny", tool: "Edit", action: "deny" }];
+
     const merged = mergeScopedPolicies(globalRules, scopedRules);
-    
+
     expect(merged).toHaveLength(2);
-    expect(merged.find(r => r.id === "global-allow")).toBeDefined();
-    expect(merged.find(r => r.id === "scoped-deny")).toBeDefined();
+    expect(merged.find((r) => r.id === "global-allow")).toBeDefined();
+    expect(merged.find((r) => r.id === "scoped-deny")).toBeDefined();
   });
 
   it("should prefer scoped rules over global rules with same ID", () => {
-    const globalRules: PolicyRule[] = [
-      { id: "same-id", tool: "View", action: "allow" },
-    ];
-    
-    const scopedRules: PolicyRule[] = [
-      { id: "same-id", tool: "View", action: "deny" },
-    ];
-    
+    const globalRules: PolicyRule[] = [{ id: "same-id", tool: "View", action: "allow" }];
+
+    const scopedRules: PolicyRule[] = [{ id: "same-id", tool: "View", action: "deny" }];
+
     const merged = mergeScopedPolicies(globalRules, scopedRules);
-    
+
     expect(merged).toHaveLength(1);
     expect(merged[0].action).toBe("deny");
   });
@@ -234,16 +226,16 @@ describe("Channel Policies - Merge Scoped Policies", () => {
       { id: "disabled-global", tool: "View", action: "allow", enabled: false },
       { id: "enabled-global", tool: "Edit", action: "allow" },
     ];
-    
+
     const scopedRules: PolicyRule[] = [
       { id: "disabled-scoped", tool: "Bash", action: "deny", enabled: false },
     ];
-    
+
     const merged = mergeScopedPolicies(globalRules, scopedRules);
-    
-    expect(merged.find(r => r.id === "disabled-global")).toBeUndefined();
-    expect(merged.find(r => r.id === "enabled-global")).toBeDefined();
-    expect(merged.find(r => r.id === "disabled-scoped")).toBeUndefined();
+
+    expect(merged.find((r) => r.id === "disabled-global")).toBeUndefined();
+    expect(merged.find((r) => r.id === "enabled-global")).toBeDefined();
+    expect(merged.find((r) => r.id === "disabled-scoped")).toBeUndefined();
   });
 });
 
@@ -260,10 +252,10 @@ describe("Channel Policies - Validation", () => {
       sources: {},
       globalRules: [],
     } as any;
-    
+
     const result = validateScopedPolicyConfig(config);
     expect(result.valid).toBe(false);
-    expect(result.errors.some(e => e.includes("version"))).toBe(true);
+    expect(result.errors.some((e) => e.includes("version"))).toBe(true);
   });
 
   it("should detect mismatched channel IDs", () => {
@@ -282,10 +274,10 @@ describe("Channel Policies - Validation", () => {
       globalRules: [],
       updatedAt: new Date().toISOString(),
     };
-    
+
     const result = validateScopedPolicyConfig(config);
     expect(result.valid).toBe(false);
-    expect(result.errors.some(e => e.includes("mismatch"))).toBe(true);
+    expect(result.errors.some((e) => e.includes("mismatch"))).toBe(true);
   });
 });
 
@@ -299,16 +291,16 @@ describe("Channel Policies - Default Config", () => {
 
   it("should have proper structure in example config", () => {
     const config = getExampleScopedPolicyConfig();
-    
+
     // Should have telegram and discord sources
     expect(config.sources["telegram"]).toBeDefined();
     expect(config.sources["discord"]).toBeDefined();
-    
+
     // Telegram should have channel config
     expect(config.sources["telegram"].channels?.["telegram:123"]).toBeDefined();
-    
+
     // Should have global deny rule
-    const globalDeny = config.globalRules.find(r => r.id === "global-deny-dangerous");
+    const globalDeny = config.globalRules.find((r) => r.id === "global-deny-dangerous");
     expect(globalDeny).toBeDefined();
     expect(globalDeny?.action).toBe("deny");
   });

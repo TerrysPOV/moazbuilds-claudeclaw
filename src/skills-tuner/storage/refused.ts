@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, appendFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { homedir } from 'node:os';
+import { existsSync, mkdirSync, readFileSync, appendFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { homedir } from "node:os";
 
 export interface RefusedRecord {
   pattern_signature: string;
@@ -10,12 +10,15 @@ export interface RefusedRecord {
   expires_at: string;
 }
 
-export const DEFAULT_REFUSED_PATH = join(homedir(), '.config', 'tuner', 'refused.jsonl');
+export const DEFAULT_REFUSED_PATH = join(homedir(), ".config", "tuner", "refused.jsonl");
 
 export class RefusedStore {
-  constructor(public readonly path: string, public ttlDays = 30) {}
+  constructor(
+    public readonly path: string,
+    public ttlDays = 30,
+  ) {}
 
-  add(signature: string, subject: string, userReason = 'skip'): void {
+  add(signature: string, subject: string, userReason = "skip"): void {
     mkdirSync(dirname(this.path), { recursive: true });
     const now = new Date();
     const expiresAt = new Date(now.getTime() + this.ttlDays * 86_400_000);
@@ -26,7 +29,7 @@ export class RefusedStore {
       ts: now.toISOString(),
       expires_at: expiresAt.toISOString(),
     };
-    appendFileSync(this.path, JSON.stringify(record) + '\n');
+    appendFileSync(this.path, JSON.stringify(record) + "\n");
   }
 
   activeSignatures(): Set<string> {
@@ -51,7 +54,7 @@ export class RefusedStore {
   private _readRecords(): RefusedRecord[] {
     if (!existsSync(this.path)) return [];
     const records: RefusedRecord[] = [];
-    for (const line of readFileSync(this.path, 'utf8').split('\n')) {
+    for (const line of readFileSync(this.path, "utf8").split("\n")) {
       const l = line.trim();
       if (!l) continue;
       try {

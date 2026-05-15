@@ -18,18 +18,11 @@
  */
 
 /** OSC progress-start sequence as raw bytes. */
-const PROGRESS_START_BYTES = new Uint8Array([
-  0x1b, 0x5d, 0x39, 0x3b, 0x34, 0x3b, 0x33, 0x3b, 0x07,
-]);
+const PROGRESS_START_BYTES = new Uint8Array([0x1b, 0x5d, 0x39, 0x3b, 0x34, 0x3b, 0x33, 0x3b, 0x07]);
 /** OSC progress-end sequence as raw bytes. */
-const PROGRESS_END_BYTES = new Uint8Array([
-  0x1b, 0x5d, 0x39, 0x3b, 0x34, 0x3b, 0x30, 0x3b, 0x07,
-]);
+const PROGRESS_END_BYTES = new Uint8Array([0x1b, 0x5d, 0x39, 0x3b, 0x34, 0x3b, 0x30, 0x3b, 0x07]);
 /** Max sequence length we might be straddling across chunks. */
-const MAX_MARKER_LEN = Math.max(
-  PROGRESS_START_BYTES.length,
-  PROGRESS_END_BYTES.length
-);
+const MAX_MARKER_LEN = Math.max(PROGRESS_START_BYTES.length, PROGRESS_END_BYTES.length);
 
 /** Event types emitted by the parser. */
 export type ParserEvent =
@@ -115,11 +108,7 @@ export function feed(parser: Parser, chunk: Uint8Array): ParserEvent[] {
 }
 
 /** True iff `needle` matches `haystack` starting at `start`. */
-function matchAt(
-  haystack: Uint8Array,
-  start: number,
-  needle: Uint8Array
-): boolean {
+function matchAt(haystack: Uint8Array, start: number, needle: Uint8Array): boolean {
   if (start + needle.length > haystack.length) return false;
   for (let j = 0; j < needle.length; j++) {
     if (haystack[start + j] !== needle[j]) return false;

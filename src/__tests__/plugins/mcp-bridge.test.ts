@@ -247,7 +247,14 @@ describe("path traversal protection (pluginId validation)", () => {
   it("rejects pluginId with .. segments", () => {
     const bridge = new PluginMcpBridge("/tmp/test-audit-pt.jsonl");
     expect(() => bridge.loadOrCreateSecret("../../evil")).toThrow(/invalid pluginId/);
-    expect(() => bridge.registerPluginTool("../../evil", { name: "x", description: "", schema: {}, handler: async () => ({}) })).toThrow(/invalid pluginId/);
+    expect(() =>
+      bridge.registerPluginTool("../../evil", {
+        name: "x",
+        description: "",
+        schema: {},
+        handler: async () => ({}),
+      }),
+    ).toThrow(/invalid pluginId/);
     expect(() => bridge.unregisterPlugin("../../evil")).toThrow(/invalid pluginId/);
   });
 
@@ -284,4 +291,3 @@ describe("path traversal protection (pluginId validation)", () => {
     expect(() => bridge.loadOrCreateSecret("-plugin")).toThrow(/invalid pluginId/);
   });
 });
-

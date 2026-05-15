@@ -1,8 +1,8 @@
-import { simpleGit, type SimpleGit } from 'simple-git';
-import { writeFileSync, mkdirSync, existsSync, realpathSync } from 'node:fs';
-import { dirname, resolve, sep } from 'node:path';
-import { homedir } from 'node:os';
-import type { Patch, Proposal } from '../core/types.js';
+import { simpleGit, type SimpleGit } from "simple-git";
+import { writeFileSync, mkdirSync, existsSync, realpathSync } from "node:fs";
+import { dirname, resolve, sep } from "node:path";
+import { homedir } from "node:os";
+import type { Patch, Proposal } from "../core/types.js";
 
 export class BranchManager {
   private git: SimpleGit;
@@ -20,7 +20,7 @@ export class BranchManager {
     return `tune/proposal-${proposalId}`;
   }
 
-  async createProposalBranch(proposalId: number, baseBranch = 'main'): Promise<string> {
+  async createProposalBranch(proposalId: number, baseBranch = "main"): Promise<string> {
     const name = this.branchName(proposalId);
     const branches = await this.git.branchLocal();
     if (branches.all.includes(name)) {
@@ -31,7 +31,7 @@ export class BranchManager {
     // auto-merged proposals don't stack on each other.
     if (!branches.all.includes(baseBranch)) {
       throw new Error(
-        `Base branch '${baseBranch}' not found in repo. Cannot create proposal branch — refusing to branch from current HEAD which would let proposals stack on each other. Set baseBranch explicitly if your repo doesn't use 'main'.`
+        `Base branch '${baseBranch}' not found in repo. Cannot create proposal branch — refusing to branch from current HEAD which would let proposals stack on each other. Set baseBranch explicitly if your repo doesn't use 'main'.`,
       );
     }
     await this.git.checkout(baseBranch);
@@ -50,18 +50,22 @@ export class BranchManager {
     const target = resolve(patch.target_path.replace(/^~/, homedir()));
     const repoRoot = resolve(this.repoPath);
     if (!target.startsWith(repoRoot + sep) && target !== repoRoot) {
-      throw new Error(`BranchManager refusing to write outside repo: target=${target}, repo=${repoRoot}`);
+      throw new Error(
+        `BranchManager refusing to write outside repo: target=${target}, repo=${repoRoot}`,
+      );
     }
     // Symlink traversal check: resolve the real path if the target already exists as a symlink
     if (existsSync(target)) {
       const resolvedTarget = realpathSync(target);
       if (!resolvedTarget.startsWith(repoRoot + sep) && resolvedTarget !== repoRoot) {
-        throw new Error(`BranchManager refusing symlink traversal: target=${target} resolves to ${resolvedTarget} which is outside repo=${repoRoot}`);
+        throw new Error(
+          `BranchManager refusing symlink traversal: target=${target} resolves to ${resolvedTarget} which is outside repo=${repoRoot}`,
+        );
       }
     }
     if (patch.applied_content) {
       mkdirSync(dirname(target), { recursive: true });
-      writeFileSync(target, patch.applied_content, 'utf8');
+      writeFileSync(target, patch.applied_content, "utf8");
       await this.git.add(target);
     } else {
       // Empty content: only add the specific target if it exists/changed.
@@ -69,16 +73,16 @@ export class BranchManager {
       await this.git.add(target);
     }
     const msg = `tune: ${proposal.subject} — alternative ${alternativeId}\nProposal-ID: ${proposal.id}`;
-    const result = await this.git.commit(msg, { '--allow-empty': null });
+    const result = await this.git.commit(msg, { "--allow-empty": null });
     return result.commit;
   }
 
   async revertPatch(commitSha: string): Promise<void> {
-    await this.git.revert(commitSha, ['--no-edit']);
+    await this.git.revert(commitSha, ["--no-edit"]);
   }
 
   async listProposalBranches(): Promise<string[]> {
     const branches = await this.git.branchLocal();
-    return branches.all.filter(b => b.startsWith('tune/proposal-'));
+    return branches.all.filter((b) => b.startsWith("tune/proposal-"));
   }
 }

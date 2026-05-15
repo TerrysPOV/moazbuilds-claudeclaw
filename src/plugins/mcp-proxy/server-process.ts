@@ -44,9 +44,13 @@ export class McpServerProcess {
   // Generation counter: stale onclose/onerror handlers from old transports are discarded
   private generation = 0;
 
-  constructor(name: string, config: McpServerConfig, opts?: {
-    onCrash?: (name: string, reason: string) => void;
-  }) {
+  constructor(
+    name: string,
+    config: McpServerConfig,
+    opts?: {
+      onCrash?: (name: string, reason: string) => void;
+    },
+  ) {
     this.name = name;
     this.config = config;
     this.restartHook = opts?.onCrash;
@@ -70,7 +74,9 @@ export class McpServerProcess {
     const stderrStream = this.transport.stderr;
     if (stderrStream) {
       const logStream = createWriteStream(logPath, { flags: "a" });
-      logStream.on("error", (err) => console.error(`[mcp-proxy] log write error for ${this.name}:`, err.message));
+      logStream.on("error", (err) =>
+        console.error(`[mcp-proxy] log write error for ${this.name}:`, err.message),
+      );
       stderrStream.pipe(logStream);
     }
 
@@ -104,8 +110,12 @@ export class McpServerProcess {
       ({ tools } = await this.client.listTools());
     } catch (err) {
       this.status = "failed";
-      try { await this.client?.close(); } catch {}
-      try { await this.transport?.close(); } catch {}
+      try {
+        await this.client?.close();
+      } catch {}
+      try {
+        await this.transport?.close();
+      } catch {}
       this.client = null;
       this.transport = null;
       throw err;
@@ -131,7 +141,10 @@ export class McpServerProcess {
 
     let timeoutHandle: ReturnType<typeof setTimeout>;
     const timer = new Promise<never>((_, reject) => {
-      timeoutHandle = setTimeout(() => reject(new Error(`Tool call ${tool} timed out after ${timeoutMs}ms`)), timeoutMs);
+      timeoutHandle = setTimeout(
+        () => reject(new Error(`Tool call ${tool} timed out after ${timeoutMs}ms`)),
+        timeoutMs,
+      );
     });
 
     const call = this.client.callTool({
@@ -206,8 +219,12 @@ export class McpServerProcess {
       this.transport = null;
       await this.start();
       // Close old transport after new generation is live — stale handlers are discarded by gen guard
-      try { await oldClient?.close(); } catch {}
-      try { await oldTransport?.close(); } catch {}
+      try {
+        await oldClient?.close();
+      } catch {}
+      try {
+        await oldTransport?.close();
+      } catch {}
     } catch (err) {
       this._handleCrash(`restart failed: ${err instanceof Error ? err.message : String(err)}`);
     }

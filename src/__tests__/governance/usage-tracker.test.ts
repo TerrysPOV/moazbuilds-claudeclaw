@@ -96,7 +96,7 @@ describe("UsageTracker", () => {
     const completed = await recordInvocationCompletion(
       startRecord.invocationId,
       usage,
-      estimatedCost
+      estimatedCost,
     );
 
     expect(completed).not.toBeNull();
@@ -135,10 +135,7 @@ describe("UsageTracker", () => {
 
     const startRecord = await recordInvocationStart(context);
 
-    const killed = await recordInvocationKilled(
-      startRecord.invocationId,
-      "maxToolCalls exceeded"
-    );
+    const killed = await recordInvocationKilled(startRecord.invocationId, "maxToolCalls exceeded");
 
     expect(killed).not.toBeNull();
     expect(killed!.status).toBe("killed");
@@ -219,7 +216,7 @@ describe("UsageTracker", () => {
         {
           currency: "USD",
           totalCost: 0.035,
-        }
+        },
       );
     }
 

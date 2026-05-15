@@ -1,13 +1,13 @@
 /**
  * Orchestrator Governance Adapter
- * 
+ *
  * Bridges the interface mismatch between the executor's GovernanceClient interface
  * and the actual GovernanceClient class from src/governance/client.ts.
- * 
+ *
  * Executor interface (target):
  *   checkPolicy(channelId: string, action: string): Promise<GovernanceCheck>
  *   checkBudget(sessionId: string, action: string): Promise<GovernanceCheck>
- * 
+ *
  * Real GovernanceClient (source):
  *   evaluateToolRequest(request: ToolRequestContext): PolicyDecision
  *   getBudgetState(channelId?: string)
@@ -77,7 +77,7 @@ class OrchestratorGovernanceAdapter implements GovernanceClient {
     const evaluations = await evaluateBudget({ sessionId });
 
     // Check if any policy evaluation blocks
-    const blockingEvaluation = evaluations.find(e => e.state === "block");
+    const blockingEvaluation = evaluations.find((e) => e.state === "block");
 
     if (blockingEvaluation) {
       return {

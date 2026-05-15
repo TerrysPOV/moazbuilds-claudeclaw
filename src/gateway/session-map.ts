@@ -1,15 +1,15 @@
 /**
  * Session Map Store
- * 
+ *
  * Hierarchical per-channel+thread mapping state management.
  * Each channelId + threadId combination has its own isolated mapping entry.
- * 
+ *
  * PERSISTENCE MODEL:
  * - Data stored at .claude/claudeclaw/session-map.json
  * - Source of truth is the persisted file
  * - Write queue pattern serializes concurrent write operations
  * - Reads may be optimistic, writes are serialized
- * 
+ *
  * DESIGN CONSTRAINTS:
  * - Do NOT invent a Claude CLI session ID - store as null until real ID is returned
  * - Cleanup must not remove entries merely because they are old if still active
@@ -59,8 +59,12 @@ function enqueueWrite<T>(operation: () => Promise<T>): Promise<T> {
   writeQueueLength++;
   const promise = writeQueue.then(() => operation());
   writeQueue = promise.then(
-    () => { writeQueueLength--; },
-    () => { writeQueueLength--; }
+    () => {
+      writeQueueLength--;
+    },
+    () => {
+      writeQueueLength--;
+    },
   );
   return promise;
 }
@@ -107,12 +111,12 @@ async function loadMap(): Promise<SessionMap> {
   try {
     const content = await Bun.file(SESSION_MAP_FILE).text();
     const parsed = JSON.parse(content);
-    
+
     // Validate structure
     if (typeof parsed === "object" && parsed !== null) {
       return parsed as SessionMap;
     }
-    
+
     console.warn("[session-map] Invalid session map structure, starting fresh");
     return {};
   } catch {
@@ -135,14 +139,14 @@ async function saveMap(map: SessionMap): Promise<void> {
  */
 export async function get(
   channelId: string,
-  threadId: string = DEFAULT_THREAD_ID
+  threadId: string = DEFAULT_THREAD_ID,
 ): Promise<SessionEntry | null> {
   await initSessionMap();
-  
+
   if (!sessionMap) {
     return null;
   }
-  
+
   return sessionMap[channelId]?.[threadId] ?? null;
 }
 
@@ -150,22 +154,18 @@ export async function get(
  * Set a mapping entry for a channel+thread.
  * Overwrites any existing entry.
  */
-export async function set(
-  channelId: string,
-  threadId: string,
-  entry: SessionEntry
-): Promise<void> {
+export async function set(channelId: string, threadId: string, entry: SessionEntry): Promise<void> {
   await initSessionMap();
-  
+
   await enqueueWrite(async () => {
     if (!sessionMap) {
       sessionMap = {};
     }
-    
+
     if (!sessionMap[channelId]) {
       sessionMap[channelId] = {};
     }
-    
+
     sessionMap[channelId][threadId] = entry;
     await saveMap(sessionMap);
   });
@@ -177,22 +177,22 @@ export async function set(
  */
 export async function remove(
   channelId: string,
-  threadId: string = DEFAULT_THREAD_ID
+  threadId: string = DEFAULT_THREAD_ID,
 ): Promise<void> {
   await initSessionMap();
-  
+
   await enqueueWrite(async () => {
     if (!sessionMap || !sessionMap[channelId]) {
       return;
     }
-    
+
     delete sessionMap[channelId][threadId];
-    
+
     // Remove empty channel buckets
     if (Object.keys(sessionMap[channelId]).length === 0) {
       delete sessionMap[channelId];
     }
-    
+
     await saveMap(sessionMap);
   });
 }
@@ -203,7 +203,7 @@ export async function remove(
 export async function update(
   channelId: string,
   threadId: string,
-  patch: Partial<SessionEntry>
+  patch: Partial<SessionEntry>,
 ): Promise<void> {
   await initSessionMap();
 
@@ -233,7 +233,7 @@ export async function update(
 export async function updateLastSeq(
   channelId: string,
   threadId: string,
-  seq: number
+  seq: number,
 ): Promise<void> {
   await update(channelId, threadId, { lastSeq: seq });
 }
@@ -241,10 +241,7 @@ export async function updateLastSeq(
 /**
  * Increment the turn count for a channel+thread.
  */
-export async function incrementTurnCount(
-  channelId: string,
-  threadId: string
-): Promise<void> {
+export async function incrementTurnCount(channelId: string, threadId: string): Promise<void> {
   await initSessionMap();
 
   await enqueueWrite(async () => {
@@ -267,7 +264,7 @@ export async function attachClaudeSessionId(
   channelId: string,
   threadId: string,
   claudeSessionId: string,
-  force: boolean = false
+  force: boolean = false,
 ): Promise<void> {
   await initSessionMap();
 
@@ -279,7 +276,7 @@ export async function attachClaudeSessionId(
 
     if (existing.claudeSessionId !== null && !force) {
       console.warn(
-        `[session-map] Not overwriting existing claudeSessionId for channel=${channelId}, thread=${threadId}`
+        `[session-map] Not overwriting existing claudeSessionId for channel=${channelId}, thread=${threadId}`,
       );
       return;
     }
@@ -297,7 +294,7 @@ export async function attachClaudeSessionId(
  */
 export async function getOrCreateMapping(
   channelId: string,
-  threadId: string = DEFAULT_THREAD_ID
+  threadId: string = DEFAULT_THREAD_ID,
 ): Promise<SessionEntry> {
   await initSessionMap();
 
@@ -355,10 +352,7 @@ export async function listThreads(channelId: string): Promise<string[]> {
 /**
  * Mark a mapping as stale.
  */
-export async function markStale(
-  channelId: string,
-  threadId: string
-): Promise<void> {
+export async function markStale(channelId: string, threadId: string): Promise<void> {
   await update(channelId, threadId, { status: "stale" });
 }
 
@@ -367,33 +361,33 @@ export async function markStale(
  * Removes entries that are:
  * - Explicitly reset
  * - Past TTL AND have no activity AND no Claude session attached
- * 
+ *
  * IMPORTANT: Does NOT auto-delete active mappings during ordinary get() calls.
  * Cleanup should be explicit or tightly controlled.
  */
 export async function cleanup(maxAgeDays: number = DEFAULT_TTL_DAYS): Promise<number> {
   await initSessionMap();
-  
+
   if (!sessionMap) {
     return 0;
   }
-  
+
   let removedCount = 0;
   const now = new Date();
   const maxAgeMs = maxAgeDays * 24 * 60 * 60 * 1000;
-  
+
   await enqueueWrite(async () => {
     for (const channelId of Object.keys(sessionMap!)) {
       const channelEntries = sessionMap![channelId];
       const threadsToDelete: string[] = [];
-      
+
       for (const threadId of Object.keys(channelEntries)) {
         const entry = channelEntries[threadId];
-        
+
         // Check if entry is past TTL
         const lastActive = new Date(entry.lastActiveAt);
         const ageMs = now.getTime() - lastActive.getTime();
-        
+
         // Cleanup candidates:
         // 1. Reset entries (explicitly marked for cleanup)
         // 2. Entries past TTL with no activity and no Claude session attached
@@ -402,34 +396,34 @@ export async function cleanup(maxAgeDays: number = DEFAULT_TTL_DAYS): Promise<nu
         const updatedAt = new Date(entry.updatedAt);
         const updateAgeMs = now.getTime() - updatedAt.getTime();
         const isOldWithNoRecentUpdate = updateAgeMs > maxAgeMs;
-        
+
         if (isReset || (isOldWithNoSession && isOldWithNoRecentUpdate)) {
           threadsToDelete.push(threadId);
           removedCount++;
           console.debug(
             `[session-map] Cleanup removing: channel=${channelId}, thread=${threadId}, ` +
-            `reason=${isReset ? "reset" : "old"}, age=${Math.round(ageMs / (24 * 60 * 60 * 1000))} days`
+              `reason=${isReset ? "reset" : "old"}, age=${Math.round(ageMs / (24 * 60 * 60 * 1000))} days`,
           );
         }
       }
-      
+
       // Remove marked threads
       for (const threadId of threadsToDelete) {
         delete channelEntries[threadId];
       }
-      
+
       // Remove empty channel buckets
       if (Object.keys(channelEntries).length === 0) {
         delete sessionMap![channelId];
       }
     }
-    
+
     if (removedCount > 0) {
       await saveMap(sessionMap!);
       console.log(`[session-map] Cleanup removed ${removedCount} entries`);
     }
   });
-  
+
   return removedCount;
 }
 

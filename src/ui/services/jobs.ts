@@ -9,12 +9,17 @@ export interface QuickJobInput {
   daily?: unknown;
 }
 
-export async function createQuickJob(input: QuickJobInput): Promise<{ name: string; schedule: string; recurring: boolean }> {
+export async function createQuickJob(
+  input: QuickJobInput,
+): Promise<{ name: string; schedule: string; recurring: boolean }> {
   const time = typeof input.time === "string" ? input.time.trim() : "";
   const prompt = typeof input.prompt === "string" ? input.prompt.trim() : "";
-  const recurring = input.recurring == null
-    ? (input.daily == null ? true : Boolean(input.daily))
-    : Boolean(input.recurring);
+  const recurring =
+    input.recurring == null
+      ? input.daily == null
+        ? true
+        : Boolean(input.daily)
+      : Boolean(input.recurring);
 
   if (!/^\d{2}:\d{2}$/.test(time)) {
     throw new Error("Invalid time. Use HH:MM.");
@@ -33,7 +38,10 @@ export async function createQuickJob(input: QuickJobInput): Promise<{ name: stri
   }
 
   const schedule = `${minute} ${hour} * * *`;
-  const stamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
+  const stamp = new Date()
+    .toISOString()
+    .replace(/[-:TZ.]/g, "")
+    .slice(0, 14);
   const name = `quick-${stamp}-${hour.toString().padStart(2, "0")}${minute.toString().padStart(2, "0")}`;
   const path = join(getJobsDir(), `${name}.md`);
   const content = `---\nschedule: "${schedule}"\nrecurring: ${recurring ? "true" : "false"}\n---\n${prompt}\n`;

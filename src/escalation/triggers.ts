@@ -1,14 +1,14 @@
 /**
  * Escalation Trigger Integration
- * 
+ *
  * Connect existing control-plane triggers to escalation actions consistently.
- * 
+ *
  * DESIGN:
  * - Integrates with policy denials, watchdog triggers, DLQ thresholds, orchestration failures
  * - Determines when to pause, create handoffs, or send notifications
  * - Policy-driven escalation decisions
  * - All actions are explicit and auditable
- * 
+ *
  * INTEGRATION POINTS:
  * - Phase 3 Policy Engine: policy denials, approval timeouts
  * - Phase 4 Governance: watchdog triggers, budget blocks
@@ -27,7 +27,7 @@ import type { WatchdogDecision } from "../governance/watchdog";
 // Types
 // ============================================================================
 
-export type TriggerSource = 
+export type TriggerSource =
   | "policy_denial"
   | "policy_approval_timeout"
   | "watchdog"
@@ -67,22 +67,22 @@ export interface EscalationPolicy {
   pauseOnWatchdogSuspend: boolean;
   pauseOnDlqOverflow: boolean;
   pauseOnRepeatedOrchestrationFailures: boolean;
-  
+
   // Handoff thresholds
   createHandoffOnPolicyDenial: boolean;
   createHandoffOnWatchdogTrigger: boolean;
   createHandoffOnManualEscalation: boolean;
-  
+
   // Notification settings
   notifyOnPolicyDenial: boolean;
   notifyOnWatchdog: boolean;
   notifyOnDlqOverflow: boolean;
   notifyOnOrchestrationFailure: boolean;
   notifyOnPauseResume: boolean;
-  
+
   // Minimum severity for handoff
   minHandoffSeverity: HandoffSeverity;
-  
+
   // Repeated failure threshold for auto-pause
   repeatedFailureThreshold: number;
 }
@@ -96,17 +96,17 @@ const DEFAULT_ESCALATION_POLICY: EscalationPolicy = {
   pauseOnWatchdogSuspend: true,
   pauseOnDlqOverflow: false, // DLQ overflow usually handled by retry
   pauseOnRepeatedOrchestrationFailures: true,
-  
+
   createHandoffOnPolicyDenial: true,
   createHandoffOnWatchdogTrigger: true,
   createHandoffOnManualEscalation: true,
-  
+
   notifyOnPolicyDenial: true,
   notifyOnWatchdog: true,
   notifyOnDlqOverflow: true,
   notifyOnOrchestrationFailure: true,
   notifyOnPauseResume: true,
-  
+
   minHandoffSeverity: "warning",
   repeatedFailureThreshold: 3,
 };
@@ -124,16 +124,14 @@ const failureCounts: Record<string, { count: number; lastFailure: string }> = {}
 /**
  * Handle an escalation trigger.
  * This is the main entry point for integrating triggers with escalation actions.
- * 
+ *
  * @param context - The trigger context
  * @returns The escalation actions taken
  */
-export async function handleEscalationTrigger(
-  context: TriggerContext
-): Promise<EscalationAction> {
+export async function handleEscalationTrigger(context: TriggerContext): Promise<EscalationAction> {
   const actionId = randomUUID();
   const timestamp = new Date().toISOString();
-  
+
   const action: EscalationAction = {
     actionId,
     timestamp,
@@ -145,7 +143,7 @@ export async function handleEscalationTrigger(
 
   // Determine severity
   const severity = context.severity || "warning";
-  
+
   // Determine notification type
   const notificationType = mapSourceToNotificationType(context.source);
 
@@ -179,7 +177,7 @@ export async function handleEscalationTrigger(
         threadId: context.threadId,
         relatedEventIds: context.eventId ? [context.eventId] : undefined,
       };
-      
+
       await createHandoff(
         `Escalation from ${context.source}: ${context.message || "Trigger activated"}`,
         handoffContext,
@@ -187,7 +185,7 @@ export async function handleEscalationTrigger(
           severity: handoffSeverity,
           summary: context.message || `Escalation triggered by ${context.source}`,
           metadata: context.details,
-        }
+        },
       );
       action.handoff = true;
     } catch (err) {
@@ -233,14 +231,16 @@ export async function handleEscalationTrigger(
     },
   });
 
-  console.log(`[escalation] Handled ${context.source} trigger: pause=${action.pause}, handoff=${action.handoff}, notify=${action.notification}`);
+  console.log(
+    `[escalation] Handled ${context.source} trigger: pause=${action.pause}, handoff=${action.handoff}, notify=${action.notification}`,
+  );
 
   return action;
 }
 
 /**
  * Determine if the system should pause based on a trigger.
- * 
+ *
  * @param context - The trigger context
  * @returns True if the system should pause
  */
@@ -259,29 +259,30 @@ export function shouldPause(context: TriggerContext): boolean {
     case "dlq_overflow":
       return currentPolicy.pauseOnDlqOverflow;
 
-    case "orchestration_failure":
+    case "orchestration_failure": {
       if (!currentPolicy.pauseOnRepeatedOrchestrationFailures) return false;
-      
+
       // Track repeated failures
       const key = context.workflowId || context.sessionId || "global";
       const now = new Date().toISOString();
-      
+
       if (!failureCounts[key]) {
         failureCounts[key] = { count: 1, lastFailure: now };
         return false;
       }
-      
+
       // Reset count if last failure was more than 5 minutes ago
       const lastFailure = new Date(failureCounts[key].lastFailure);
       if (Date.now() - lastFailure.getTime() > 300000) {
         failureCounts[key] = { count: 1, lastFailure: now };
         return false;
       }
-      
+
       failureCounts[key].count++;
       failureCounts[key].lastFailure = now;
-      
+
       return failureCounts[key].count >= currentPolicy.repeatedFailureThreshold;
+    }
 
     case "manual_escalation":
       // Manual escalations don't auto-pause
@@ -298,18 +299,18 @@ export function shouldPause(context: TriggerContext): boolean {
 
 /**
  * Determine if a handoff should be created based on a trigger.
- * 
+ *
  * @param context - The trigger context
  * @returns True if a handoff should be created
  */
 export function shouldCreateHandoff(context: TriggerContext): boolean {
   const { source, severity } = context;
-  
+
   // Check minimum severity
   const severityOrder: HandoffSeverity[] = ["info", "warning", "critical"];
   const minIndex = severityOrder.indexOf(currentPolicy.minHandoffSeverity);
   const severityIndex = severityOrder.indexOf((severity as HandoffSeverity) || "info");
-  
+
   if (severityIndex < minIndex) {
     return false;
   }
@@ -342,7 +343,7 @@ export function shouldCreateHandoff(context: TriggerContext): boolean {
 
 /**
  * Determine if a notification should be sent based on a trigger.
- * 
+ *
  * @param context - The trigger context
  * @returns True if a notification should be sent
  */
@@ -422,7 +423,7 @@ export async function handlePolicyDenial(
     channelId?: string;
     sessionId?: string;
     workflowId?: string;
-  }
+  },
 ): Promise<EscalationAction> {
   return handleEscalationTrigger({
     source: "policy_denial",
@@ -444,11 +445,11 @@ export async function handleWatchdogTrigger(
   context: {
     invocationId: string;
     sessionId?: string;
-  }
+  },
 ): Promise<EscalationAction> {
-  const severity = decision.state === "kill" ? "critical" : 
-                   decision.state === "suspend" ? "warning" : "info";
-  
+  const severity =
+    decision.state === "kill" ? "critical" : decision.state === "suspend" ? "warning" : "info";
+
   return handleEscalationTrigger({
     source: "watchdog",
     sessionId: context.sessionId,
@@ -468,10 +469,10 @@ export async function handleDlqOverflow(
   options?: {
     eventId?: string;
     workflowId?: string;
-  }
+  },
 ): Promise<EscalationAction> {
   const severity = dlqSize > threshold * 2 ? "critical" : "warning";
-  
+
   return handleEscalationTrigger({
     source: "dlq_overflow",
     eventId: options?.eventId,
@@ -491,12 +492,12 @@ export async function handleOrchestrationFailure(
   options?: {
     sessionId?: string;
     eventId?: string;
-  }
+  },
 ): Promise<EscalationAction> {
   // Check if this is a repeated failure
   const count = failureCounts[workflowId]?.count || 0;
   const severity = count >= currentPolicy.repeatedFailureThreshold - 1 ? "critical" : "warning";
-  
+
   return handleEscalationTrigger({
     source: "orchestration_failure",
     workflowId,
@@ -519,7 +520,7 @@ export async function handleManualEscalation(
     workflowId?: string;
     sessionId?: string;
     channelId?: string;
-  }
+  },
 ): Promise<EscalationAction> {
   return handleEscalationTrigger({
     source: "manual_escalation",
@@ -564,7 +565,7 @@ function determinePauseMode(context: TriggerContext): PauseMode {
   if (context.severity === "critical" || context.watchdogDecision?.state === "kill") {
     return "admission_and_scheduling";
   }
-  
+
   // For less severe issues, only pause admission
   return "admission_only";
 }

@@ -1,18 +1,13 @@
 /**
  * Tests for event-processor.ts
- * 
+ *
  * Run with: bun test src/__tests__/event-processor.test.ts
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { mkdir, rm } from "fs/promises";
 import { join } from "path";
-import {
-  initEventLog,
-  append,
-  resetEventLog,
-  type EventEntryInput,
-} from "../event-log";
+import { initEventLog, append, resetEventLog, type EventEntryInput } from "../event-log";
 import {
   initProcessor,
   processNext,
@@ -30,13 +25,13 @@ const TEST_DIR = join(process.cwd(), ".claude", "claudeclaw");
 beforeEach(async () => {
   // Reset module state
   resetEventLog();
-  
+
   // Clean up test directories
   await rm(join(TEST_DIR, "event-log"), { recursive: true, force: true });
   await rm(join(TEST_DIR, "dedupe"), { recursive: true, force: true });
   await mkdir(join(TEST_DIR, "event-log"), { recursive: true });
   await mkdir(join(TEST_DIR, "dedupe"), { recursive: true });
-  
+
   await resetProcessor();
 });
 
@@ -69,7 +64,7 @@ describe("Event Processor", () => {
 
   it("should process a single event", async () => {
     let processed = false;
-    
+
     await initProcessor({
       retentionDays: 7,
       onEvent: async (event) => {
@@ -88,7 +83,7 @@ describe("Event Processor", () => {
 
   it("should process multiple events in order", async () => {
     const processedSeqs: number[] = [];
-    
+
     await initProcessor({
       retentionDays: 7,
       onEvent: async (event) => {
@@ -110,7 +105,7 @@ describe("Event Processor", () => {
   it("should deduplicate events by dedupeKey", async () => {
     let processCount = 0;
     const dedupeKey = "unique-key-123";
-    
+
     await initProcessor({
       retentionDays: 7,
       onEvent: async () => {
@@ -131,15 +126,15 @@ describe("Event Processor", () => {
 
   it("should handle event failure with retry", async () => {
     let attempts = 0;
-    
+
     await initProcessor({
       retentionDays: 7,
       onEvent: async () => {
         attempts++;
-        return { 
-          success: false, 
+        return {
+          success: false,
           error: "Temporary error",
-          shouldRetry: true 
+          shouldRetry: true,
         };
       },
     });
@@ -203,7 +198,7 @@ describe("Event Processor", () => {
 
   it("should use canonical dedupe key when dedupeKey not provided", async () => {
     let processCount = 0;
-    
+
     await initProcessor({
       retentionDays: 7,
       onEvent: async () => {
@@ -224,7 +219,7 @@ describe("Event Processor", () => {
 
   it("should survive restart", async () => {
     const dedupeKey = "restart-test-key";
-    
+
     await initProcessor({
       retentionDays: 7,
       onEvent: async () => ({ success: true }),
@@ -256,19 +251,19 @@ describe("Event Processor - Edge Cases", () => {
     });
 
     await append(createTestEntry());
-    
+
     // Should not throw
     await processNext();
   });
 
   it("should not process when already processing", async () => {
     let processing = false;
-    
+
     await initProcessor({
       retentionDays: 7,
       onEvent: async () => {
         processing = true;
-        await new Promise(resolve => setTimeout(resolve, 100));
+        await new Promise((resolve) => setTimeout(resolve, 100));
         processing = false;
         return { success: true };
       },
@@ -278,12 +273,12 @@ describe("Event Processor - Edge Cases", () => {
 
     // Start first process
     const p1 = processNext();
-    
+
     // Try to start second while first is running
     const p2 = processNext();
 
     const [r1, r2] = await Promise.all([p1, p2]);
-    
+
     // Only one should have processed
     expect(r1 || r2).toBe(true);
     expect(r1 && r2).toBe(false);
@@ -291,7 +286,7 @@ describe("Event Processor - Edge Cases", () => {
 
   it("should handle different event types", async () => {
     const types: string[] = [];
-    
+
     await initProcessor({
       retentionDays: 7,
       onEvent: async (event) => {

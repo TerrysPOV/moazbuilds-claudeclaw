@@ -1,11 +1,17 @@
 /**
  * Task Graph Engine
- * 
+ *
  * Defines graph validation and progression logic for workflow task graphs.
  * Provides cycle detection, topological sorting, and ready-task identification.
  */
 
-import { WorkflowDefinition, TaskDefinition, WorkflowState, TaskRuntimeState, ValidationResult } from "./types.ts";
+import type {
+  WorkflowDefinition,
+  TaskDefinition,
+  WorkflowState,
+  TaskRuntimeState,
+  ValidationResult,
+} from "./types.ts";
 
 /**
  * Cycle detection result with path information for debugging
@@ -39,16 +45,16 @@ export function createWorkflow(definition: Omit<WorkflowDefinition, "id">): Work
 export function validateWorkflow(definition: WorkflowDefinition): ValidationResult {
   const errors: string[] = [];
   const warnings: string[] = [];
-  
+
   // Check for empty tasks
   if (!definition.tasks || definition.tasks.length === 0) {
     errors.push("Workflow must have at least one task");
     return { valid: false, errors, warnings };
   }
-  
+
   // Build task ID set for quick lookup
-  const taskIds = new Set(definition.tasks.map(t => t.id));
-  
+  const taskIds = new Set(definition.tasks.map((t) => t.id));
+
   // Check for duplicate task IDs
   const seenIds = new Set<string>();
   for (const task of definition.tasks) {
@@ -57,7 +63,7 @@ export function validateWorkflow(definition: WorkflowDefinition): ValidationResu
     }
     seenIds.add(task.id);
   }
-  
+
   // Validate each task
   for (const task of definition.tasks) {
     // Check dependency references exist
@@ -70,7 +76,7 @@ export function validateWorkflow(definition: WorkflowDefinition): ValidationResu
         errors.push(`Task "${task.id}" cannot depend on itself`);
       }
     }
-    
+
     // Validate retry policy if present
     if (task.retryPolicy) {
       if (task.retryPolicy.initialDelayMs !== undefined && task.retryPolicy.initialDelayMs < 0) {
@@ -79,27 +85,30 @@ export function validateWorkflow(definition: WorkflowDefinition): ValidationResu
       if (task.retryPolicy.maxDelayMs !== undefined && task.retryPolicy.maxDelayMs < 0) {
         errors.push(`Task "${task.id}" has negative maxDelayMs`);
       }
-      if (task.retryPolicy.backoffMultiplier !== undefined && task.retryPolicy.backoffMultiplier <= 0) {
+      if (
+        task.retryPolicy.backoffMultiplier !== undefined &&
+        task.retryPolicy.backoffMultiplier <= 0
+      ) {
         errors.push(`Task "${task.id}" has invalid backoffMultiplier (must be > 0)`);
       }
     }
-    
+
     // Warn about missing actionRef
     if (!task.actionRef && !task.compensationRef) {
       warnings.push(`Task "${task.id}" has no actionRef or compensationRef`);
     }
   }
-  
+
   // Check for cycles using DFS
   const cycleInfo = detectCycle(definition.tasks);
   if (cycleInfo.hasCycle) {
     errors.push(`Workflow contains a cycle: ${cycleInfo.path?.join(" -> ")}`);
   }
-  
+
   return {
     valid: errors.length === 0,
     errors,
-    warnings
+    warnings,
   };
 }
 
@@ -107,11 +116,11 @@ export function validateWorkflow(definition: WorkflowDefinition): ValidationResu
  * Detect cycles in the task graph using DFS
  */
 function detectCycle(tasks: TaskDefinition[]): CycleInfo {
-  const taskMap = new Map(tasks.map(t => [t.id, t]));
+  const taskMap = new Map(tasks.map((t) => [t.id, t]));
   const visited = new Set<string>();
   const inStack = new Set<string>();
   const path: string[] = [];
-  
+
   function dfs(taskId: string): CycleInfo {
     if (inStack.has(taskId)) {
       // Found cycle - extract the cycle path
@@ -119,32 +128,32 @@ function detectCycle(tasks: TaskDefinition[]): CycleInfo {
       const cyclePath = [...path.slice(cycleStart), taskId];
       return { hasCycle: true, path: cyclePath };
     }
-    
+
     if (visited.has(taskId)) {
       return { hasCycle: false };
     }
-    
+
     const task = taskMap.get(taskId);
     if (!task) {
       return { hasCycle: false };
     }
-    
+
     visited.add(taskId);
     inStack.add(taskId);
     path.push(taskId);
-    
+
     for (const dep of task.deps) {
       const result = dfs(dep);
       if (result.hasCycle) {
         return result;
       }
     }
-    
+
     path.pop();
     inStack.delete(taskId);
     return { hasCycle: false };
   }
-  
+
   // Start DFS from each unvisited task
   for (const task of tasks) {
     if (!visited.has(task.id)) {
@@ -154,7 +163,7 @@ function detectCycle(tasks: TaskDefinition[]): CycleInfo {
       }
     }
   }
-  
+
   return { hasCycle: false };
 }
 
@@ -164,34 +173,37 @@ function detectCycle(tasks: TaskDefinition[]): CycleInfo {
  * - It has no unmet dependencies (all deps completed)
  * - It is not already running, completed, or failed
  */
-export function getReadyTasks(state: WorkflowState, _definition: WorkflowDefinition): TaskDefinition[] {
+export function getReadyTasks(
+  state: WorkflowState,
+  _definition: WorkflowDefinition,
+): TaskDefinition[] {
   const ready: TaskDefinition[] = [];
-  const definitionTasks = new Map(_definition.tasks.map(t => [t.id, t]));
-  
+  const definitionTasks = new Map(_definition.tasks.map((t) => [t.id, t]));
+
   // Get set of completed task IDs (including continued tasks so dependents can proceed)
   const completedOrFailed = new Set([
     ...state.completedTasks,
     ...state.failedTasks,
-    ...(state.continuedTasks || [])
+    ...(state.continuedTasks || []),
   ]);
-  
+
   for (const taskId of state.readyTasks) {
     const task = definitionTasks.get(taskId);
     if (!task) continue;
-    
+
     // Check if task is actually ready (not already running/completed/failed)
     const taskState = state.taskStates[taskId];
     if (!taskState) continue;
-    
+
     if (taskState.status === "ready" || taskState.status === "pending") {
       // Verify all dependencies are met
-      const depsMet = task.deps.every(dep => completedOrFailed.has(dep));
+      const depsMet = task.deps.every((dep) => completedOrFailed.has(dep));
       if (depsMet) {
         ready.push(task);
       }
     }
   }
-  
+
   return ready;
 }
 
@@ -203,32 +215,32 @@ export function advanceWorkflow(
   state: WorkflowState,
   definition: WorkflowDefinition,
   taskId: string,
-  result: { success: boolean; result?: unknown; error?: { type?: string; message: string } }
+  result: { success: boolean; result?: unknown; error?: { type?: string; message: string } },
 ): WorkflowState {
   const now = new Date().toISOString();
-  const taskIndex = definition.tasks.findIndex(t => t.id === taskId);
+  const taskIndex = definition.tasks.findIndex((t) => t.id === taskId);
   if (taskIndex === -1) {
     throw new Error(`Task ${taskId} not found in workflow`);
   }
-  
+
   const task = definition.tasks[taskIndex];
   const taskState = state.taskStates[taskId];
-  
+
   // Clone state to avoid mutation
   const newState: WorkflowState = {
     ...state,
     taskStates: { ...state.taskStates },
-    results: { ...state.results }
+    results: { ...state.results },
   };
-  
+
   // Update task state
   if (taskState) {
     newState.taskStates[taskId] = {
       ...taskState,
-      lastAttemptAt: now
+      lastAttemptAt: now,
     };
   }
-  
+
   if (result.success) {
     // Task completed successfully
     newState.taskStates[taskId] = {
@@ -236,28 +248,27 @@ export function advanceWorkflow(
       status: "completed",
       completedAt: now,
       result: result.result,
-      error: undefined
+      error: undefined,
     };
-    
+
     // Move from ready/running to completed
-    newState.readyTasks = newState.readyTasks.filter(id => id !== taskId);
-    newState.runningTasks = newState.runningTasks.filter(id => id !== taskId);
+    newState.readyTasks = newState.readyTasks.filter((id) => id !== taskId);
+    newState.runningTasks = newState.runningTasks.filter((id) => id !== taskId);
     if (!newState.completedTasks.includes(taskId)) {
       newState.completedTasks = [...newState.completedTasks, taskId];
     }
-    
+
     // Store result
     newState.results[taskId] = result.result;
-    
+
     // Find newly ready tasks
     const newlyReady = findNewlyReadyTasks(newState, definition, taskId);
     newState.readyTasks = [...newState.readyTasks, ...newlyReady];
-    
   } else {
     // Task failed
     const currentAttempt = taskState?.attemptCount || 0;
     const maxRetries = task.maxRetries ?? 0;
-    
+
     if (currentAttempt < maxRetries && task.onError === "retry_task") {
       // Schedule retry
       const retryDelay = calculateRetryDelay(currentAttempt, task.retryPolicy);
@@ -266,60 +277,58 @@ export function advanceWorkflow(
         status: "pending",
         attemptCount: currentAttempt + 1,
         nextRetryAt: new Date(Date.now() + retryDelay).toISOString(),
-        error: result.error
+        error: result.error,
       };
-      
+
       // Remove from running, keep in readyTasks for retry
-      newState.runningTasks = newState.runningTasks.filter(id => id !== taskId);
-      
+      newState.runningTasks = newState.runningTasks.filter((id) => id !== taskId);
     } else if (task.onError === "continue") {
       // Continue despite failure - track in continuedTasks (not completedTasks)
       newState.taskStates[taskId] = {
         ...newState.taskStates[taskId],
         status: "completed",
         completedAt: now,
-        error: result.error
+        error: result.error,
       };
-      
-      newState.readyTasks = newState.readyTasks.filter(id => id !== taskId);
-      newState.runningTasks = newState.runningTasks.filter(id => id !== taskId);
+
+      newState.readyTasks = newState.readyTasks.filter((id) => id !== taskId);
+      newState.runningTasks = newState.runningTasks.filter((id) => id !== taskId);
       if (!newState.continuedTasks?.includes(taskId)) {
         newState.continuedTasks = [...(newState.continuedTasks || []), taskId];
       }
-      
+
       // Find newly ready tasks
       const newlyReady = findNewlyReadyTasks(newState, definition, taskId);
       newState.readyTasks = [...newState.readyTasks, ...newlyReady];
-      
     } else {
       // fail_workflow or max retries exceeded
       newState.taskStates[taskId] = {
         ...newState.taskStates[taskId],
         status: "failed",
         completedAt: now,
-        error: result.error
+        error: result.error,
       };
-      
-      newState.readyTasks = newState.readyTasks.filter(id => id !== taskId);
-      newState.runningTasks = newState.runningTasks.filter(id => id !== taskId);
+
+      newState.readyTasks = newState.readyTasks.filter((id) => id !== taskId);
+      newState.runningTasks = newState.runningTasks.filter((id) => id !== taskId);
       if (!newState.failedTasks.includes(taskId)) {
         newState.failedTasks = [...newState.failedTasks, taskId];
       }
-      
+
       // Mark workflow as failed
       newState.status = "failed";
       newState.error = {
         taskId,
         type: result.error?.type,
-        message: result.error?.message || "Task failed"
+        message: result.error?.message || "Task failed",
       };
       newState.completedAt = now;
     }
   }
-  
+
   // Update workflow timestamps
   newState.updatedAt = now;
-  
+
   // Check if workflow is complete (immutable: merge returned changes)
   const completion = checkWorkflowCompletion(newState, definition);
   if (completion) {
@@ -332,29 +341,33 @@ export function advanceWorkflow(
 /**
  * Find tasks that become ready after a task completes
  */
-function findNewlyReadyTasks(state: WorkflowState, definition: WorkflowDefinition, completedTaskId: string): string[] {
+function findNewlyReadyTasks(
+  state: WorkflowState,
+  definition: WorkflowDefinition,
+  completedTaskId: string,
+): string[] {
   const newlyReady: string[] = [];
   // Tasks with deps satisfied: completed, failed, or continued (onError: continue)
   const completedOrFailed = new Set([
     ...state.completedTasks,
     ...state.failedTasks,
-    ...(state.continuedTasks || [])
+    ...(state.continuedTasks || []),
   ]);
-  
+
   for (const task of definition.tasks) {
     // Skip if already has a state that isn't pending/ready
     const existingState = state.taskStates[task.id];
     if (existingState && existingState.status !== "pending" && existingState.status !== "blocked") {
       continue;
     }
-    
+
     // Skip if already ready or running
     if (state.readyTasks.includes(task.id) || state.runningTasks.includes(task.id)) {
       continue;
     }
-    
+
     // Check if all dependencies are met
-    const depsMet = task.deps.every(dep => completedOrFailed.has(dep));
+    const depsMet = task.deps.every((dep) => completedOrFailed.has(dep));
     if (depsMet) {
       // Check if task was previously blocked
       if (state.blockedTasks.includes(task.id)) {
@@ -366,7 +379,7 @@ function findNewlyReadyTasks(state: WorkflowState, definition: WorkflowDefinitio
       }
     }
   }
-  
+
   return newlyReady;
 }
 
@@ -375,17 +388,17 @@ function findNewlyReadyTasks(state: WorkflowState, definition: WorkflowDefinitio
  */
 function calculateRetryDelay(
   attemptCount: number,
-  retryPolicy?: TaskDefinition["retryPolicy"]
+  retryPolicy?: TaskDefinition["retryPolicy"],
 ): number {
   if (!retryPolicy) {
     return 1000; // Default 1 second
   }
-  
+
   const initialDelay = retryPolicy.initialDelayMs ?? 1000;
   const maxDelay = retryPolicy.maxDelayMs ?? 60000;
   const multiplier = retryPolicy.backoffMultiplier ?? 2;
-  
-  const delay = initialDelay * Math.pow(multiplier, attemptCount);
+
+  const delay = initialDelay * multiplier ** attemptCount;
   return Math.min(delay, maxDelay);
 }
 
@@ -394,7 +407,10 @@ function calculateRetryDelay(
  * Returns a partial WorkflowState to merge, or null if no change needed.
  * Note: continuedTasks (onError: "continue") are not counted as terminal completion
  */
-function checkWorkflowCompletion(state: WorkflowState, definition: WorkflowDefinition): Partial<WorkflowState> | null {
+function checkWorkflowCompletion(
+  state: WorkflowState,
+  definition: WorkflowDefinition,
+): Partial<WorkflowState> | null {
   const totalTasks = definition.tasks.length;
   const completedTasks = state.completedTasks.length;
   const failedTasks = state.failedTasks.length;
@@ -416,13 +432,13 @@ function checkWorkflowCompletion(state: WorkflowState, definition: WorkflowDefin
     if (failedTasks > 0) {
       return {
         status: "failed",
-        ...(!state.completedAt ? { completedAt: new Date().toISOString() } : {})
+        ...(!state.completedAt ? { completedAt: new Date().toISOString() } : {}),
       };
     } else if (nonTerminalRemaining === 0) {
       // Everything completed with no failures and no remaining tasks
       return {
         status: "completed",
-        ...(!state.completedAt ? { completedAt: new Date().toISOString() } : {})
+        ...(!state.completedAt ? { completedAt: new Date().toISOString() } : {}),
       };
     }
     // If there are continued tasks still being tracked but no pending/running,
@@ -441,22 +457,20 @@ function checkWorkflowCompletion(state: WorkflowState, definition: WorkflowDefin
  */
 export function initializeWorkflowState(definition: WorkflowDefinition): WorkflowState {
   const now = new Date().toISOString();
-  
+
   // Find tasks with no dependencies - they are initially ready
-  const readyTasks = definition.tasks
-    .filter(t => t.deps.length === 0)
-    .map(t => t.id);
-  
+  const readyTasks = definition.tasks.filter((t) => t.deps.length === 0).map((t) => t.id);
+
   // Initialize task states
   const taskStates: Record<string, TaskRuntimeState> = {};
   for (const task of definition.tasks) {
     taskStates[task.id] = {
       taskId: task.id,
       status: readyTasks.includes(task.id) ? "ready" : "pending",
-      attemptCount: 0
+      attemptCount: 0,
     };
   }
-  
+
   return {
     workflowId: definition.id,
     version: definition.version,
@@ -474,7 +488,7 @@ export function initializeWorkflowState(definition: WorkflowDefinition): Workflo
     failedTasks: [],
     blockedTasks: [],
     taskStates,
-    results: {}
+    results: {},
   };
 }
 
@@ -485,29 +499,29 @@ export function initializeWorkflowState(definition: WorkflowDefinition): Workflo
 export function getTopologicalOrder(tasks: TaskDefinition[]): TaskDefinition[] {
   const result: TaskDefinition[] = [];
   const visited = new Set<string>();
-  const taskMap = new Map(tasks.map(t => [t.id, t]));
-  
+  const taskMap = new Map(tasks.map((t) => [t.id, t]));
+
   function visit(taskId: string): void {
     if (visited.has(taskId)) return;
-    
+
     const task = taskMap.get(taskId);
     if (!task) return;
-    
+
     visited.add(taskId);
-    
+
     // Visit all dependencies first
     for (const dep of task.deps) {
       visit(dep);
     }
-    
+
     result.push(task);
   }
-  
+
   // Visit all tasks
   for (const task of tasks) {
     visit(task.id);
   }
-  
+
   return result;
 }
 
@@ -518,16 +532,16 @@ export function getTopologicalOrder(tasks: TaskDefinition[]): TaskDefinition[] {
 export function getParallelizableTasks(
   tasks: TaskDefinition[],
   state: WorkflowState,
-  maxParallel: number = 4
+  maxParallel: number = 4,
 ): TaskDefinition[] {
   const readyTasks = getReadyTasks(state, { ...{ id: "temp" }, tasks } as WorkflowDefinition);
-  
+
   // Filter to tasks that are actually runnable
-  const runnable = readyTasks.filter(t => {
+  const runnable = readyTasks.filter((t) => {
     const taskState = state.taskStates[t.id];
     return taskState && (taskState.status === "ready" || taskState.status === "pending");
   });
-  
+
   // Check concurrency keys to prevent conflicts
   const concurrencyGroups = new Map<string, TaskDefinition[]>();
   for (const task of runnable) {
@@ -537,7 +551,7 @@ export function getParallelizableTasks(
     }
     concurrencyGroups.get(key)!.push(task);
   }
-  
+
   // Select one task per concurrency group, up to maxParallel
   const selected: TaskDefinition[] = [];
   for (const [, group] of concurrencyGroups) {
@@ -545,6 +559,6 @@ export function getParallelizableTasks(
     // Take the first task from each concurrency group
     selected.push(group[0]);
   }
-  
+
   return selected.slice(0, maxParallel);
 }

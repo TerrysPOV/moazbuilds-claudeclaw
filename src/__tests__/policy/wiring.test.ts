@@ -1,7 +1,11 @@
 import { describe, it, expect, beforeEach } from "bun:test";
 import { evaluate } from "../../../src/policy/engine";
 import { enqueue, loadState, listPending, findByEventId } from "../../../src/policy/approval-queue";
-import { initGovernanceClient, getGovernanceClient, type GovernanceClient } from "../../../src/governance/client";
+import {
+  initGovernanceClient,
+  getGovernanceClient,
+  type GovernanceClient,
+} from "../../../src/governance/client";
 
 describe("Policy Wiring Integration", () => {
   beforeEach(async () => {

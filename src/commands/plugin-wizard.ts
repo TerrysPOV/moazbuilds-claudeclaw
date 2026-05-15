@@ -19,7 +19,12 @@ type WizardStep =
   | { step: "marketplace-name-to-remove" }
   | { step: "install-plugin-ref" }
   | { step: "install-scope"; plugin: string }
-  | { step: "install-confirm"; plugin: string; scope: "user" | "project"; manifest: PluginManifest | null }
+  | {
+      step: "install-confirm";
+      plugin: string;
+      scope: "user" | "project";
+      manifest: PluginManifest | null;
+    }
   | { step: "uninstall-plugin" }
   | { step: "enable-plugin" }
   | { step: "disable-plugin" };
@@ -35,12 +40,15 @@ const sessions = new Map<string, WizardEntry>();
 // Sweep expired entries every 15 minutes so the Map doesn't grow unbounded
 // in a long-running daemon. unref() prevents this timer from keeping the
 // process alive if it would otherwise exit.
-const sweepTimer = setInterval(() => {
-  const now = Date.now();
-  for (const [k, entry] of sessions) {
-    if (now > entry.expiry) sessions.delete(k);
-  }
-}, 15 * 60 * 1000);
+const sweepTimer = setInterval(
+  () => {
+    const now = Date.now();
+    for (const [k, entry] of sessions) {
+      if (now > entry.expiry) sessions.delete(k);
+    }
+  },
+  15 * 60 * 1000,
+);
 if (sweepTimer.unref) sweepTimer.unref();
 
 function key(ctx: WizardContext): string {
@@ -97,7 +105,11 @@ function buildScopePrompt(agentName?: string): string {
   return `Install scope (reply 'cancel' to exit):\n\n1) user — ~/.claude/plugins/ (available to all agents)\n${projectNote}\n`;
 }
 
-function formatManifest(plugin: string, manifest: PluginManifest | null, scope: "user" | "project"): string {
+function formatManifest(
+  plugin: string,
+  manifest: PluginManifest | null,
+  scope: "user" | "project",
+): string {
   const scopeLabel = scope === "user" ? "user (~/.claude/plugins/)" : "project (.claude/plugins/)";
   if (!manifest) {
     return `Install plugin \`${plugin}\` into scope: ${scopeLabel}?\n\nReply 'yes' to confirm or 'cancel' to exit.`;
@@ -148,13 +160,27 @@ export async function handleWizardInput(ctx: WizardContext, rawText: string): Pr
   switch (state.step) {
     case "choose-action": {
       switch (text) {
-        case "1": entry.state = { step: "marketplace-source" }; return "Send the marketplace URL, local path, or GitHub repo (e.g. `owner/repo`):";
-        case "2": entry.state = { step: "marketplace-name-to-update" }; return "Send marketplace name to update (leave blank / send 'all' to update all):";
-        case "3": entry.state = { step: "marketplace-name-to-remove" }; return "Send the marketplace name to remove:";
-        case "4": entry.state = { step: "install-plugin-ref" }; return "Send plugin name (e.g. `my-plugin` or `my-plugin@marketplace-name`):";
-        case "5": entry.state = { step: "uninstall-plugin" }; return "Send the plugin name to uninstall:";
-        case "6": entry.state = { step: "enable-plugin" }; return "Send the plugin name to enable:";
-        case "7": entry.state = { step: "disable-plugin" }; return "Send the plugin name to disable:";
+        case "1":
+          entry.state = { step: "marketplace-source" };
+          return "Send the marketplace URL, local path, or GitHub repo (e.g. `owner/repo`):";
+        case "2":
+          entry.state = { step: "marketplace-name-to-update" };
+          return "Send marketplace name to update (leave blank / send 'all' to update all):";
+        case "3":
+          entry.state = { step: "marketplace-name-to-remove" };
+          return "Send the marketplace name to remove:";
+        case "4":
+          entry.state = { step: "install-plugin-ref" };
+          return "Send plugin name (e.g. `my-plugin` or `my-plugin@marketplace-name`):";
+        case "5":
+          entry.state = { step: "uninstall-plugin" };
+          return "Send the plugin name to uninstall:";
+        case "6":
+          entry.state = { step: "enable-plugin" };
+          return "Send the plugin name to enable:";
+        case "7":
+          entry.state = { step: "disable-plugin" };
+          return "Send the plugin name to disable:";
         case "8": {
           sessions.delete(k);
           const r = await runPluginCli({ kind: "list" });
@@ -196,7 +222,8 @@ export async function handleWizardInput(ctx: WizardContext, rawText: string): Pr
 
     case "install-scope": {
       const scope = text === "1" ? "user" : text === "2" ? "project" : null;
-      if (!scope) return `Reply '1' for user or '2' for project scope:\n\n${buildScopePrompt(ctx.agentName)}`;
+      if (!scope)
+        return `Reply '1' for user or '2' for project scope:\n\n${buildScopePrompt(ctx.agentName)}`;
       const manifest = await readPluginManifest(state.plugin);
       entry.state = { step: "install-confirm", plugin: state.plugin, scope, manifest };
       return formatManifest(state.plugin, manifest, scope);
@@ -205,15 +232,20 @@ export async function handleWizardInput(ctx: WizardContext, rawText: string): Pr
     case "install-confirm": {
       if (lower !== "yes") return `Reply 'yes' to install or 'cancel' to exit.`;
       sessions.delete(k);
-      const cwd = state.scope === "project" && ctx.agentName
-        ? await ensureAgentDir(ctx.agentName)
-        : undefined;
-      const r = await runPluginCli({ kind: "install", plugin: state.plugin, scope: state.scope }, cwd);
+      const cwd =
+        state.scope === "project" && ctx.agentName
+          ? await ensureAgentDir(ctx.agentName)
+          : undefined;
+      const r = await runPluginCli(
+        { kind: "install", plugin: state.plugin, scope: state.scope },
+        cwd,
+      );
       const msg = formatResult(r.ok, r.stdout, r.stderr);
       if (r.ok) {
-        const location = state.scope === "project" && ctx.agentName
-          ? `agents/${ctx.agentName}/.claude/plugins/`
-          : "~/.claude/plugins/";
+        const location =
+          state.scope === "project" && ctx.agentName
+            ? `agents/${ctx.agentName}/.claude/plugins/`
+            : "~/.claude/plugins/";
         return `${msg}\n\nInstalled to ${location}. Skills it provides will be available as /<plugin>:<skill-name> commands.`;
       }
       return msg;

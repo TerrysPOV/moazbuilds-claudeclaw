@@ -32,6 +32,6 @@ export interface StartWebUiOptions {
     message: string,
     onChunk: (text: string) => void,
     onUnblock: () => void,
-    onAgentEvent: (ev: import("../runner").AgentStreamEvent) => void
+    onAgentEvent: (ev: import("../runner").AgentStreamEvent) => void,
   ) => Promise<void>;
 }

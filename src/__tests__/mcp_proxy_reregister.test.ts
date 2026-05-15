@@ -57,7 +57,9 @@ afterEach(async () => {
   _resetMcpBridge();
   _resetHttpGateway();
   _resetMcpProxy();
-  try { rmSync(tmpDir, { recursive: true }); } catch {}
+  try {
+    rmSync(tmpDir, { recursive: true });
+  } catch {}
 });
 
 describe("mcp-proxy re-register atomicity", () => {
@@ -66,7 +68,9 @@ describe("mcp-proxy re-register atomicity", () => {
   it("in-flight call completes against old handler even after re-register", async () => {
     const PLUGIN = "atomic-plugin";
     let resolveV1!: (v: string) => void;
-    const blockV1 = new Promise<string>((resolve) => { resolveV1 = resolve; });
+    const blockV1 = new Promise<string>((resolve) => {
+      resolveV1 = resolve;
+    });
 
     // Register v1 with a handler that blocks until we release it
     customBridge.registerPluginTool(PLUGIN, {

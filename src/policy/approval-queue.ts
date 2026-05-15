@@ -1,14 +1,14 @@
 /**
  * Approval Workflow
- * 
+ *
  * Durable approval workflow for requests that require operator authorization.
- * 
+ *
  * DESIGN:
  * - Approval requests are durably stored in append-friendly format
  * - Storage path: .claude/claudeclaw/approval-queue.jsonl
  * - Queue state must not live only in memory
  * - Approval resolution is restart-safe
- * 
+ *
  * CRASH CONSCIOUSNESS:
  * - All queue operations use atomic file operations
  * - State is loaded from disk on init and kept in sync
@@ -19,7 +19,7 @@ import { appendFile, readFile, mkdir } from "fs/promises";
 import { existsSync } from "fs";
 import { join } from "path";
 import { randomUUID } from "crypto";
-import { type ToolRequestContext, type PolicyDecision } from "./engine";
+import type { ToolRequestContext, PolicyDecision } from "./engine";
 
 // ============================================================================
 // Types
@@ -58,7 +58,7 @@ const DEFAULT_EXPIRY_HOURS = 24;
 // State
 // ============================================================================
 
-let approvalIndex: Map<string, ApprovalEntry> = new Map();
+const approvalIndex: Map<string, ApprovalEntry> = new Map();
 let indexLoadedAt: string = "";
 let loadError: Error | null = null;
 
@@ -72,14 +72,14 @@ let loadError: Error | null = null;
  */
 export async function enqueue(
   request: ToolRequestContext,
-  decision: PolicyDecision
+  decision: PolicyDecision,
 ): Promise<ApprovalEntry> {
   if (loadError) {
     throw new Error(`Approval queue failed to initialize: ${loadError.message}`);
   }
   const now = new Date();
   const expiryDate = new Date(now.getTime() + DEFAULT_EXPIRY_HOURS * 60 * 60 * 1000);
-  
+
   const entry: ApprovalEntry = {
     id: randomUUID(),
     eventId: request.eventId,
@@ -90,17 +90,17 @@ export async function enqueue(
     createdAt: now.toISOString(),
     expiresAt: expiryDate.toISOString(),
   };
-  
+
   // Ensure directory exists
   await mkdir(APPROVAL_DIR, { recursive: true });
-  
+
   // Append to queue file (atomic append)
   const line = JSON.stringify(entry) + "\n";
   await appendFile(APPROVAL_QUEUE_FILE, line, "utf8");
-  
+
   // Update in-memory index
   approvalIndex.set(entry.id, entry);
-  
+
   return entry;
 }
 
@@ -110,7 +110,7 @@ export async function enqueue(
 export async function approve(
   eventId: string,
   actor: string,
-  reason?: string
+  reason?: string,
 ): Promise<ApprovalEntry | null> {
   if (loadError) {
     throw new Error(`Approval queue failed to initialize: ${loadError.message}`);
@@ -119,12 +119,12 @@ export async function approve(
   if (!entry) {
     return null;
   }
-  
+
   if (entry.status !== "pending") {
     // Already resolved - idempotent operation
     return entry;
   }
-  
+
   const now = new Date().toISOString();
 
   // Create new object instead of mutating the shared in-memory entry
@@ -149,7 +149,7 @@ export async function approve(
 export async function deny(
   eventId: string,
   actor: string,
-  reason?: string
+  reason?: string,
 ): Promise<ApprovalEntry | null> {
   if (loadError) {
     throw new Error(`Approval queue failed to initialize: ${loadError.message}`);
@@ -158,12 +158,12 @@ export async function deny(
   if (!entry) {
     return null;
   }
-  
+
   if (entry.status !== "pending") {
     // Already resolved - idempotent operation
     return entry;
   }
-  
+
   const now = new Date().toISOString();
 
   // Create new object instead of mutating the shared in-memory entry
@@ -187,7 +187,7 @@ export async function deny(
  */
 export function listPending(): ApprovalEntry[] {
   const pending: ApprovalEntry[] = [];
-  
+
   for (const entry of approvalIndex.values()) {
     if (entry.status === "pending") {
       // Check if expired
@@ -200,12 +200,10 @@ export function listPending(): ApprovalEntry[] {
       pending.push(entry);
     }
   }
-  
+
   // Sort by requestedAt (oldest first)
-  pending.sort((a, b) => 
-    new Date(a.requestedAt).getTime() - new Date(b.requestedAt).getTime()
-  );
-  
+  pending.sort((a, b) => new Date(a.requestedAt).getTime() - new Date(b.requestedAt).getTime());
+
   return pending;
 }
 
@@ -216,24 +214,24 @@ export function listPending(): ApprovalEntry[] {
  */
 export async function loadState(): Promise<void> {
   approvalIndex.clear();
-  
+
   // Ensure directory exists
   if (!existsSync(APPROVAL_DIR)) {
     await mkdir(APPROVAL_DIR, { recursive: true });
     indexLoadedAt = new Date().toISOString();
     return;
   }
-  
+
   // Check if queue file exists
   if (!existsSync(APPROVAL_QUEUE_FILE)) {
     indexLoadedAt = new Date().toISOString();
     return;
   }
-  
+
   try {
     const content = await readFile(APPROVAL_QUEUE_FILE, "utf8");
-    const lines = content.split("\n").filter(line => line.trim());
-    
+    const lines = content.split("\n").filter((line) => line.trim());
+
     // Since we always append and never modify existing lines,
     // the LAST occurrence of each ID in the file is the most recent state.
     // So we iterate in order and just overwrite with the latest.
@@ -241,15 +239,12 @@ export async function loadState(): Promise<void> {
       try {
         const entry: ApprovalEntry = JSON.parse(line);
         approvalIndex.set(entry.id, entry);
-      } catch {
-        // Skip malformed lines
-        continue;
-      }
+      } catch {}
     }
   } catch {
     // File doesn't exist or can't be read - start fresh
   }
-  
+
   indexLoadedAt = new Date().toISOString();
 }
 
@@ -270,19 +265,19 @@ export async function findByEventId(eventId: string): Promise<ApprovalEntry | nu
       return entry;
     }
   }
-  
+
   // Fallback: search in file
   if (!existsSync(APPROVAL_QUEUE_FILE)) {
     return null;
   }
-  
+
   try {
     const content = await readFile(APPROVAL_QUEUE_FILE, "utf8");
-    const lines = content.split("\n").filter(line => line.trim());
-    
+    const lines = content.split("\n").filter((line) => line.trim());
+
     // Find most recent entry for this eventId
     let latest: ApprovalEntry | null = null;
-    
+
     for (const line of lines) {
       try {
         const entry: ApprovalEntry = JSON.parse(line);
@@ -291,11 +286,9 @@ export async function findByEventId(eventId: string): Promise<ApprovalEntry | nu
             latest = entry;
           }
         }
-      } catch {
-        continue;
-      }
+      } catch {}
     }
-    
+
     return latest;
   } catch {
     return null;
@@ -345,7 +338,7 @@ async function appendResolution(entry: ApprovalEntry): Promise<void> {
 // ============================================================================
 
 // Auto-load state on module import
-loadState().catch(err => {
+loadState().catch((err) => {
   loadError = err instanceof Error ? err : new Error(String(err));
   console.error("Failed to load approval queue state:", err);
 });

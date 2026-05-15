@@ -1,5 +1,5 @@
-import type { TunableSubject, Adapter } from './interfaces.js';
-import type { TunerConfig } from './config.js';
+import type { TunableSubject, Adapter } from "./interfaces.js";
+import type { TunerConfig } from "./config.js";
 
 export class Registry {
   private subjects = new Map<string, TunableSubject>();
@@ -25,7 +25,7 @@ export class Registry {
     return [...this.subjects.values()];
   }
 
-  enabledSubjects(config: Pick<TunerConfig, 'subjects'>): TunableSubject[] {
-    return [...this.subjects.values()].filter(s => config.subjects?.[s.name]?.enabled !== false);
+  enabledSubjects(config: Pick<TunerConfig, "subjects">): TunableSubject[] {
+    return [...this.subjects.values()].filter((s) => config.subjects?.[s.name]?.enabled !== false);
   }
 }

@@ -22,7 +22,7 @@ export function migrateRecord(record: any, fromVersion = 1): any {
 export function detectSchemaVersion(firstLine: string): number {
   try {
     const data = JSON.parse(firstLine) as Record<string, unknown>;
-    return typeof data.schema_version === 'number' ? data.schema_version : 1;
+    return typeof data.schema_version === "number" ? data.schema_version : 1;
   } catch {
     return 1;
   }

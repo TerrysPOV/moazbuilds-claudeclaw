@@ -10,7 +10,9 @@ const skillName = process.argv[3];
 const targetDir = process.argv[4] || join(process.cwd(), "skills");
 
 if (!repo || !skillName) {
-  console.log(JSON.stringify({ error: "Usage: node install.mjs <owner/repo> <skill-name> [target-dir]" }));
+  console.log(
+    JSON.stringify({ error: "Usage: node install.mjs <owner/repo> <skill-name> [target-dir]" }),
+  );
   process.exit(1);
 }
 
@@ -27,7 +29,11 @@ try {
       headers: { "User-Agent": "claudeclaw-skill-installer" },
     });
     if (!rootRes.ok) {
-      console.log(JSON.stringify({ error: `Skill not found at skills/${skillName} or ${skillName} in ${repo}` }));
+      console.log(
+        JSON.stringify({
+          error: `Skill not found at skills/${skillName} or ${skillName} in ${repo}`,
+        }),
+      );
       process.exit(1);
     }
     var files = await rootRes.json();
@@ -50,13 +56,19 @@ try {
     downloaded.push(file.name);
   }
 
-  console.log(JSON.stringify({
-    ok: true,
-    skill: skillName,
-    source: repo,
-    path: destDir,
-    files: downloaded,
-  }, null, 2));
+  console.log(
+    JSON.stringify(
+      {
+        ok: true,
+        skill: skillName,
+        source: repo,
+        path: destDir,
+        files: downloaded,
+      },
+      null,
+      2,
+    ),
+  );
 } catch (e) {
   console.log(JSON.stringify({ error: e.message }));
   process.exit(1);

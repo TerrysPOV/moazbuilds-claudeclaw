@@ -24,12 +24,13 @@ beforeAll(async () => {
 
 beforeEach(() => {
   capturedModels.length = 0;
-  runOnceSpy = spyOn(runnerMod, "runClaudeOnce").mockImplementation(
-    (async (_args: string[], model: string) => {
-      capturedModels.push(model);
-      throw new Error(SENTINEL);
-    }) as any,
-  );
+  runOnceSpy = spyOn(runnerMod, "runClaudeOnce").mockImplementation((async (
+    _args: string[],
+    model: string,
+  ) => {
+    capturedModels.push(model);
+    throw new Error(SENTINEL);
+  }) as any);
 });
 
 afterEach(() => {
@@ -70,14 +71,16 @@ describe("Phase 18: runner modelOverride wiring", () => {
   });
 
   // Phase 18 Plan 03 Task 1: all supported model strings + agentic interaction
-  test.each(["opus", "sonnet", "haiku", "glm"])(
-    "forwards %s as primaryConfig.model via modelOverride",
-    async (m) => {
-      await tryRun({ modelOverride: m });
-      expect(capturedModels.length).toBeGreaterThanOrEqual(1);
-      expect(capturedModels[0]).toBe(m);
-    },
-  );
+  test.each([
+    "opus",
+    "sonnet",
+    "haiku",
+    "glm",
+  ])("forwards %s as primaryConfig.model via modelOverride", async (m) => {
+    await tryRun({ modelOverride: m });
+    expect(capturedModels.length).toBeGreaterThanOrEqual(1);
+    expect(capturedModels[0]).toBe(m);
+  });
 
   it("modelOverride wins when agentic.enabled=true (override branch precedes agentic)", async () => {
     const real = getSettings();

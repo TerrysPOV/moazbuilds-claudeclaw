@@ -46,26 +46,71 @@ const DEFAULT_SETTINGS: Settings = {
         name: "planning",
         model: "opus",
         keywords: [
-          "plan", "design", "architect", "strategy", "approach",
-          "research", "investigate", "analyze", "explore", "understand",
-          "think", "consider", "evaluate", "assess", "review",
-          "system design", "trade-off", "decision", "choose", "compare",
-          "brainstorm", "ideate", "concept", "proposal",
+          "plan",
+          "design",
+          "architect",
+          "strategy",
+          "approach",
+          "research",
+          "investigate",
+          "analyze",
+          "explore",
+          "understand",
+          "think",
+          "consider",
+          "evaluate",
+          "assess",
+          "review",
+          "system design",
+          "trade-off",
+          "decision",
+          "choose",
+          "compare",
+          "brainstorm",
+          "ideate",
+          "concept",
+          "proposal",
         ],
         phrases: [
-          "how to implement", "how should i", "what's the best way to",
-          "should i", "which approach", "help me decide", "help me understand",
+          "how to implement",
+          "how should i",
+          "what's the best way to",
+          "should i",
+          "which approach",
+          "help me decide",
+          "help me understand",
         ],
       },
       {
         name: "implementation",
         model: "sonnet",
         keywords: [
-          "implement", "code", "write", "create", "build", "add",
-          "fix", "debug", "refactor", "update", "modify", "change",
-          "deploy", "run", "execute", "install", "configure",
-          "test", "commit", "push", "merge", "release",
-          "generate", "scaffold", "setup", "initialize",
+          "implement",
+          "code",
+          "write",
+          "create",
+          "build",
+          "add",
+          "fix",
+          "debug",
+          "refactor",
+          "update",
+          "modify",
+          "change",
+          "deploy",
+          "run",
+          "execute",
+          "install",
+          "configure",
+          "test",
+          "commit",
+          "push",
+          "merge",
+          "release",
+          "generate",
+          "scaffold",
+          "setup",
+          "initialize",
         ],
       },
     ],
@@ -80,9 +125,29 @@ const DEFAULT_SETTINGS: Settings = {
     forwardToTelegram: true,
     forwardToDiscord: true,
   },
-  telegram: { token: "", allowedUserIds: [], listenChats: [], receiveEnabled: true, dmIsolation: "shared" },
-  discord: { token: "", allowedUserIds: [], listenChannels: [], listenGuilds: [], imageOutputRoots: [], streaming: false },
-  slack: { botToken: "", appToken: "", allowedUserIds: [], listenChannels: [], allowBots: [], allowBotIds: [] },
+  telegram: {
+    token: "",
+    allowedUserIds: [],
+    listenChats: [],
+    receiveEnabled: true,
+    dmIsolation: "shared",
+  },
+  discord: {
+    token: "",
+    allowedUserIds: [],
+    listenChannels: [],
+    listenGuilds: [],
+    imageOutputRoots: [],
+    streaming: false,
+  },
+  slack: {
+    botToken: "",
+    appToken: "",
+    allowedUserIds: [],
+    listenChannels: [],
+    allowBots: [],
+    allowBotIds: [],
+  },
   security: { level: "moderate", allowedTools: [], disallowedTools: [] },
   web: { enabled: false, host: "127.0.0.1", port: 4632 },
   stt: { baseUrl: "", model: "" },
@@ -152,19 +217,15 @@ export interface DiscordConfig {
 }
 
 export interface SlackConfig {
-  botToken: string;       // xoxb-... bot token
-  appToken: string;       // xapp-... Socket Mode token
+  botToken: string; // xoxb-... bot token
+  appToken: string; // xapp-... Socket Mode token
   allowedUserIds: string[];
   listenChannels: string[]; // Channel IDs where bot responds without @mention
-  allowBots: string[];    // Channel IDs where bot-posted messages are passed through
-  allowBotIds: string[];  // Optional: Slack app/bot IDs (B...) that may post; empty = any bot in allowBots channel
+  allowBots: string[]; // Channel IDs where bot-posted messages are passed through
+  allowBotIds: string[]; // Optional: Slack app/bot IDs (B...) that may post; empty = any bot in allowBots channel
 }
 
-export type SecurityLevel =
-  | "locked"
-  | "strict"
-  | "moderate"
-  | "unrestricted";
+export type SecurityLevel = "locked" | "strict" | "moderate" | "unrestricted";
 
 export interface SecurityConfig {
   level: SecurityLevel;
@@ -249,7 +310,6 @@ export interface Settings {
   jobsDir?: string;
 }
 
-
 export interface AgenticMode {
   name: string;
   model: string;
@@ -310,12 +370,7 @@ export async function initConfig(): Promise<void> {
   }
 }
 
-const VALID_LEVELS = new Set<SecurityLevel>([
-  "locked",
-  "strict",
-  "moderate",
-  "unrestricted",
-]);
+const VALID_LEVELS = new Set<SecurityLevel>(["locked", "strict", "moderate", "unrestricted"]);
 
 function parseAgenticMode(raw: any): AgenticMode | null {
   if (!raw || typeof raw !== "object") return null;
@@ -323,10 +378,14 @@ function parseAgenticMode(raw: any): AgenticMode | null {
   const model = typeof raw.model === "string" ? raw.model.trim() : "";
   if (!name || !model) return null;
   const keywords = Array.isArray(raw.keywords)
-    ? raw.keywords.filter((k: unknown) => typeof k === "string").map((k: string) => k.toLowerCase().trim())
+    ? raw.keywords
+        .filter((k: unknown) => typeof k === "string")
+        .map((k: string) => k.toLowerCase().trim())
     : [];
   const phrases = Array.isArray(raw.phrases)
-    ? raw.phrases.filter((p: unknown) => typeof p === "string").map((p: string) => p.toLowerCase().trim())
+    ? raw.phrases
+        .filter((p: unknown) => typeof p === "string")
+        .map((p: string) => p.toLowerCase().trim())
     : undefined;
   return { name, model, keywords, ...(phrases && phrases.length > 0 ? { phrases } : {}) };
 }
@@ -340,7 +399,8 @@ function parseAgenticConfig(raw: any): AgenticConfig {
   // Backward compat: old planningModel/implementationModel format
   if (!Array.isArray(raw.modes) && ("planningModel" in raw || "implementationModel" in raw)) {
     const planningModel = typeof raw.planningModel === "string" ? raw.planningModel.trim() : "opus";
-    const implModel = typeof raw.implementationModel === "string" ? raw.implementationModel.trim() : "sonnet";
+    const implModel =
+      typeof raw.implementationModel === "string" ? raw.implementationModel.trim() : "sonnet";
     return {
       enabled,
       defaultMode: "implementation",
@@ -367,10 +427,7 @@ function parseAgenticConfig(raw: any): AgenticConfig {
   };
 }
 
-function parseSettings(
-  raw: Record<string, any>,
-  discordUserIds?: string[],
-): Settings {
+function parseSettings(raw: Record<string, any>, discordUserIds?: string[]): Settings {
   const rawLevel = raw.security?.level;
   const level: SecurityLevel =
     typeof rawLevel === "string" && VALID_LEVELS.has(rawLevel as SecurityLevel)
@@ -398,9 +455,13 @@ function parseSettings(
       forwardToDiscord: raw.heartbeat?.forwardToDiscord ?? true,
     },
     telegram: {
-      token: process.env.TELEGRAM_TOKEN?.trim() || (typeof raw.telegram?.token === "string" ? raw.telegram.token.trim() : ""),
+      token:
+        process.env.TELEGRAM_TOKEN?.trim() ||
+        (typeof raw.telegram?.token === "string" ? raw.telegram.token.trim() : ""),
       allowedUserIds: raw.telegram?.allowedUserIds ?? [],
-      listenChats: Array.isArray(raw.telegram?.listenChats) ? raw.telegram.listenChats.map(Number) : [],
+      listenChats: Array.isArray(raw.telegram?.listenChats)
+        ? raw.telegram.listenChats.map(Number)
+        : [],
       receiveEnabled: raw.telegram?.receiveEnabled !== false,
       dmIsolation: raw.telegram?.dmIsolation === "perUser" ? "perUser" : "shared",
       ...(typeof raw.telegram?.whisperModel === "string" && raw.telegram.whisperModel.trim()
@@ -408,41 +469,56 @@ function parseSettings(
         : {}),
     },
     discord: {
-      token: process.env.DISCORD_TOKEN?.trim() || (typeof raw.discord?.token === "string" ? raw.discord.token.trim() : ""),
-      allowedUserIds: Array.isArray(discordUserIds) && discordUserIds.length > 0
-        ? discordUserIds
-        : Array.isArray(raw.discord?.allowedUserIds)
-          ? raw.discord.allowedUserIds.map(String)
-          : [],
+      token:
+        process.env.DISCORD_TOKEN?.trim() ||
+        (typeof raw.discord?.token === "string" ? raw.discord.token.trim() : ""),
+      allowedUserIds:
+        Array.isArray(discordUserIds) && discordUserIds.length > 0
+          ? discordUserIds
+          : Array.isArray(raw.discord?.allowedUserIds)
+            ? raw.discord.allowedUserIds.map(String)
+            : [],
       listenChannels: Array.isArray(raw.discord?.listenChannels)
         ? raw.discord.listenChannels.map(String)
         : [],
       listenGuilds: Array.isArray(raw.discord?.listenGuilds)
         ? raw.discord.listenGuilds.map(String)
         : [],
-      channelNames: raw.discord?.channelNames && typeof raw.discord.channelNames === "object"
-        ? Object.fromEntries(
-            Object.entries(raw.discord.channelNames as Record<string, unknown>).map(([k, v]) => [String(k), String(v)]),
-          )
-        : undefined,
+      channelNames:
+        raw.discord?.channelNames && typeof raw.discord.channelNames === "object"
+          ? Object.fromEntries(
+              Object.entries(raw.discord.channelNames as Record<string, unknown>).map(([k, v]) => [
+                String(k),
+                String(v),
+              ]),
+            )
+          : undefined,
       imageOutputRoots: Array.isArray(raw.discord?.imageOutputRoots)
-        ? raw.discord.imageOutputRoots.filter((r: unknown) => typeof r === "string" && isAbsolute(r))
+        ? raw.discord.imageOutputRoots.filter(
+            (r: unknown) => typeof r === "string" && isAbsolute(r),
+          )
         : [],
       streaming: raw.discord?.streaming === true,
     },
     slack: {
-      botToken: process.env.SLACK_BOT_TOKEN?.trim() || (typeof raw.slack?.botToken === "string" ? raw.slack.botToken.trim() : ""),
-      appToken: process.env.SLACK_APP_TOKEN?.trim() || (typeof raw.slack?.appToken === "string" ? raw.slack.appToken.trim() : ""),
-      allowedUserIds: Array.isArray(raw.slack?.allowedUserIds) ? raw.slack.allowedUserIds.map(String) : [],
-      listenChannels: Array.isArray(raw.slack?.listenChannels) ? raw.slack.listenChannels.map(String) : [],
+      botToken:
+        process.env.SLACK_BOT_TOKEN?.trim() ||
+        (typeof raw.slack?.botToken === "string" ? raw.slack.botToken.trim() : ""),
+      appToken:
+        process.env.SLACK_APP_TOKEN?.trim() ||
+        (typeof raw.slack?.appToken === "string" ? raw.slack.appToken.trim() : ""),
+      allowedUserIds: Array.isArray(raw.slack?.allowedUserIds)
+        ? raw.slack.allowedUserIds.map(String)
+        : [],
+      listenChannels: Array.isArray(raw.slack?.listenChannels)
+        ? raw.slack.listenChannels.map(String)
+        : [],
       allowBots: Array.isArray(raw.slack?.allowBots) ? raw.slack.allowBots.map(String) : [],
       allowBotIds: Array.isArray(raw.slack?.allowBotIds) ? raw.slack.allowBotIds.map(String) : [],
     },
     security: {
       level,
-      allowedTools: Array.isArray(raw.security?.allowedTools)
-        ? raw.security.allowedTools
-        : [],
+      allowedTools: Array.isArray(raw.security?.allowedTools) ? raw.security.allowedTools : [],
       disallowedTools: Array.isArray(raw.security?.disallowedTools)
         ? raw.security.disallowedTools
         : [],
@@ -459,33 +535,61 @@ function parseSettings(
         ? { delegateTool: raw.stt.delegateTool.trim() }
         : {}),
     },
-    sessionTimeoutMs: typeof raw.sessionTimeoutMs === "number" && raw.sessionTimeoutMs > 0
-      ? raw.sessionTimeoutMs
-      : DEFAULT_SESSION_TIMEOUT_MS,
+    sessionTimeoutMs:
+      typeof raw.sessionTimeoutMs === "number" && raw.sessionTimeoutMs > 0
+        ? raw.sessionTimeoutMs
+        : DEFAULT_SESSION_TIMEOUT_MS,
     timeouts: {
-      telegram: Number.isFinite(raw.timeouts?.telegram) && Number(raw.timeouts.telegram) > 0 ? Number(raw.timeouts.telegram) : 5,
-      discord: Number.isFinite(raw.timeouts?.discord) && Number(raw.timeouts.discord) > 0 ? Number(raw.timeouts.discord) : 5,
-      heartbeat: Number.isFinite(raw.timeouts?.heartbeat) && Number(raw.timeouts.heartbeat) > 0 ? Number(raw.timeouts.heartbeat) : 15,
-      job: Number.isFinite(raw.timeouts?.job) && Number(raw.timeouts.job) > 0 ? Number(raw.timeouts.job) : 30,
-      default: Number.isFinite(raw.timeouts?.default) && Number(raw.timeouts.default) > 0 ? Number(raw.timeouts.default) : 5,
+      telegram:
+        Number.isFinite(raw.timeouts?.telegram) && Number(raw.timeouts.telegram) > 0
+          ? Number(raw.timeouts.telegram)
+          : 5,
+      discord:
+        Number.isFinite(raw.timeouts?.discord) && Number(raw.timeouts.discord) > 0
+          ? Number(raw.timeouts.discord)
+          : 5,
+      heartbeat:
+        Number.isFinite(raw.timeouts?.heartbeat) && Number(raw.timeouts.heartbeat) > 0
+          ? Number(raw.timeouts.heartbeat)
+          : 15,
+      job:
+        Number.isFinite(raw.timeouts?.job) && Number(raw.timeouts.job) > 0
+          ? Number(raw.timeouts.job)
+          : 30,
+      default:
+        Number.isFinite(raw.timeouts?.default) && Number(raw.timeouts.default) > 0
+          ? Number(raw.timeouts.default)
+          : 5,
     },
     pty: {
       enabled: raw.pty?.enabled === true, // default false — opt-in (see DEFAULT_SETTINGS.pty)
-      idleReapMinutes: Number.isFinite(raw.pty?.idleReapMinutes) && Number(raw.pty.idleReapMinutes) > 0
-        ? Number(raw.pty.idleReapMinutes) : 30,
-      maxRetries: Number.isFinite(raw.pty?.maxRetries) && Number(raw.pty.maxRetries) >= 0
-        ? Number(raw.pty.maxRetries) : 5,
-      backoffMs: Array.isArray(raw.pty?.backoffMs) && raw.pty.backoffMs.length > 0
-        && raw.pty.backoffMs.every((n: unknown) => Number.isFinite(n) && Number(n) >= 0)
-        ? raw.pty.backoffMs.map(Number)
-        : [1000, 2000, 4000, 8000, 16000],
+      idleReapMinutes:
+        Number.isFinite(raw.pty?.idleReapMinutes) && Number(raw.pty.idleReapMinutes) > 0
+          ? Number(raw.pty.idleReapMinutes)
+          : 30,
+      maxRetries:
+        Number.isFinite(raw.pty?.maxRetries) && Number(raw.pty.maxRetries) >= 0
+          ? Number(raw.pty.maxRetries)
+          : 5,
+      backoffMs:
+        Array.isArray(raw.pty?.backoffMs) &&
+        raw.pty.backoffMs.length > 0 &&
+        raw.pty.backoffMs.every((n: unknown) => Number.isFinite(n) && Number(n) >= 0)
+          ? raw.pty.backoffMs.map(Number)
+          : [1000, 2000, 4000, 8000, 16000],
       namedAgentsAlwaysAlive: raw.pty?.namedAgentsAlwaysAlive !== false, // default true
-      turnIdleTimeoutMs: Number.isFinite(raw.pty?.turnIdleTimeoutMs) && Number(raw.pty.turnIdleTimeoutMs) > 0
-        ? Number(raw.pty.turnIdleTimeoutMs) : 5000,
-      cols: Number.isFinite(raw.pty?.cols) && Number(raw.pty.cols) >= 40 ? Number(raw.pty.cols) : 100,
-      rows: Number.isFinite(raw.pty?.rows) && Number(raw.pty.rows) >= 10 ? Number(raw.pty.rows) : 30,
-      maxConcurrent: Number.isFinite(raw.pty?.maxConcurrent) && Number(raw.pty.maxConcurrent) > 0
-        ? Number(raw.pty.maxConcurrent) : 32,
+      turnIdleTimeoutMs:
+        Number.isFinite(raw.pty?.turnIdleTimeoutMs) && Number(raw.pty.turnIdleTimeoutMs) > 0
+          ? Number(raw.pty.turnIdleTimeoutMs)
+          : 5000,
+      cols:
+        Number.isFinite(raw.pty?.cols) && Number(raw.pty.cols) >= 40 ? Number(raw.pty.cols) : 100,
+      rows:
+        Number.isFinite(raw.pty?.rows) && Number(raw.pty.rows) >= 10 ? Number(raw.pty.rows) : 30,
+      maxConcurrent:
+        Number.isFinite(raw.pty?.maxConcurrent) && Number(raw.pty.maxConcurrent) > 0
+          ? Number(raw.pty.maxConcurrent)
+          : 32,
     },
     watchdog: parseWatchdogConfig(raw.watchdog),
     plugins: parsePlugins(raw.plugins),
@@ -494,10 +598,14 @@ function parseSettings(
       autoRotate: raw.session?.autoRotate ?? false,
       maxMessages: Number.isFinite(raw.session?.maxMessages) ? Number(raw.session.maxMessages) : 50,
       maxAgeHours: Number.isFinite(raw.session?.maxAgeHours) ? Number(raw.session.maxAgeHours) : 24,
-      summaryPath: typeof raw.session?.summaryPath === "string" ? raw.session.summaryPath.trim() : "",
+      summaryPath:
+        typeof raw.session?.summaryPath === "string" ? raw.session.summaryPath.trim() : "",
     },
-    apiToken: typeof raw.apiToken === "string" && raw.apiToken.trim() ? raw.apiToken.trim() : undefined,
-    ...(typeof raw.jobsDir === "string" && raw.jobsDir.trim() ? { jobsDir: raw.jobsDir.trim() } : {}),
+    apiToken:
+      typeof raw.apiToken === "string" && raw.apiToken.trim() ? raw.apiToken.trim() : undefined,
+    ...(typeof raw.jobsDir === "string" && raw.jobsDir.trim()
+      ? { jobsDir: raw.jobsDir.trim() }
+      : {}),
   };
 }
 
@@ -521,7 +629,9 @@ function parseExcludeWindows(value: unknown): HeartbeatExcludeWindow[] {
     const parsedDays = rawDays
       .map((d: unknown) => Number(d))
       .filter((d: number) => Number.isInteger(d) && d >= 0 && d <= 6);
-    const uniqueDays = Array.from(new Set<number>(parsedDays)).sort((a: number, b: number) => a - b);
+    const uniqueDays = Array.from(new Set<number>(parsedDays)).sort(
+      (a: number, b: number) => a - b,
+    );
 
     out.push({
       start,

@@ -27,11 +27,15 @@ export async function readHeartbeatSettings(): Promise<HeartbeatSettingsData> {
     enabled: Boolean(data.heartbeat.enabled),
     interval: Number(data.heartbeat.interval) || 15,
     prompt: typeof data.heartbeat.prompt === "string" ? data.heartbeat.prompt : "",
-    excludeWindows: Array.isArray(data.heartbeat.excludeWindows) ? data.heartbeat.excludeWindows : [],
+    excludeWindows: Array.isArray(data.heartbeat.excludeWindows)
+      ? data.heartbeat.excludeWindows
+      : [],
   };
 }
 
-export async function updateHeartbeatSettings(patch: HeartbeatSettingsPatch): Promise<HeartbeatSettingsData> {
+export async function updateHeartbeatSettings(
+  patch: HeartbeatSettingsPatch,
+): Promise<HeartbeatSettingsData> {
   const raw = await readFile(SETTINGS_FILE, "utf-8");
   const data = JSON.parse(raw) as Record<string, any>;
   if (!data.heartbeat || typeof data.heartbeat !== "object") data.heartbeat = {};
@@ -55,6 +59,8 @@ export async function updateHeartbeatSettings(patch: HeartbeatSettingsPatch): Pr
     enabled: Boolean(data.heartbeat.enabled),
     interval: Number(data.heartbeat.interval) || 15,
     prompt: typeof data.heartbeat.prompt === "string" ? data.heartbeat.prompt : "",
-    excludeWindows: Array.isArray(data.heartbeat.excludeWindows) ? data.heartbeat.excludeWindows : [],
+    excludeWindows: Array.isArray(data.heartbeat.excludeWindows)
+      ? data.heartbeat.excludeWindows
+      : [],
   };
 }

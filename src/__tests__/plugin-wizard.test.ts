@@ -21,12 +21,24 @@ beforeEach(() => {
 // --- isWizardTrigger ---
 
 describe("isWizardTrigger", () => {
-  it("recognises /plugin", () => { expect(isWizardTrigger("/plugin")).toBe(true); });
-  it("recognises /claudeclaw:plugin", () => { expect(isWizardTrigger("/claudeclaw:plugin")).toBe(true); });
-  it("ignores case differences", () => { expect(isWizardTrigger("/PLUGIN")).toBe(true); });
-  it("rejects non-plugin commands", () => { expect(isWizardTrigger("/reset")).toBe(false); });
-  it("rejects plain text", () => { expect(isWizardTrigger("hello world")).toBe(false); });
-  it("accepts /plugin with trailing args", () => { expect(isWizardTrigger("/plugin some args")).toBe(true); });
+  it("recognises /plugin", () => {
+    expect(isWizardTrigger("/plugin")).toBe(true);
+  });
+  it("recognises /claudeclaw:plugin", () => {
+    expect(isWizardTrigger("/claudeclaw:plugin")).toBe(true);
+  });
+  it("ignores case differences", () => {
+    expect(isWizardTrigger("/PLUGIN")).toBe(true);
+  });
+  it("rejects non-plugin commands", () => {
+    expect(isWizardTrigger("/reset")).toBe(false);
+  });
+  it("rejects plain text", () => {
+    expect(isWizardTrigger("hello world")).toBe(false);
+  });
+  it("accepts /plugin with trailing args", () => {
+    expect(isWizardTrigger("/plugin some args")).toBe(true);
+  });
 });
 
 // --- hasActiveWizard / lifecycle ---

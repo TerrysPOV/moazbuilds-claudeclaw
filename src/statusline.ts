@@ -25,8 +25,5 @@ export interface StateData {
 }
 
 export async function writeState(state: StateData) {
-  await Bun.write(
-    join(HEARTBEAT_DIR, "state.json"),
-    JSON.stringify(state) + "\n"
-  );
+  await Bun.write(join(HEARTBEAT_DIR, "state.json"), JSON.stringify(state) + "\n");
 }

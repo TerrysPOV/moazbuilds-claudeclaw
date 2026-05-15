@@ -178,7 +178,7 @@ export class PluginManager {
 
   private async checkHealth(host: string, port: number): Promise<boolean> {
     // Validate host: hostname chars or IPv6 bracket notation only (no userinfo, paths, etc.)
-    if (!/^[a-zA-Z0-9.\-]+$|^\[[0-9a-fA-F:]+\]$/.test(host)) return false;
+    if (!/^[a-zA-Z0-9.-]+$|^\[[0-9a-fA-F:]+\]$/.test(host)) return false;
     if (!Number.isInteger(port) || port < 1 || port > 65535) return false;
     try {
       const url = new URL(`http://${host}:${port}/api/health`);
@@ -242,7 +242,9 @@ export class PluginManager {
 
   // ── Channel runtime ────────────────────────────────────────────────────
 
-  setChannelSenders(senders: Record<string, Record<string, (...args: unknown[]) => unknown>>): void {
+  setChannelSenders(
+    senders: Record<string, Record<string, (...args: unknown[]) => unknown>>,
+  ): void {
     Object.assign(this.channelRuntime, senders);
   }
 
@@ -253,7 +255,11 @@ export class PluginManager {
    * For `before_prompt_build`, collects and merges all `appendSystemContext` values.
    * For other events, returns the last handler's result.
    */
-  async emit(event: DaemonEvent, data: unknown, ctx: EventContext): Promise<{ appendSystemContext?: string } | undefined> {
+  async emit(
+    event: DaemonEvent,
+    data: unknown,
+    ctx: EventContext,
+  ): Promise<{ appendSystemContext?: string } | undefined> {
     const handlers = this.handlers.get(event);
     if (!handlers || handlers.length === 0) return undefined;
 
@@ -261,7 +267,7 @@ export class PluginManager {
       const contexts: string[] = [];
       for (const handler of handlers) {
         try {
-          const result = await handler(data, ctx) as { appendSystemContext?: string } | undefined;
+          const result = (await handler(data, ctx)) as { appendSystemContext?: string } | undefined;
           if (result?.appendSystemContext) {
             contexts.push(result.appendSystemContext);
           }
@@ -307,8 +313,10 @@ export class PluginManager {
     const cmd = this.commands.get(name);
     if (!cmd) return null;
     try {
-      const result = await cmd.handler({ args }) as string | { text?: string } | null | undefined;
-      return typeof result === "string" ? result : (result as { text?: string })?.text ?? JSON.stringify(result);
+      const result = (await cmd.handler({ args })) as string | { text?: string } | null | undefined;
+      return typeof result === "string"
+        ? result
+        : ((result as { text?: string })?.text ?? JSON.stringify(result));
     } catch {
       return null;
     }

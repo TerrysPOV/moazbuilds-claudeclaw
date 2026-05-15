@@ -41,7 +41,10 @@ describe("parsePlugins", () => {
   });
 
   it("skips non-object entries", () => {
-    const result = parsePlugins({ bad: "not-an-object", good: { enabled: true, source: "x", config: {} } });
+    const result = parsePlugins({
+      bad: "not-an-object",
+      good: { enabled: true, source: "x", config: {} },
+    });
     expect(result["bad"]).toBeUndefined();
     expect(result["good"]).toBeDefined();
   });
@@ -82,9 +85,11 @@ describe("PluginManager event system", () => {
     let api: PluginApi | null = null;
 
     // Register a plugin manually via the internal api
-    const internalApi = (pm as unknown as {
-      buildApi: (id: string, cfg: Record<string, unknown>) => PluginApi;
-    }).buildApi("test-plugin", {});
+    const internalApi = (
+      pm as unknown as {
+        buildApi: (id: string, cfg: Record<string, unknown>) => PluginApi;
+      }
+    ).buildApi("test-plugin", {});
     api = internalApi;
     internalApi.on("agent_end", (data, c) => {
       received = { data, ctx: c };
@@ -98,14 +103,18 @@ describe("PluginManager event system", () => {
   });
 
   it("before_prompt_build merges appendSystemContext from multiple handlers", async () => {
-    const internalApi = (pm as unknown as {
-      buildApi: (id: string, cfg: Record<string, unknown>) => PluginApi;
-    }).buildApi("p1", {});
+    const internalApi = (
+      pm as unknown as {
+        buildApi: (id: string, cfg: Record<string, unknown>) => PluginApi;
+      }
+    ).buildApi("p1", {});
     internalApi.on("before_prompt_build", () => ({ appendSystemContext: "context-a" }));
 
-    const internalApi2 = (pm as unknown as {
-      buildApi: (id: string, cfg: Record<string, unknown>) => PluginApi;
-    }).buildApi("p2", {});
+    const internalApi2 = (
+      pm as unknown as {
+        buildApi: (id: string, cfg: Record<string, unknown>) => PluginApi;
+      }
+    ).buildApi("p2", {});
     internalApi2.on("before_prompt_build", () => ({ appendSystemContext: "context-b" }));
 
     const result = await pm.emit("before_prompt_build", { prompt: "test" }, ctx);
@@ -113,9 +122,11 @@ describe("PluginManager event system", () => {
   });
 
   it("before_prompt_build returns undefined when no handler returns appendSystemContext", async () => {
-    const internalApi = (pm as unknown as {
-      buildApi: (id: string, cfg: Record<string, unknown>) => PluginApi;
-    }).buildApi("p", {});
+    const internalApi = (
+      pm as unknown as {
+        buildApi: (id: string, cfg: Record<string, unknown>) => PluginApi;
+      }
+    ).buildApi("p", {});
     internalApi.on("before_prompt_build", () => ({}));
 
     const result = await pm.emit("before_prompt_build", {}, ctx);
@@ -123,10 +134,14 @@ describe("PluginManager event system", () => {
   });
 
   it("emitAsync does not throw synchronously even when handler throws", () => {
-    const internalApi = (pm as unknown as {
-      buildApi: (id: string, cfg: Record<string, unknown>) => PluginApi;
-    }).buildApi("p", {});
-    internalApi.on("agent_end", () => { throw new Error("boom"); });
+    const internalApi = (
+      pm as unknown as {
+        buildApi: (id: string, cfg: Record<string, unknown>) => PluginApi;
+      }
+    ).buildApi("p", {});
+    internalApi.on("agent_end", () => {
+      throw new Error("boom");
+    });
     // Must not throw — error is logged via console.warn
     expect(() => pm.emitAsync("agent_end", {}, ctx)).not.toThrow();
   });
@@ -138,15 +153,23 @@ describe("PluginManager event system", () => {
 
   it("handler errors in emit are swallowed and do not abort subsequent handlers", async () => {
     let secondCalled = false;
-    const internalApi = (pm as unknown as {
-      buildApi: (id: string, cfg: Record<string, unknown>) => PluginApi;
-    }).buildApi("p1", {});
-    internalApi.on("agent_end", () => { throw new Error("handler error"); });
+    const internalApi = (
+      pm as unknown as {
+        buildApi: (id: string, cfg: Record<string, unknown>) => PluginApi;
+      }
+    ).buildApi("p1", {});
+    internalApi.on("agent_end", () => {
+      throw new Error("handler error");
+    });
 
-    const internalApi2 = (pm as unknown as {
-      buildApi: (id: string, cfg: Record<string, unknown>) => PluginApi;
-    }).buildApi("p2", {});
-    internalApi2.on("agent_end", () => { secondCalled = true; });
+    const internalApi2 = (
+      pm as unknown as {
+        buildApi: (id: string, cfg: Record<string, unknown>) => PluginApi;
+      }
+    ).buildApi("p2", {});
+    internalApi2.on("agent_end", () => {
+      secondCalled = true;
+    });
 
     await pm.emit("agent_end", {}, ctx);
     expect(secondCalled).toBe(true);
@@ -165,9 +188,11 @@ describe("PluginManager commands", () => {
   });
 
   it("registerCommand/runCommand round-trip", async () => {
-    const internalApi = (pm as unknown as {
-      buildApi: (id: string, cfg: Record<string, unknown>) => PluginApi;
-    }).buildApi("p", {});
+    const internalApi = (
+      pm as unknown as {
+        buildApi: (id: string, cfg: Record<string, unknown>) => PluginApi;
+      }
+    ).buildApi("p", {});
     internalApi.registerCommand({ name: "hello", handler: async () => "world" });
 
     expect(await pm.runCommand("hello")).toBe("world");
@@ -190,13 +215,19 @@ describe("PluginManager services", () => {
   it("registerService start/stop called", async () => {
     let started = false;
     let stopped = false;
-    const internalApi = (pm as unknown as {
-      buildApi: (id: string, cfg: Record<string, unknown>) => PluginApi;
-    }).buildApi("p", {});
+    const internalApi = (
+      pm as unknown as {
+        buildApi: (id: string, cfg: Record<string, unknown>) => PluginApi;
+      }
+    ).buildApi("p", {});
     internalApi.registerService({
       id: "my-service",
-      start: async () => { started = true; },
-      stop: async () => { stopped = true; },
+      start: async () => {
+        started = true;
+      },
+      stop: async () => {
+        stopped = true;
+      },
     });
 
     await pm.startServices();
@@ -219,9 +250,11 @@ describe("PluginManager path resolution (security)", () => {
   it("rejects relative-segment source strings (path traversal guard)", async () => {
     const pm = new PluginManager("/tmp/test");
     // loadPlugin will call resolvePluginPath which should return null for traversal attempts
-    const resolvePluginPath = (pm as unknown as {
-      resolvePluginPath: (id: string, source: string) => string | null;
-    }).resolvePluginPath.bind(pm);
+    const resolvePluginPath = (
+      pm as unknown as {
+        resolvePluginPath: (id: string, source: string) => string | null;
+      }
+    ).resolvePluginPath.bind(pm);
 
     expect(resolvePluginPath("p", "../../etc")).toBeNull();
     expect(resolvePluginPath("p", "../evil")).toBeNull();
@@ -230,9 +263,11 @@ describe("PluginManager path resolution (security)", () => {
 
   it("accepts valid npm package names", () => {
     const pm = new PluginManager("/tmp/test");
-    const resolvePluginPath = (pm as unknown as {
-      resolvePluginPath: (id: string, source: string) => string | null;
-    }).resolvePluginPath.bind(pm);
+    const resolvePluginPath = (
+      pm as unknown as {
+        resolvePluginPath: (id: string, source: string) => string | null;
+      }
+    ).resolvePluginPath.bind(pm);
 
     // These return null only because the files don't exist, not due to validation failure
     // We verify resolvePluginPath doesn't throw and returns null (not a hard error)
@@ -242,9 +277,11 @@ describe("PluginManager path resolution (security)", () => {
 
   it("checkHealth rejects invalid host strings", async () => {
     const pm = new PluginManager("/tmp/test");
-    const checkHealth = (pm as unknown as {
-      checkHealth: (host: string, port: number) => Promise<boolean>;
-    }).checkHealth.bind(pm);
+    const checkHealth = (
+      pm as unknown as {
+        checkHealth: (host: string, port: number) => Promise<boolean>;
+      }
+    ).checkHealth.bind(pm);
 
     expect(await checkHealth("127.0.0.1/admin#", 8080)).toBe(false);
     expect(await checkHealth("user@evil.com", 8080)).toBe(false);

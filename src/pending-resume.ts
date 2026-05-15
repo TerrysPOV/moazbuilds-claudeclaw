@@ -52,7 +52,7 @@ export async function loadPendingResume(expectedTransport: string): Promise<Pend
   // Peek at the file to check transport before consuming it
   let resume: PendingResume;
   try {
-    resume = await Bun.file(PENDING_RESUME_PATH).json() as PendingResume;
+    resume = (await Bun.file(PENDING_RESUME_PATH).json()) as PendingResume;
   } catch (err) {
     console.warn(`[pending-resume] Parse failed: ${err instanceof Error ? err.message : err}`);
     return null;
@@ -76,7 +76,9 @@ export async function loadPendingResume(expectedTransport: string): Promise<Pend
   }
 
   if (!resume.wakeUpPrompt || !resume.transport || !resume.channelId) {
-    console.warn("[pending-resume] Missing required fields (transport, channelId, wakeUpPrompt), discarding.");
+    console.warn(
+      "[pending-resume] Missing required fields (transport, channelId, wakeUpPrompt), discarding.",
+    );
     return null;
   }
 

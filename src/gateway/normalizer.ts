@@ -313,8 +313,7 @@ export function normalizeDiscordMessage(message: DiscordMessage): NormalizedEven
   // Build attachments
   const attachments: Attachment[] = message.attachments.map((att) => {
     const isImage = att.content_type?.startsWith("image/");
-    const isVoice =
-      (att.flags ?? 0) & (1 << 13) || att.content_type?.startsWith("audio/");
+    const isVoice = (att.flags ?? 0) & (1 << 13) || att.content_type?.startsWith("audio/");
 
     let attachmentType: "image" | "voice" | "document" = "document";
     if (isImage) {

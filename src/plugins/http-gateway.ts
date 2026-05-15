@@ -1,22 +1,24 @@
-import { z } from 'zod';
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync } from 'node:fs';
-import { join } from 'node:path';
-import { homedir } from 'node:os';
-import { getMcpBridge } from './mcp-bridge.js';
+import { z } from "zod";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync } from "node:fs";
+import { join } from "node:path";
+import { homedir } from "node:os";
+import { getMcpBridge } from "./mcp-bridge.js";
 
 const PluginManifestSchema = z.object({
-  name: z.string().regex(/^[a-z][a-z0-9-]*$/, 'name must be lowercase kebab-case'),
+  name: z.string().regex(/^[a-z][a-z0-9-]*$/, "name must be lowercase kebab-case"),
   version: z.string(),
   schema_version: z.number().int().default(1),
   callback_url: z.string().url(),
   health_url: z.string().url().optional(),
-  tools: z.array(z.object({
-    name: z.string(),
-    description: z.string(),
-    schema: z.record(z.unknown()),
-  })),
-  capabilities: z.array(z.string()).default(['tools']),
+  tools: z.array(
+    z.object({
+      name: z.string(),
+      description: z.string(),
+      schema: z.record(z.unknown()),
+    }),
+  ),
+  capabilities: z.array(z.string()).default(["tools"]),
 });
 
 const REPLAY_WINDOW_MS = 15 * 60 * 1000;
@@ -42,7 +44,12 @@ export class PluginHttpGateway {
   private allowedCallbackHosts: Set<string>;
 
   constructor(opts: { allowedHosts?: string[] } = {}) {
-    this.allowedCallbackHosts = new Set(['localhost', '127.0.0.1', '::1', ...(opts.allowedHosts ?? [])]);
+    this.allowedCallbackHosts = new Set([
+      "localhost",
+      "127.0.0.1",
+      "::1",
+      ...(opts.allowedHosts ?? []),
+    ]);
     this.bootstrapToken = this.loadOrCreateBootstrapToken();
   }
 
@@ -51,72 +58,95 @@ export class PluginHttpGateway {
     const path = url.pathname;
     const method = req.method;
 
-    if (path === '/api/plugin/register' && method === 'POST') return this.handleRegister(req);
-    if (path === '/api/plugin/list' && method === 'GET') return this.handleList(req);
+    if (path === "/api/plugin/register" && method === "POST") return this.handleRegister(req);
+    if (path === "/api/plugin/list" && method === "GET") return this.handleList(req);
 
     // /api/plugin/:name/tools/:tool/invoke
     const invokeM = path.match(/^\/api\/plugin\/([^/]+)\/tools\/([^/]+)\/invoke$/);
-    if (invokeM && method === 'POST') return this.handleInvoke(req, invokeM[1]!, invokeM[2]!);
+    if (invokeM && method === "POST") return this.handleInvoke(req, invokeM[1]!, invokeM[2]!);
 
     // /api/plugin/:name/health
     const healthM = path.match(/^\/api\/plugin\/([^/]+)\/health$/);
-    if (healthM && method === 'GET') return this.handleHealthCheck(req, healthM[1]!);
+    if (healthM && method === "GET") return this.handleHealthCheck(req, healthM[1]!);
 
     // /api/plugin/:name (DELETE)
     const nameM = path.match(/^\/api\/plugin\/([^/]+)$/);
-    if (nameM && method === 'DELETE') return this.handleUnregister(req, nameM[1]!);
+    if (nameM && method === "DELETE") return this.handleUnregister(req, nameM[1]!);
 
     return null; // not a plugin endpoint
   }
 
   private requestId(req: Request): string {
-    return req.headers.get('x-plus-request-id') ?? randomBytes(8).toString('hex');
+    return req.headers.get("x-plus-request-id") ?? randomBytes(8).toString("hex");
   }
 
   private errorBody(code: string, message: string, requestId: string, plugin?: string) {
     return {
-      error: { code, message, plugin: plugin ?? null, request_id: requestId, ts: new Date().toISOString() },
+      error: {
+        code,
+        message,
+        plugin: plugin ?? null,
+        request_id: requestId,
+        ts: new Date().toISOString(),
+      },
     };
   }
 
   private loadOrCreateBootstrapToken(): Buffer {
-    const path = join(homedir(), '.config', 'plus', 'plugin-bootstrap.secret');
-    mkdirSync(join(path, '..'), { recursive: true });
+    const path = join(homedir(), ".config", "plus", "plugin-bootstrap.secret");
+    mkdirSync(join(path, ".."), { recursive: true });
     if (!existsSync(path)) {
       writeFileSync(path, randomBytes(32));
       chmodSync(path, 0o600);
-      console.error(`[plus-plugin-gateway] Bootstrap token initialized at ${path}. Use bun run src/plugins/cli.ts print-bootstrap-token to retrieve.`);
+      console.error(
+        `[plus-plugin-gateway] Bootstrap token initialized at ${path}. Use bun run src/plugins/cli.ts print-bootstrap-token to retrieve.`,
+      );
     }
     return readFileSync(path);
   }
 
   private async handleRegister(req: Request): Promise<Response> {
     const requestId = this.requestId(req);
-    const authToken = (req.headers.get('authorization') ?? '').replace(/^Bearer\s+/, '');
+    const authToken = (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/, "");
     if (!this.verifyBootstrap(authToken)) {
-      return json(this.errorBody('invalid_bootstrap', 'Invalid or missing Bearer token', requestId), 401);
+      return json(
+        this.errorBody("invalid_bootstrap", "Invalid or missing Bearer token", requestId),
+        401,
+      );
     }
 
     let body: unknown;
-    try { body = await req.json(); } catch {
-      return json(this.errorBody('invalid_body', 'Could not parse JSON body', requestId), 400);
+    try {
+      body = await req.json();
+    } catch {
+      return json(this.errorBody("invalid_body", "Could not parse JSON body", requestId), 400);
     }
 
     let manifest: z.infer<typeof PluginManifestSchema>;
     try {
       manifest = PluginManifestSchema.parse(body);
     } catch (e) {
-      return json(this.errorBody('invalid_manifest', String(e), requestId), 400);
+      return json(this.errorBody("invalid_manifest", String(e), requestId), 400);
     }
 
     const callbackHost = new URL(manifest.callback_url).hostname;
     if (!this.allowedCallbackHosts.has(callbackHost)) {
-      return json(this.errorBody('callback_host_not_allowed', `Host ${callbackHost} not in allowlist`, requestId, manifest.name), 400);
+      return json(
+        this.errorBody(
+          "callback_host_not_allowed",
+          `Host ${callbackHost} not in allowlist`,
+          requestId,
+          manifest.name,
+        ),
+        400,
+      );
     }
 
     if (this.plugins.has(manifest.name)) {
       // Clean up stale tools from bridge before re-registering
-      try { getMcpBridge().unregisterPlugin(manifest.name); } catch {}
+      try {
+        getMcpBridge().unregisterPlugin(manifest.name);
+      } catch {}
       this.plugins.delete(manifest.name);
     }
 
@@ -130,8 +160,15 @@ export class PluginHttpGateway {
           description: toolDef.description,
           schema: z.record(z.unknown()),
           handler: async (args) => {
-            const invokeRequestId = randomBytes(8).toString('hex');
-            return this.invokeViaCallback(manifest.name, toolDef.name, args, pluginToken, manifest.callback_url, invokeRequestId);
+            const invokeRequestId = randomBytes(8).toString("hex");
+            return this.invokeViaCallback(
+              manifest.name,
+              toolDef.name,
+              args,
+              pluginToken,
+              manifest.callback_url,
+              invokeRequestId,
+            );
           },
         });
       } catch {
@@ -140,12 +177,18 @@ export class PluginHttpGateway {
     }
 
     this.plugins.set(manifest.name, { manifest, pluginToken, registeredAt: new Date() });
-    try { bridge.audit('http_plugin_registered', { plugin: manifest.name, tools_count: manifest.tools.length, request_id: requestId }); } catch {}
+    try {
+      bridge.audit("http_plugin_registered", {
+        plugin: manifest.name,
+        tools_count: manifest.tools.length,
+        request_id: requestId,
+      });
+    } catch {}
 
     return json({
       plugin_name: manifest.name,
-      plugin_token: pluginToken.toString('hex'),
-      registered_tools: manifest.tools.map(t => `${manifest.name}__${t.name}`),
+      plugin_token: pluginToken.toString("hex"),
+      registered_tools: manifest.tools.map((t) => `${manifest.name}__${t.name}`),
       capabilities_acknowledged: manifest.capabilities,
       request_id: requestId,
     });
@@ -155,50 +198,117 @@ export class PluginHttpGateway {
     const requestId = this.requestId(req);
     const plugin = this.plugins.get(name);
     if (!plugin) {
-      return json(this.errorBody('plugin_not_registered', `Plugin '${name}' not registered`, requestId, name), 404);
+      return json(
+        this.errorBody("plugin_not_registered", `Plugin '${name}' not registered`, requestId, name),
+        404,
+      );
     }
 
-    const contentLength = Number(req.headers.get('content-length') ?? 0);
+    const contentLength = Number(req.headers.get("content-length") ?? 0);
     if (contentLength > MAX_BODY_BYTES) {
-      return json(this.errorBody('body_too_large', `Request body exceeds ${MAX_BODY_BYTES} bytes`, requestId, name), 413);
+      return json(
+        this.errorBody(
+          "body_too_large",
+          `Request body exceeds ${MAX_BODY_BYTES} bytes`,
+          requestId,
+          name,
+        ),
+        413,
+      );
     }
 
-    const ts = req.headers.get('x-plus-ts') ?? '';
-    const sig = req.headers.get('x-plus-signature') ?? '';
+    const ts = req.headers.get("x-plus-ts") ?? "";
+    const sig = req.headers.get("x-plus-signature") ?? "";
     // Use raw body bytes for HMAC — re-serialization changes byte order (breaks Python default separators)
     const rawBuf = await req.arrayBuffer();
     if (rawBuf.byteLength > MAX_BODY_BYTES) {
-      return json(this.errorBody('body_too_large', `Request body exceeds ${MAX_BODY_BYTES} bytes`, requestId, name), 413);
+      return json(
+        this.errorBody(
+          "body_too_large",
+          `Request body exceeds ${MAX_BODY_BYTES} bytes`,
+          requestId,
+          name,
+        ),
+        413,
+      );
     }
     const rawBody = new TextDecoder().decode(rawBuf);
-    const bodyStr = rawBody || '{}';
+    const bodyStr = rawBody || "{}";
     let body: unknown;
-    try { body = JSON.parse(bodyStr); } catch { body = {}; }
+    try {
+      body = JSON.parse(bodyStr);
+    } catch {
+      body = {};
+    }
 
     if (!ts || !sig || !this.verifyHmac(plugin.pluginToken, bodyStr, ts, sig)) {
-      return json(this.errorBody('invalid_signature', 'HMAC verification failed', requestId, name), 401);
+      return json(
+        this.errorBody("invalid_signature", "HMAC verification failed", requestId, name),
+        401,
+      );
     }
 
     const tsMs = new Date(ts).getTime();
     if (!Number.isFinite(tsMs) || Math.abs(Date.now() - tsMs) > REPLAY_WINDOW_MS) {
-      return json(this.errorBody('stale_or_future_timestamp', `ts outside ${REPLAY_WINDOW_MS / 1000}s window`, requestId, name), 401);
+      return json(
+        this.errorBody(
+          "stale_or_future_timestamp",
+          `ts outside ${REPLAY_WINDOW_MS / 1000}s window`,
+          requestId,
+          name,
+        ),
+        401,
+      );
     }
 
     const fqn = `${name}__${tool}`;
     const bridge = getMcpBridge();
     // Gateway-level audit carries request_id through the invoke lifecycle
-    try { bridge.audit('gateway_invoke', { fqn, request_id: requestId, plugin: name, phase: 'start' }); } catch {}
+    try {
+      bridge.audit("gateway_invoke", { fqn, request_id: requestId, plugin: name, phase: "start" });
+    } catch {}
     try {
       const result = await bridge.invokeTool(fqn, body);
-      try { bridge.audit('gateway_invoke', { fqn, request_id: requestId, plugin: name, phase: 'end', success: true }); } catch {}
+      try {
+        bridge.audit("gateway_invoke", {
+          fqn,
+          request_id: requestId,
+          plugin: name,
+          phase: "end",
+          success: true,
+        });
+      } catch {}
       return json({ result, request_id: requestId });
     } catch (e) {
-      try { bridge.audit('gateway_invoke', { fqn, request_id: requestId, plugin: name, phase: 'end', success: false }); } catch {}
-      return json(this.errorBody('invoke_failed', e instanceof Error ? e.message : String(e), requestId, name), 502);
+      try {
+        bridge.audit("gateway_invoke", {
+          fqn,
+          request_id: requestId,
+          plugin: name,
+          phase: "end",
+          success: false,
+        });
+      } catch {}
+      return json(
+        this.errorBody(
+          "invoke_failed",
+          e instanceof Error ? e.message : String(e),
+          requestId,
+          name,
+        ),
+        502,
+      );
     }
   }
 
-  private async invokeViaCallback(pluginName: string, toolName: string, args: unknown, pluginToken: Buffer, callbackUrl: string, requestId: string): Promise<unknown> {
+  private async invokeViaCallback(
+    pluginName: string,
+    toolName: string,
+    args: unknown,
+    pluginToken: Buffer,
+    callbackUrl: string,
+    requestId: string,
+  ): Promise<unknown> {
     const ts = new Date().toISOString();
     const body = JSON.stringify({ tool: toolName, args });
     const signature = this.signHmac(pluginToken, body, ts);
@@ -207,20 +317,22 @@ export class PluginHttpGateway {
     const timer = setTimeout(() => ctrl.abort(), PLUGIN_INVOKE_TIMEOUT_MS);
     try {
       const resp = await fetch(callbackUrl, {
-        method: 'POST',
+        method: "POST",
         headers: {
-          'Content-Type': 'application/json',
-          'X-Plus-Ts': ts,
-          'X-Plus-Signature': signature,
-          'X-Plus-Request-Id': requestId,
+          "Content-Type": "application/json",
+          "X-Plus-Ts": ts,
+          "X-Plus-Signature": signature,
+          "X-Plus-Request-Id": requestId,
         },
         body,
         signal: ctrl.signal,
       });
       if (!resp.ok) {
-        throw new Error(`Plugin ${pluginName} callback ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+        throw new Error(
+          `Plugin ${pluginName} callback ${resp.status}: ${(await resp.text()).slice(0, 200)}`,
+        );
       }
-      const result = await resp.json() as { result?: unknown; error?: unknown };
+      const result = (await resp.json()) as { result?: unknown; error?: unknown };
       if (result.error) throw new Error(`Plugin error: ${JSON.stringify(result.error)}`);
       return result.result;
     } finally {
@@ -232,28 +344,40 @@ export class PluginHttpGateway {
     const requestId = this.requestId(req);
     const plugin = this.plugins.get(name);
     if (!plugin) {
-      return json(this.errorBody('plugin_not_registered', `Plugin '${name}' not registered`, requestId, name), 404);
+      return json(
+        this.errorBody("plugin_not_registered", `Plugin '${name}' not registered`, requestId, name),
+        404,
+      );
     }
-    const authToken = (req.headers.get('authorization') ?? '').replace(/^Bearer\s+/, '');
-    const tokenBuf = Buffer.from(authToken, 'hex');
+    const authToken = (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/, "");
+    const tokenBuf = Buffer.from(authToken, "hex");
     const validBootstrap = this.verifyBootstrap(authToken);
-    const validPlugin = tokenBuf.length === plugin.pluginToken.length && timingSafeEqual(tokenBuf, plugin.pluginToken);
+    const validPlugin =
+      tokenBuf.length === plugin.pluginToken.length &&
+      timingSafeEqual(tokenBuf, plugin.pluginToken);
     if (!validBootstrap && !validPlugin) {
-      return json(this.errorBody('unauthorized', 'Bootstrap or plugin token required', requestId, name), 401);
+      return json(
+        this.errorBody("unauthorized", "Bootstrap or plugin token required", requestId, name),
+        401,
+      );
     }
     this.plugins.delete(name);
-    try { getMcpBridge().unregisterPlugin(name); } catch {}
-    try { getMcpBridge().audit('http_plugin_unregistered', { plugin: name, request_id: requestId }); } catch {}
+    try {
+      getMcpBridge().unregisterPlugin(name);
+    } catch {}
+    try {
+      getMcpBridge().audit("http_plugin_unregistered", { plugin: name, request_id: requestId });
+    } catch {}
     return json({ unregistered: name, request_id: requestId });
   }
 
   private async handleList(req: Request): Promise<Response> {
     const requestId = this.requestId(req);
-    const list = [...this.plugins.values()].map(p => ({
+    const list = [...this.plugins.values()].map((p) => ({
       name: p.manifest.name,
       version: p.manifest.version,
       schema_version: p.manifest.schema_version,
-      tools: p.manifest.tools.map(t => t.name),
+      tools: p.manifest.tools.map((t) => t.name),
       capabilities: p.manifest.capabilities,
       registered_at: p.registeredAt.toISOString(),
       last_health_check: p.lastHealthCheck ?? null,
@@ -265,7 +389,10 @@ export class PluginHttpGateway {
     const requestId = this.requestId(req);
     const plugin = this.plugins.get(name);
     if (!plugin) {
-      return json(this.errorBody('plugin_not_registered', `Plugin '${name}' not registered`, requestId, name), 404);
+      return json(
+        this.errorBody("plugin_not_registered", `Plugin '${name}' not registered`, requestId, name),
+        404,
+      );
     }
     if (plugin.inProcessHealthFn) {
       try {
@@ -276,7 +403,12 @@ export class PluginHttpGateway {
       }
     }
     if (!plugin.manifest.health_url) {
-      return json({ name, healthy: true, note: 'No health_url declared — plugin assumed healthy', request_id: requestId });
+      return json({
+        name,
+        healthy: true,
+        note: "No health_url declared — plugin assumed healthy",
+        request_id: requestId,
+      });
     }
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 5_000);
@@ -297,22 +429,26 @@ export class PluginHttpGateway {
 
   private verifyBootstrap(token: string): boolean {
     try {
-      const tokenBuf = Buffer.from(token, 'hex');
+      const tokenBuf = Buffer.from(token, "hex");
       if (tokenBuf.length !== this.bootstrapToken.length) return false;
       return timingSafeEqual(tokenBuf, this.bootstrapToken);
-    } catch { return false; }
+    } catch {
+      return false;
+    }
   }
 
   signHmac(secret: Buffer, body: string, ts: string): string {
-    return createHmac('sha256', secret).update(`${ts}\n${body}`).digest('hex');
+    return createHmac("sha256", secret).update(`${ts}\n${body}`).digest("hex");
   }
 
   verifyHmac(secret: Buffer, body: string, ts: string, sig: string): boolean {
     try {
       const expected = this.signHmac(secret, body, ts);
       if (expected.length !== sig.length) return false;
-      return timingSafeEqual(Buffer.from(expected, 'hex'), Buffer.from(sig, 'hex'));
-    } catch { return false; }
+      return timingSafeEqual(Buffer.from(expected, "hex"), Buffer.from(sig, "hex"));
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -322,13 +458,18 @@ export class PluginHttpGateway {
    * Tools must be pre-registered on getMcpBridge() before calling this. The gateway
    * handles auth (HMAC with the returned token) and routes invocations to the bridge.
    */
-  registerInProcess(name: string, opts: {
-    version: string;
-    tools: { name: string; description: string; schema: Record<string, unknown> }[];
-    healthFn?: () => Promise<Record<string, unknown>>;
-  }): Buffer {
+  registerInProcess(
+    name: string,
+    opts: {
+      version: string;
+      tools: { name: string; description: string; schema: Record<string, unknown> }[];
+      healthFn?: () => Promise<Record<string, unknown>>;
+    },
+  ): Buffer {
     if (this.plugins.has(name)) {
-      try { getMcpBridge().unregisterPlugin(name); } catch {}
+      try {
+        getMcpBridge().unregisterPlugin(name);
+      } catch {}
       this.plugins.delete(name);
     }
 
@@ -337,10 +478,10 @@ export class PluginHttpGateway {
       name,
       version: opts.version,
       schema_version: 1,
-      callback_url: 'http://localhost:0/noop',
+      callback_url: "http://localhost:0/noop",
       health_url: undefined,
       tools: opts.tools,
-      capabilities: ['tools'] as string[],
+      capabilities: ["tools"] as string[],
     };
 
     this.plugins.set(name, {
@@ -350,14 +491,25 @@ export class PluginHttpGateway {
       inProcessHealthFn: opts.healthFn,
     });
 
-    try { getMcpBridge().audit('in_process_plugin_registered', { plugin: name, tools_count: opts.tools.length }); } catch {}
+    try {
+      getMcpBridge().audit("in_process_plugin_registered", {
+        plugin: name,
+        tools_count: opts.tools.length,
+      });
+    } catch {}
     return pluginToken;
   }
 
   /** Expose for tests */
-  get pluginCount(): number { return this.plugins.size; }
-  hasPlugin(name: string): boolean { return this.plugins.has(name); }
-  getPluginToken(name: string): Buffer | undefined { return this.plugins.get(name)?.pluginToken; }
+  get pluginCount(): number {
+    return this.plugins.size;
+  }
+  hasPlugin(name: string): boolean {
+    return this.plugins.has(name);
+  }
+  getPluginToken(name: string): Buffer | undefined {
+    return this.plugins.get(name)?.pluginToken;
+  }
 }
 
 let _gateway: PluginHttpGateway | null = null;
@@ -367,4 +519,6 @@ export function getHttpGateway(opts?: { allowedHosts?: string[] }): PluginHttpGa
   return _gateway;
 }
 
-export function _resetHttpGateway(): void { _gateway = null; }
+export function _resetHttpGateway(): void {
+  _gateway = null;
+}

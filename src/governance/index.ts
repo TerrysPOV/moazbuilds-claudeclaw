@@ -1,6 +1,6 @@
 /**
  * Governance Module Index
- * 
+ *
  * Exposes all governance modules from a single entry point.
  */
 

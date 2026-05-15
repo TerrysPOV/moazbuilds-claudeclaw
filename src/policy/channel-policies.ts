@@ -1,17 +1,13 @@
 /**
  * Scoped Channel and User Policies
- * 
+ *
  * Helper layer that resolves channel/user scoped policy rules into
  * normalized engine rules without hard-coding channel-specific logic.
- * 
+ *
  * This module produces normalized rules - not a parallel evaluator.
  */
 
-import {
-  type PolicyRule,
-  type ToolRequestContext,
-  getRules,
-} from "./engine";
+import { type PolicyRule, type ToolRequestContext, getRules } from "./engine";
 
 import { readFileSync, existsSync } from "fs";
 
@@ -58,11 +54,11 @@ const SCOPED_POLICY_FILE = `${POLICY_DIR}/scoped-policies.json`;
  */
 export function getScopedRules(context: ToolRequestContext): PolicyRule[] {
   const allRules: PolicyRule[] = [];
-  
+
   // Get global rules (these are already loaded in engine)
   const globalRules = getRules();
   allRules.push(...globalRules);
-  
+
   // Try to load and merge scoped policies (use cache first)
   try {
     const scopedConfig = cachedConfig ?? loadScopedPolicyConfig();
@@ -73,45 +69,53 @@ export function getScopedRules(context: ToolRequestContext): PolicyRule[] {
         if (sourceConfig.defaultRules) {
           allRules.push(...sourceConfig.defaultRules);
         }
-        
+
         // Find channel-specific rules
         if (context.channelId && sourceConfig.channels) {
           const channelConfig = sourceConfig.channels[context.channelId];
           if (channelConfig) {
             // Add channel deny rules (high priority)
             if (channelConfig.denyRules) {
-              allRules.push(...channelConfig.denyRules.map(rule => ({
-                ...rule,
-                priority: rule.priority ?? 150, // Higher than typical
-              })));
+              allRules.push(
+                ...channelConfig.denyRules.map((rule) => ({
+                  ...rule,
+                  priority: rule.priority ?? 150, // Higher than typical
+                })),
+              );
             }
-            
+
             // Add channel allow rules
             if (channelConfig.allowRules) {
-              allRules.push(...channelConfig.allowRules.map(rule => ({
-                ...rule,
-                priority: rule.priority ?? 100,
-              })));
+              allRules.push(
+                ...channelConfig.allowRules.map((rule) => ({
+                  ...rule,
+                  priority: rule.priority ?? 100,
+                })),
+              );
             }
-            
+
             // Find user-specific overrides
             if (context.userId && channelConfig.userOverrides) {
               const userOverride = channelConfig.userOverrides[context.userId];
               if (userOverride) {
                 // User deny rules override channel allows
                 if (userOverride.denyRules) {
-                  allRules.push(...userOverride.denyRules.map(rule => ({
-                    ...rule,
-                    priority: rule.priority ?? 200, // Even higher priority
-                  })));
+                  allRules.push(
+                    ...userOverride.denyRules.map((rule) => ({
+                      ...rule,
+                      priority: rule.priority ?? 200, // Even higher priority
+                    })),
+                  );
                 }
-                
+
                 // User allow rules
                 if (userOverride.allowRules) {
-                  allRules.push(...userOverride.allowRules.map(rule => ({
-                    ...rule,
-                    priority: rule.priority ?? 100,
-                  })));
+                  allRules.push(
+                    ...userOverride.allowRules.map((rule) => ({
+                      ...rule,
+                      priority: rule.priority ?? 100,
+                    })),
+                  );
                 }
               }
             }
@@ -122,7 +126,7 @@ export function getScopedRules(context: ToolRequestContext): PolicyRule[] {
   } catch {
     // Scoped policy config not found or invalid - proceed with global rules only
   }
-  
+
   return allRules;
 }
 
@@ -132,28 +136,28 @@ export function getScopedRules(context: ToolRequestContext): PolicyRule[] {
  */
 export function mergeScopedPolicies(
   globalRules: PolicyRule[],
-  scopedRules: PolicyRule[]
+  scopedRules: PolicyRule[],
 ): PolicyRule[] {
   // Scoped rules are already enriched with priorities in getScopedRules
   // Here we just combine them with global rules
-  
+
   // Filter out any disabled rules
-  const enabledGlobal = globalRules.filter(r => r.enabled !== false);
-  const enabledScoped = scopedRules.filter(r => r.enabled !== false);
-  
+  const enabledGlobal = globalRules.filter((r) => r.enabled !== false);
+  const enabledScoped = scopedRules.filter((r) => r.enabled !== false);
+
   // Return combined and deduplicated rules
   const ruleMap = new Map<string, PolicyRule>();
-  
+
   // Add global rules first (lower base priority)
   for (const rule of enabledGlobal) {
     ruleMap.set(rule.id, rule);
   }
-  
+
   // Add scoped rules (may override global rules with same ID)
   for (const rule of enabledScoped) {
     ruleMap.set(rule.id, rule);
   }
-  
+
   return Array.from(ruleMap.values());
 }
 
@@ -204,15 +208,16 @@ export function reloadScopedPolicy(): ScopedPolicyConfig | null {
 /**
  * Validate a scoped policy configuration.
  */
-export function validateScopedPolicyConfig(
-  config: ScopedPolicyConfig
-): { valid: boolean; errors: string[] } {
+export function validateScopedPolicyConfig(config: ScopedPolicyConfig): {
+  valid: boolean;
+  errors: string[];
+} {
   const errors: string[] = [];
-  
+
   if (!config.version) {
     errors.push("Missing version field");
   }
-  
+
   if (!config.sources || typeof config.sources !== "object") {
     errors.push("Missing or invalid sources object");
   } else {
@@ -220,13 +225,13 @@ export function validateScopedPolicyConfig(
       if (!sourceConfig.source) {
         errors.push(`Source "${source}" missing source field`);
       }
-      
+
       if (sourceConfig.channels) {
         for (const [channelId, channelConfig] of Object.entries(sourceConfig.channels)) {
           if (channelConfig.channelId !== channelId) {
             errors.push(`Channel ${channelId} has mismatched channelId`);
           }
-          
+
           // Validate nested rules
           if (channelConfig.denyRules) {
             for (const rule of channelConfig.denyRules) {
@@ -239,7 +244,7 @@ export function validateScopedPolicyConfig(
       }
     }
   }
-  
+
   return {
     valid: errors.length === 0,
     errors,

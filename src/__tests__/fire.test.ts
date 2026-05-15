@@ -50,10 +50,16 @@ const passthroughResolver = async (p: string) => p;
 
 describe("parseFireArgs", () => {
   it("parses agent:label form", () => {
-    expect(parseFireArgs(["reg:daily-research"])).toEqual({ agent: "reg", label: "daily-research" });
+    expect(parseFireArgs(["reg:daily-research"])).toEqual({
+      agent: "reg",
+      label: "daily-research",
+    });
   });
   it("parses agent label form", () => {
-    expect(parseFireArgs(["reg", "daily-research"])).toEqual({ agent: "reg", label: "daily-research" });
+    expect(parseFireArgs(["reg", "daily-research"])).toEqual({
+      agent: "reg",
+      label: "daily-research",
+    });
   });
   it("rejects empty args", () => {
     expect(parseFireArgs([])).toBeNull();
@@ -70,7 +76,12 @@ describe("parseFireArgs", () => {
 describe("fireJob", () => {
   it("loads and fires a matching agent job via run() with agent scoping", async () => {
     const agent = uniq("ok");
-    await writeAgentJob(agent, "daily-research", "schedule: 0 9 * * *\nrecurring: true", "research briefing");
+    await writeAgentJob(
+      agent,
+      "daily-research",
+      "schedule: 0 9 * * *\nrecurring: true",
+      "research briefing",
+    );
 
     const calls: Array<{ name: string; prompt: string; agent?: string }> = [];
     const result = await fireJob(agent, "daily-research", {
@@ -150,7 +161,9 @@ describe("runFireCommand", () => {
       runner: fakeRunner([]),
       promptResolver: passthroughResolver,
       stdout: () => {},
-      stderr: (s) => { errText += s; },
+      stderr: (s) => {
+        errText += s;
+      },
     });
     expect(code).toBe(2);
     expect(errText).toContain("Usage");
@@ -162,7 +175,9 @@ describe("runFireCommand", () => {
       runner: fakeRunner([]),
       promptResolver: passthroughResolver,
       stdout: () => {},
-      stderr: (s) => { errText += s; },
+      stderr: (s) => {
+        errText += s;
+      },
     });
     expect(code).toBe(1);
     expect(errText).toContain("not found");
@@ -177,7 +192,9 @@ describe("runFireCommand", () => {
       runner: fakeRunner([]),
       promptResolver: passthroughResolver,
       stdout: () => {},
-      stderr: (s) => { errText += s; },
+      stderr: (s) => {
+        errText += s;
+      },
     });
     expect(code).toBe(1);
     expect(errText).toContain(`${agent}:beta`);
@@ -191,7 +208,9 @@ describe("runFireCommand", () => {
     const code = await runFireCommand([agent, "go"], {
       runner: fakeRunner([]),
       promptResolver: passthroughResolver,
-      stdout: (s) => { outText += s; },
+      stdout: (s) => {
+        outText += s;
+      },
       stderr: () => {},
     });
     expect(code).toBe(0);

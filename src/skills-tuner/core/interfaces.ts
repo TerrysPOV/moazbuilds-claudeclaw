@@ -1,11 +1,18 @@
-import type { Cluster, Observation, Patch, Proposal, UnsignedProposal, ValidationResult } from './types.js';
-import { ORPHAN_SUBJECT } from './types.js';
+import type {
+  Cluster,
+  Observation,
+  Patch,
+  Proposal,
+  UnsignedProposal,
+  ValidationResult,
+} from "./types.js";
+import { ORPHAN_SUBJECT } from "./types.js";
 
-export type RiskTier = 'low' | 'medium' | 'high' | 'critical';
+export type RiskTier = "low" | "medium" | "high" | "critical";
 
 export abstract class TunableSubject {
   abstract readonly name: string;
-  readonly risk_tier: RiskTier = 'low';
+  readonly risk_tier: RiskTier = "low";
   readonly auto_merge_default: boolean = false;
   readonly supports_creation: boolean = false;
   readonly orphan_min_observations: number = 2;
@@ -16,7 +23,11 @@ export abstract class TunableSubject {
   abstract apply(proposal: Proposal, alternativeId: string): Promise<Patch>;
   abstract validate(patch: Patch): Promise<ValidationResult>;
 
-  scoreSignal(_verbatim: string, _attributedTo: string, _knownEntities: Record<string, unknown>): number {
+  scoreSignal(
+    _verbatim: string,
+    _attributedTo: string,
+    _knownEntities: Record<string, unknown>,
+  ): number {
     return 0;
   }
 
@@ -35,7 +46,7 @@ export abstract class TunableSubject {
    * any meaningful change to what the subject would propose tuning.
    */
   currentStateHash(): string {
-    return '';
+    return "";
   }
 }
 
@@ -44,5 +55,5 @@ export abstract class Adapter {
   abstract renderApplyConfirmation(proposal: Proposal, alternativeId: string): Promise<void>;
 }
 
-export { ORPHAN_SUBJECT, CREATE_KINDS } from './types.js';
-export type { UnsignedProposal } from './types.js';
+export { ORPHAN_SUBJECT, CREATE_KINDS } from "./types.js";
+export type { UnsignedProposal } from "./types.js";

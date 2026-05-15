@@ -1,18 +1,13 @@
 /**
  * Tests for retry-queue.ts
- * 
+ *
  * Run with: bun test src/__tests__/retry-queue.test.ts
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { mkdir, rm } from "fs/promises";
 import { join } from "path";
-import {
-  initEventLog,
-  append,
-  resetEventLog,
-  type EventEntryInput,
-} from "../event-log";
+import { initEventLog, append, resetEventLog, type EventEntryInput } from "../event-log";
 import {
   initRetryScheduler,
   schedule,
@@ -42,7 +37,7 @@ const createTestEntry = (overrides: Partial<EventEntryInput> = {}): EventEntryIn
 beforeEach(async () => {
   resetEventLog();
   await resetRetryScheduler();
-  
+
   await rm(join(TEST_DIR, "event-log"), { recursive: true, force: true });
   await rm(join(TEST_DIR, "retry"), { recursive: true, force: true });
   await mkdir(join(TEST_DIR, "event-log"), { recursive: true });
@@ -71,7 +66,7 @@ describe("Retry Scheduler", () => {
 
   it("should schedule an event for retry", async () => {
     await initRetryScheduler({ baseDelayMs: 1000, maxRetries: 5 });
-    
+
     const entry = await append(createTestEntry());
     await schedule(entry.id, 0);
 
@@ -81,22 +76,22 @@ describe("Retry Scheduler", () => {
 
   it("should calculate exponential backoff", async () => {
     await initRetryScheduler({ baseDelayMs: 1000, maxDelayMs: 10000, maxRetries: 5 });
-    
+
     const entry = await append(createTestEntry());
-    
+
     // Schedule with retryCount 0 (1st retry)
     await schedule(entry.id, 0);
     const stats1 = getRetryStats();
-    
+
     // Should use 1000 * 2^0 = 1000ms delay
     expect(stats1.pendingCount).toBe(1);
   });
 
   it("should reject scheduling when max retries exceeded", async () => {
     await initRetryScheduler({ maxRetries: 3 });
-    
+
     const entry = await append(createTestEntry());
-    
+
     expect(async () => {
       await schedule(entry.id, 3); // Already at max
     }).toThrow();
@@ -104,12 +99,12 @@ describe("Retry Scheduler", () => {
 
   it("should pop due entries", async () => {
     await initRetryScheduler({ baseDelayMs: 1, maxRetries: 5 }); // Very short delay
-    
+
     const entry = await append(createTestEntry());
     await schedule(entry.id, 0);
 
     // Wait for delay
-    await new Promise(resolve => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, 10));
 
     const due = popDue();
     expect(due).not.toBeNull();
@@ -119,7 +114,7 @@ describe("Retry Scheduler", () => {
 
   it("should remove scheduled entry", async () => {
     await initRetryScheduler();
-    
+
     const entry = await append(createTestEntry());
     await schedule(entry.id, 0);
 
@@ -133,7 +128,7 @@ describe("Retry Scheduler", () => {
 
   it("should rebuild from state", async () => {
     await initRetryScheduler();
-    
+
     const entry = await append(createTestEntry());
     await schedule(entry.id, 0);
 
@@ -148,10 +143,10 @@ describe("Retry Scheduler", () => {
 
   it("should rebuild from event log", async () => {
     await initRetryScheduler({ maxRetries: 5 });
-    
+
     // Create an event and mark it for retry
     const entry = await append(createTestEntry());
-    
+
     // Manually update event to retry_scheduled status
     const { appendStatusUpdate } = await import("../event-log");
     await appendStatusUpdate(entry.id, {
@@ -192,7 +187,7 @@ describe("Retry Scheduler - Edge Cases", () => {
 
   it("should return null when no due entries", async () => {
     await initRetryScheduler({ baseDelayMs: 60000, maxRetries: 5 }); // Long delay
-    
+
     const entry = await append(createTestEntry());
     await schedule(entry.id, 0);
 
@@ -202,7 +197,7 @@ describe("Retry Scheduler - Edge Cases", () => {
 
   it("should sort retries by time", async () => {
     await initRetryScheduler({ baseDelayMs: 1, maxRetries: 5 });
-    
+
     const entry1 = await append(createTestEntry());
     const entry2 = await append(createTestEntry());
     const entry3 = await append(createTestEntry());
@@ -213,7 +208,7 @@ describe("Retry Scheduler - Edge Cases", () => {
     await schedule(entry3.id, 1); // Medium delay
 
     // Wait for shortest delay
-    await new Promise(resolve => setTimeout(resolve, 5));
+    await new Promise((resolve) => setTimeout(resolve, 5));
 
     // Should pop in order: entry2 (retry 0), entry3 (retry 1), entry1 (retry 2)
     const first = popDue();

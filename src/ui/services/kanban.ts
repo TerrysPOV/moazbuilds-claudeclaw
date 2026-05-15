@@ -48,7 +48,7 @@ export async function writeKanban(board: KanbanBoard): Promise<void> {
 
 export async function addCardToColumn(
   column: keyof KanbanBoard["columns"],
-  card: KanbanCard
+  card: KanbanCard,
 ): Promise<void> {
   const board = await readKanban();
   board.columns[column].unshift(card);
@@ -58,7 +58,7 @@ export async function addCardToColumn(
 export async function moveCard(
   id: string,
   toColumn: keyof KanbanBoard["columns"],
-  patch?: Partial<KanbanCard>
+  patch?: Partial<KanbanCard>,
 ): Promise<void> {
   const board = await readKanban();
   let card: KanbanCard | undefined;

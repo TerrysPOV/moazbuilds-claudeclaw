@@ -1,12 +1,24 @@
 /**
  * GovernanceClient - Unified interface to governance operations
- * 
+ *
  * Provides a single entry point for policy evaluation, approval management,
  * and governance telemetry across the codebase.
  */
 
-import { evaluate, loadRules, type ToolRequestContext, type PolicyDecision } from "../policy/engine";
-import { enqueue, listPending, findByEventId, findById, loadState as loadApprovalState, type ApprovalEntry } from "../policy/approval-queue";
+import {
+  evaluate,
+  loadRules,
+  type ToolRequestContext,
+  type PolicyDecision,
+} from "../policy/engine";
+import {
+  enqueue,
+  listPending,
+  findByEventId,
+  findById,
+  loadState as loadApprovalState,
+  type ApprovalEntry,
+} from "../policy/approval-queue";
 import { logPolicyDecision } from "../policy/audit-log";
 import * as governance from "./index";
 
@@ -26,7 +38,7 @@ export class GovernanceClient {
   }
 
   // --- Policy Engine ---
-  
+
   /**
    * Evaluate a tool request against policy rules.
    */
@@ -57,8 +69,8 @@ export class GovernanceClient {
         userId: request.userId,
         skillName: request.skillName,
         matchedRuleId: decision.matchedRuleId,
-      }
-    ).catch(err => {
+      },
+    ).catch((err) => {
       console.error("[governance] Failed to write audit log:", err);
     });
 
@@ -73,12 +85,15 @@ export class GovernanceClient {
   }
 
   // --- Approval Queue ---
-  
+
   /**
    * Request approval for a tool execution.
    * Returns the approval entry if decision is require_approval.
    */
-  async requestApproval(request: ToolRequestContext, decision: PolicyDecision): Promise<ApprovalEntry | null> {
+  async requestApproval(
+    request: ToolRequestContext,
+    decision: PolicyDecision,
+  ): Promise<ApprovalEntry | null> {
     if (!this.config.approvalEnabled || decision.action !== "require_approval") {
       return null;
     }
@@ -107,7 +122,7 @@ export class GovernanceClient {
   }
 
   // --- Governance Telemetry ---
-  
+
   /**
    * Get governance telemetry summary.
    */

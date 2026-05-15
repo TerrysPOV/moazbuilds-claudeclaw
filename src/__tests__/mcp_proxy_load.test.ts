@@ -27,7 +27,9 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await proc.stop();
-  try { rmSync(tmpDir, { recursive: true }); } catch {}
+  try {
+    rmSync(tmpDir, { recursive: true });
+  } catch {}
 });
 
 describe("mcp-proxy load", () => {
@@ -35,10 +37,8 @@ describe("mcp-proxy load", () => {
 
   it("50 concurrent calls all complete successfully", async () => {
     const N = 50;
-    const calls = Array.from({ length: N }, (_, i) =>
-      proc.call("echo", { message: `msg-${i}` }),
-    );
-    const results = await Promise.all(calls) as Array<{ echo: string }>;
+    const calls = Array.from({ length: N }, (_, i) => proc.call("echo", { message: `msg-${i}` }));
+    const results = (await Promise.all(calls)) as Array<{ echo: string }>;
     expect(results).toHaveLength(N);
     for (let i = 0; i < N; i++) {
       expect(results[i].echo).toBe(`msg-${i}`);
@@ -49,7 +49,7 @@ describe("mcp-proxy load", () => {
 
   it("200 sequential calls complete without hanging pending entries", async () => {
     for (let i = 0; i < 200; i++) {
-      const result = await proc.call("echo", { message: `seq-${i}` }) as { echo: string };
+      const result = (await proc.call("echo", { message: `seq-${i}` })) as { echo: string };
       expect(result.echo).toBe(`seq-${i}`);
     }
   }, 60_000);
@@ -63,11 +63,11 @@ describe("mcp-proxy load", () => {
     try {
       const slowCallPromise = allToolsProc.call("slow_tool", { message: "blocking" }, 10_000);
       // Fast calls should complete before the slow one
-      const fastResults = await Promise.all([
+      const fastResults = (await Promise.all([
         allToolsProc.call("echo", { message: "fast-1" }),
         allToolsProc.call("echo", { message: "fast-2" }),
         allToolsProc.call("echo", { message: "fast-3" }),
-      ]) as Array<{ echo: string }>;
+      ])) as Array<{ echo: string }>;
       expect(fastResults[0].echo).toBe("fast-1");
       expect(fastResults[1].echo).toBe("fast-2");
       expect(fastResults[2].echo).toBe("fast-3");

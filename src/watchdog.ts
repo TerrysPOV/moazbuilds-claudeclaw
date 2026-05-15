@@ -93,10 +93,7 @@ export function recordResult(sessionId: string, exitCode: number): void {
  * Call this BEFORE triggering any auto-compact / retry logic.
  * Only call with a real session ID.
  */
-export function abortReason(
-  sessionId: string,
-  config: WatchdogConfig,
-): string | null {
+export function abortReason(sessionId: string, config: WatchdogConfig): string | null {
   const state = sessions.get(sessionId);
   if (!state) return null;
 

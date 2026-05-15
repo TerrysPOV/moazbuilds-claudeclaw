@@ -1,6 +1,13 @@
 import { z } from "zod";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { appendFileSync, mkdirSync, writeFileSync, existsSync, readFileSync, chmodSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdirSync,
+  writeFileSync,
+  existsSync,
+  readFileSync,
+  chmodSync,
+} from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 
@@ -56,7 +63,9 @@ export class PluginMcpBridge {
   // Rejects any string containing path separators, dots, or other special chars.
   private _validatePluginId(pluginId: string): void {
     if (typeof pluginId !== "string" || !/^[a-z][a-z0-9-]{0,63}$/.test(pluginId)) {
-      throw new Error(`invalid pluginId: ${JSON.stringify(pluginId)} (must match /^[a-z][a-z0-9-]{0,63}$/)`);
+      throw new Error(
+        `invalid pluginId: ${JSON.stringify(pluginId)} (must match /^[a-z][a-z0-9-]{0,63}$/)`,
+      );
     }
   }
 
@@ -209,7 +218,8 @@ export class PluginMcpBridge {
     if (field instanceof z.ZodString) return { type: "string" };
     if (field instanceof z.ZodNumber) return { type: "number" };
     if (field instanceof z.ZodBoolean) return { type: "boolean" };
-    if (field instanceof z.ZodArray) return { type: "array", items: this.zodFieldToJson(field.element as z.ZodType) };
+    if (field instanceof z.ZodArray)
+      return { type: "array", items: this.zodFieldToJson(field.element as z.ZodType) };
     if (field instanceof z.ZodEnum) return { type: "string", enum: field.options as string[] };
     return { type: "object", additionalProperties: true };
   }
@@ -241,4 +251,6 @@ export function _resetMcpBridge(): void {
 }
 
 /** Set bridge singleton — only for testing */
-export function _setMcpBridge(b: PluginMcpBridge | null): void { _bridge = b; }
+export function _setMcpBridge(b: PluginMcpBridge | null): void {
+  _bridge = b;
+}

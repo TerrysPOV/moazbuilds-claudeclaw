@@ -1,8 +1,8 @@
 /**
  * Governance Telemetry
- * 
+ *
  * Exposes persisted governance state and derived aggregates to API/dashboard consumers.
- * 
+ *
  * PRINCIPLES:
  * - Telemetry is read-side only
  * - Telemetry derives from persisted usage/governance records
@@ -17,41 +17,53 @@ export interface GovernanceTelemetry {
   // Session stats
   totalSessions: number;
   activeSessions: number;
-  
+
   // Cost stats
   estimatedTotalCost: number;
   currency: string;
-  
+
   // Channel stats
-  channelStats: Record<string, {
-    sessions: number;
-    estimatedCost: number;
-    tokens: number;
-    invocations: number;
-  }>;
-  
+  channelStats: Record<
+    string,
+    {
+      sessions: number;
+      estimatedCost: number;
+      tokens: number;
+      invocations: number;
+    }
+  >;
+
   // Provider stats
-  providerStats: Record<string, {
-    calls: number;
-    tokens: number;
-    estimatedCost: number;
-  }>;
-  
+  providerStats: Record<
+    string,
+    {
+      calls: number;
+      tokens: number;
+      estimatedCost: number;
+    }
+  >;
+
   // Model stats
-  modelStats: Record<string, {
-    calls: number;
-    tokens: number;
-    estimatedCost: number;
-  }>;
-  
+  modelStats: Record<
+    string,
+    {
+      calls: number;
+      tokens: number;
+      estimatedCost: number;
+    }
+  >;
+
   // Budget states
-  budgetStates: Record<string, {
-    status: string;
-    scope: string;
-    currentSpend?: number;
-    threshold?: number;
-  }>;
-  
+  budgetStates: Record<
+    string,
+    {
+      status: string;
+      scope: string;
+      currentSpend?: number;
+      threshold?: number;
+    }
+  >;
+
   // Watchdog stats
   watchdog: {
     triggered: number;
@@ -59,7 +71,7 @@ export interface GovernanceTelemetry {
     killed: number;
     suspended: number;
   };
-  
+
   // Invocation stats
   invocationStats: {
     total: number;
@@ -123,7 +135,7 @@ export async function getTelemetry(filters: TelemetryFilters = {}): Promise<Gove
           tokens: stats.tokens,
           invocations: stats.count,
         },
-      ])
+      ]),
     ),
 
     // Provider stats
@@ -135,7 +147,7 @@ export async function getTelemetry(filters: TelemetryFilters = {}): Promise<Gove
           tokens: stats.tokens,
           estimatedCost: stats.cost,
         },
-      ])
+      ]),
     ),
 
     // Model stats
@@ -147,7 +159,7 @@ export async function getTelemetry(filters: TelemetryFilters = {}): Promise<Gove
           tokens: stats.tokens,
           estimatedCost: stats.cost,
         },
-      ])
+      ]),
     ),
 
     // Budget states
@@ -160,7 +172,7 @@ export async function getTelemetry(filters: TelemetryFilters = {}): Promise<Gove
           currentSpend: bs.currentSpend,
           threshold: bs.threshold ?? undefined,
         },
-      ])
+      ]),
     ),
 
     // Watchdog stats (placeholder - would need watchdog event tracking)
@@ -178,11 +190,9 @@ export async function getTelemetry(filters: TelemetryFilters = {}): Promise<Gove
       failed: aggregates.failedInvocations,
       killed: aggregates.killedInvocations,
       byProvider: Object.fromEntries(
-        Object.entries(aggregates.byProvider).map(([p, v]) => [p, v.count])
+        Object.entries(aggregates.byProvider).map(([p, v]) => [p, v.count]),
       ),
-      byModel: Object.fromEntries(
-        Object.entries(aggregates.byModel).map(([m, v]) => [m, v.count])
-      ),
+      byModel: Object.fromEntries(Object.entries(aggregates.byModel).map(([m, v]) => [m, v.count])),
     },
   };
 
@@ -212,13 +222,15 @@ export async function getTelemetrySummary(): Promise<{
 /**
  * Get provider breakdown.
  */
-export async function getProviderBreakdown(): Promise<Array<{
-  provider: string;
-  calls: number;
-  tokens: number;
-  estimatedCost: number;
-  avgCostPerCall: number;
-}>> {
+export async function getProviderBreakdown(): Promise<
+  Array<{
+    provider: string;
+    calls: number;
+    tokens: number;
+    estimatedCost: number;
+    avgCostPerCall: number;
+  }>
+> {
   const aggregates = await getAggregates({});
 
   return Object.entries(aggregates.byProvider).map(([provider, stats]) => ({
@@ -241,14 +253,16 @@ function inferProvider(model: string): string {
 /**
  * Get model breakdown.
  */
-export async function getModelBreakdown(): Promise<Array<{
-  model: string;
-  provider: string;
-  calls: number;
-  tokens: number;
-  estimatedCost: number;
-  avgCostPerCall: number;
-}>> {
+export async function getModelBreakdown(): Promise<
+  Array<{
+    model: string;
+    provider: string;
+    calls: number;
+    tokens: number;
+    estimatedCost: number;
+    avgCostPerCall: number;
+  }>
+> {
   const aggregates = await getAggregates({});
 
   return Object.entries(aggregates.byModel).map(([model, stats]) => {
@@ -267,13 +281,15 @@ export async function getModelBreakdown(): Promise<Array<{
 /**
  * Get channel breakdown.
  */
-export async function getChannelBreakdown(): Promise<Array<{
-  channelId: string;
-  sessions: number;
-  invocations: number;
-  tokens: number;
-  estimatedCost: number;
-}>> {
+export async function getChannelBreakdown(): Promise<
+  Array<{
+    channelId: string;
+    sessions: number;
+    invocations: number;
+    tokens: number;
+    estimatedCost: number;
+  }>
+> {
   const aggregates = await getAggregates({});
 
   return Object.entries(aggregates.byChannel).map(([channelId, stats]) => ({
@@ -288,15 +304,17 @@ export async function getChannelBreakdown(): Promise<Array<{
 /**
  * Get budget health summary.
  */
-export async function getBudgetHealth(): Promise<Array<{
-  policyId: string;
-  policyName: string;
-  state: string;
-  currentSpend: number;
-  threshold: number | null;
-  percentage: number;
-  currency: string;
-}>> {
+export async function getBudgetHealth(): Promise<
+  Array<{
+    policyId: string;
+    policyName: string;
+    state: string;
+    currentSpend: number;
+    threshold: number | null;
+    percentage: number;
+    currency: string;
+  }>
+> {
   const budgetStates = await getBudgetState({});
 
   return budgetStates.map((bs) => ({

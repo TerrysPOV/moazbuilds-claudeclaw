@@ -1,6 +1,6 @@
 /**
  * Governance-Aware Model Router
- * 
+ *
  * Selects provider/model combinations using policy, task context, capability requirements,
  * and budget state. Replaces the naive keyword-based router with an auditable,
  * policy-driven approach.
@@ -111,15 +111,15 @@ function determineBudgetState(evaluations: BudgetEvaluation[]): BudgetState {
 
 function findCheaperAlternative(
   currentProvider: string,
-  currentModel: string
+  currentModel: string,
 ): { provider: string; model: string } | null {
   // Define cheaper alternatives per provider
   const cheaperAlternatives: Record<string, Record<string, { provider: string; model: string }>> = {
-    "anthropic": {
+    anthropic: {
       "claude-3-5-sonnet": { provider: "anthropic", model: "claude-3-haiku" },
       "claude-3-opus": { provider: "anthropic", model: "claude-3-5-sonnet" },
     },
-    "openai": {
+    openai: {
       "gpt-4o": { provider: "openai", model: "gpt-4o-mini" },
       "gpt-4": { provider: "openai", model: "gpt-4o-mini" },
     },
@@ -135,13 +135,13 @@ function findCheaperAlternative(
 
 function findRerouteAlternative(
   currentProvider: string,
-  rerouteToProvider?: string
+  rerouteToProvider?: string,
 ): { provider: string; model: string } | null {
   // Provider-level reroute mapping
   const providerDefaults: Record<string, { provider: string; model: string }> = {
-    "anthropic": { provider: "anthropic", model: "claude-3-haiku" },
-    "openai": { provider: "openai", model: "gpt-4o-mini" },
-    "google": { provider: "google", model: "glm-4" },
+    anthropic: { provider: "anthropic", model: "claude-3-haiku" },
+    openai: { provider: "openai", model: "gpt-4o-mini" },
+    google: { provider: "google", model: "glm-4" },
   };
 
   if (rerouteToProvider && providerDefaults[rerouteToProvider]) {
@@ -161,7 +161,9 @@ function findRerouteAlternative(
 /**
  * Select a model based on request context and budget state.
  */
-export async function selectModel(requestContext: ModelRequestContext): Promise<ModelRoutingDecision> {
+export async function selectModel(
+  requestContext: ModelRequestContext,
+): Promise<ModelRoutingDecision> {
   const requestId = randomUUID();
   const now = new Date().toISOString();
 
@@ -176,11 +178,14 @@ export async function selectModel(requestContext: ModelRequestContext): Promise<
   });
 
   const budgetState = determineBudgetState(budgetEvaluations);
-  const worstEvaluation = budgetEvaluations.find(e => e.state === budgetState) ?? budgetEvaluations[0];
+  const worstEvaluation =
+    budgetEvaluations.find((e) => e.state === budgetState) ?? budgetEvaluations[0];
 
   // Check for explicit override
-  if (requestContext.explicitOverride?.allowed && 
-      (requestContext.explicitOverride.provider || requestContext.explicitOverride.model)) {
+  if (
+    requestContext.explicitOverride?.allowed &&
+    (requestContext.explicitOverride.provider || requestContext.explicitOverride.model)
+  ) {
     // Override is allowed - use it but still consider budget state
     if (budgetState === "block") {
       return {
@@ -234,7 +239,7 @@ export async function selectModel(requestContext: ModelRequestContext): Promise<
       const legacyResult = legacySelectModel(
         requestContext.prompt,
         routerConfig.modes,
-        routerConfig.defaultMode
+        routerConfig.defaultMode,
       );
       selectedModel = legacyResult.model;
       reason = `Task classified as "${legacyResult.taskType}": ${legacyResult.reasoning}`;
@@ -242,11 +247,11 @@ export async function selectModel(requestContext: ModelRequestContext): Promise<
   } else if (requestContext.capability) {
     // Map capability to model
     const capabilityModelMap: Record<string, { provider: string; model: string }> = {
-      "coding": { provider: "anthropic", model: "claude-3-5-sonnet" },
-      "analysis": { provider: "anthropic", model: "claude-3-5-sonnet" },
-      "creative": { provider: "anthropic", model: "claude-3-5-sonnet" },
-      "fast": { provider: "anthropic", model: "claude-3-haiku" },
-      "simple": { provider: "anthropic", model: "claude-3-haiku" },
+      coding: { provider: "anthropic", model: "claude-3-5-sonnet" },
+      analysis: { provider: "anthropic", model: "claude-3-5-sonnet" },
+      creative: { provider: "anthropic", model: "claude-3-5-sonnet" },
+      fast: { provider: "anthropic", model: "claude-3-haiku" },
+      simple: { provider: "anthropic", model: "claude-3-haiku" },
     };
     const mapped = capabilityModelMap[requestContext.capability.toLowerCase()];
     if (mapped) {
@@ -277,7 +282,10 @@ export async function selectModel(requestContext: ModelRequestContext): Promise<
     }
     reason = `Budget degrade: switched to ${selectedProvider}/${selectedModel}`;
   } else if (currentBudgetState === "reroute" && worstEvaluation?.actions.rerouteToProvider) {
-    const reroute = findRerouteAlternative(selectedProvider, worstEvaluation.actions.rerouteToProvider);
+    const reroute = findRerouteAlternative(
+      selectedProvider,
+      worstEvaluation.actions.rerouteToProvider,
+    );
     if (reroute) {
       selectedProvider = reroute.provider;
       selectedModel = reroute.model;
@@ -300,7 +308,7 @@ export async function selectModel(requestContext: ModelRequestContext): Promise<
   if (currentBudgetState === "degrade" || currentBudgetState === "reroute") {
     // Filter fallback chain to cheaper options
     fallbackChain = routerConfig.fallbackChain.filter(
-      (f) => f.provider !== selectedProvider || f.model !== selectedModel
+      (f) => f.provider !== selectedProvider || f.model !== selectedModel,
     );
   }
 
@@ -319,7 +327,9 @@ export async function selectModel(requestContext: ModelRequestContext): Promise<
 /**
  * Get the fallback chain for a request context.
  */
-export async function getFallbackChain(requestContext: ModelRequestContext): Promise<Array<{ provider: string; model: string }>> {
+export async function getFallbackChain(
+  requestContext: ModelRequestContext,
+): Promise<Array<{ provider: string; model: string }>> {
   const decision = await selectModel(requestContext);
   return decision.fallbackChain || routerConfig.fallbackChain;
 }
@@ -330,7 +340,7 @@ export async function getFallbackChain(requestContext: ModelRequestContext): Pro
 export async function isModelAllowed(
   provider: string,
   model: string,
-  context: ModelRequestContext
+  context: ModelRequestContext,
 ): Promise<{ allowed: boolean; reason: string }> {
   // Evaluate budget
   const evaluations = await evaluateBudget({

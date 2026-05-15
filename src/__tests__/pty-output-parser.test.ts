@@ -17,7 +17,7 @@ const FIXTURE_PATH = join(
   ".planning",
   "pty-migration",
   "fixtures",
-  "turn-boundary-sample.txt"
+  "turn-boundary-sample.txt",
 );
 
 // ─── Fixture-driven golden tests ─────────────────────────────────────────────
@@ -200,7 +200,7 @@ describe("extractResponseText", () => {
     const text =
       "⏺ Try running `❯ bun install` in your shell and then re-run the build.✻ Worked for 1s";
     expect(extractResponseText(text)).toBe(
-      "Try running `❯ bun install` in your shell and then re-run the build."
+      "Try running `❯ bun install` in your shell and then re-run the build.",
     );
   });
 
@@ -208,7 +208,7 @@ describe("extractResponseText", () => {
     // No spinner terminator — should return the whole post-⏺ tail trimmed.
     const text = "⏺ The prompt looked like `user@host ❯` when I tested it.";
     expect(extractResponseText(text)).toBe(
-      "The prompt looked like `user@host ❯` when I tested it."
+      "The prompt looked like `user@host ❯` when I tested it.",
     );
   });
 });

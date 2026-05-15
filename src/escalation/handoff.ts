@@ -1,15 +1,15 @@
 /**
  * Handoff Manager
- * 
+ *
  * Create durable, reviewable handoff packages from workflow/session/event context.
- * 
+ *
  * DESIGN:
  * - Handoff packages stored at .claude/claudeclaw/handoffs/
  * - Each handoff is a durable snapshot for human review
  * - References workflow/task/session/event context accurately
  * - Supports create, get, list, accept, and close operations
  * - Handoff acceptance modeled explicitly
- * 
+ *
  * CRASH CONSCIOUSNESS:
  * - Handoff records are persisted immediately
  * - State survives restart
@@ -54,7 +54,7 @@ export interface HandoffPackage {
   summary: string;
   attachments?: string[];
   metadata?: Record<string, unknown>;
-  
+
   // Lifecycle tracking
   acceptedAt?: string;
   acceptedBy?: string;
@@ -185,7 +185,7 @@ async function doInit(): Promise<void> {
 
 /**
  * Create a new handoff package.
- * 
+ *
  * @param reason - The reason for creating the handoff
  * @param context - Context including workflow/session/event references
  * @param options - Additional options including severity and summary
@@ -194,7 +194,7 @@ async function doInit(): Promise<void> {
 export async function createHandoff(
   reason: string,
   context: HandoffContext = {},
-  options: CreateHandoffOptions = {}
+  options: CreateHandoffOptions = {},
 ): Promise<HandoffPackage> {
   await initHandoffManager();
 
@@ -271,7 +271,7 @@ export async function createHandoff(
 
 /**
  * Get a handoff package by ID.
- * 
+ *
  * @param handoffId - The handoff ID
  * @returns The handoff package or null if not found
  */
@@ -283,7 +283,7 @@ export async function getHandoff(handoffId: string): Promise<HandoffPackage | nu
 
 /**
  * List handoffs with optional filters.
- * 
+ *
  * @param filters - Optional filters for status, severity, source, etc.
  * @returns Array of matching handoff summaries
  */
@@ -294,39 +294,37 @@ export async function listHandoffs(filters: HandoffFilters = {}): Promise<Handof
 
   // Apply filters
   if (filters.status) {
-    handoffs = handoffs.filter(h => h.status === filters.status);
+    handoffs = handoffs.filter((h) => h.status === filters.status);
   }
 
   if (filters.severity) {
-    handoffs = handoffs.filter(h => h.severity === filters.severity);
+    handoffs = handoffs.filter((h) => h.severity === filters.severity);
   }
 
   if (filters.source) {
-    handoffs = handoffs.filter(h => h.source === filters.source);
+    handoffs = handoffs.filter((h) => h.source === filters.source);
   }
 
   if (filters.sessionId) {
-    handoffs = handoffs.filter(h => h.sessionId === filters.sessionId);
+    handoffs = handoffs.filter((h) => h.sessionId === filters.sessionId);
   }
 
   if (filters.workflowId) {
-    handoffs = handoffs.filter(h => 
-      h.handoffId === filters.workflowId // For now, direct ID match
+    handoffs = handoffs.filter(
+      (h) => h.handoffId === filters.workflowId, // For now, direct ID match
     );
   }
 
   if (filters.createdAfter) {
-    handoffs = handoffs.filter(h => h.createdAt >= filters.createdAfter!);
+    handoffs = handoffs.filter((h) => h.createdAt >= filters.createdAfter!);
   }
 
   if (filters.createdBefore) {
-    handoffs = handoffs.filter(h => h.createdAt <= filters.createdBefore!);
+    handoffs = handoffs.filter((h) => h.createdAt <= filters.createdBefore!);
   }
 
   // Sort by createdAt descending (newest first)
-  handoffs.sort((a, b) => 
-    new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-  );
+  handoffs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
   return handoffs;
 }
@@ -334,14 +332,14 @@ export async function listHandoffs(filters: HandoffFilters = {}): Promise<Handof
 /**
  * Accept a handoff.
  * Marks the handoff as accepted by an operator.
- * 
+ *
  * @param handoffId - The handoff ID
  * @param options - Accept options including actor and metadata
  * @returns The updated handoff package or null if not found
  */
 export async function acceptHandoff(
   handoffId: string,
-  options: AcceptHandoffOptions = {}
+  options: AcceptHandoffOptions = {},
 ): Promise<HandoffPackage | null> {
   await initHandoffManager();
 
@@ -362,7 +360,7 @@ export async function acceptHandoff(
   handoff.status = "accepted";
   handoff.acceptedAt = now;
   handoff.acceptedBy = options.acceptedBy || "operator";
-  
+
   if (options.metadata) {
     handoff.metadata = { ...handoff.metadata, ...options.metadata };
   }
@@ -404,14 +402,14 @@ export async function acceptHandoff(
 /**
  * Close a handoff.
  * Marks the handoff as closed with an optional resolution.
- * 
+ *
  * @param handoffId - The handoff ID
  * @param options - Close options including actor, resolution, and metadata
  * @returns The updated handoff package or null if not found
  */
 export async function closeHandoff(
   handoffId: string,
-  options: CloseHandoffOptions = {}
+  options: CloseHandoffOptions = {},
 ): Promise<HandoffPackage | null> {
   await initHandoffManager();
 
@@ -428,7 +426,7 @@ export async function closeHandoff(
   handoff.closedAt = now;
   handoff.closedBy = options.closedBy || "operator";
   handoff.resolution = options.resolution;
-  
+
   if (options.metadata) {
     handoff.metadata = { ...handoff.metadata, ...options.metadata };
   }
@@ -485,16 +483,16 @@ export async function getHandoffStats(): Promise<{
   await initHandoffManager();
 
   const handoffs = Object.values(handoffIndex!.handoffs);
-  
+
   const byStatus: Record<HandoffStatus, number> = { open: 0, accepted: 0, closed: 0 };
   const bySeverity: Record<HandoffSeverity, number> = { info: 0, warning: 0, critical: 0 };
-  
+
   let openCritical = 0;
 
   for (const h of handoffs) {
     byStatus[h.status] = (byStatus[h.status] || 0) + 1;
     bySeverity[h.severity] = (bySeverity[h.severity] || 0) + 1;
-    
+
     if (h.status === "open" && h.severity === "critical") {
       openCritical++;
     }
@@ -545,7 +543,7 @@ function getHandoffFilePath(handoffId: string): string {
 async function loadHandoffPackage(handoffId: string): Promise<HandoffPackage | null> {
   try {
     const filePath = getHandoffFilePath(handoffId);
-    
+
     if (!existsSync(filePath)) {
       return null;
     }
@@ -564,7 +562,7 @@ async function saveHandoffPackage(handoff: HandoffPackage): Promise<void> {
 
 async function recordHandoffAction(action: HandoffAction): Promise<void> {
   const line = JSON.stringify(action) + "\n";
-  
+
   let existingContent = "";
   try {
     if (existsSync(HANDOFF_ACTIONS_FILE)) {

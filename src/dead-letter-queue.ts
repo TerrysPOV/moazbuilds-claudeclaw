@@ -1,14 +1,14 @@
 /**
  * Dead Letter Queue (DLQ)
- * 
+ *
  * Captures permanently failed events with full failure provenance.
- * 
+ *
  * DESIGN:
  * - DLQ entries stored in .claude/claudeclaw/dlq.jsonl
  * - Each entry contains full event + retry history + final error
  * - Supports replay back to the event log for reprocessing
  * - CLI commands: dlq list, dlq replay <id>
- * 
+ *
  * ENTRY SCHEMA:
  * {
  *   id,                    // DLQ entry ID (unique)
@@ -29,12 +29,7 @@
 import { join } from "path";
 import { mkdir, appendFile } from "fs/promises";
 import { randomUUID } from "crypto";
-import {
-  initEventLog,
-  append,
-  readFrom,
-  type EventRecord,
-} from "./event-log";
+import { initEventLog, append, readFrom, type EventRecord } from "./event-log";
 
 const DLQ_DIR = join(process.cwd(), ".claude", "claudeclaw", "dlq");
 const DLQ_FILE = join(DLQ_DIR, "dlq.jsonl");
@@ -74,13 +69,13 @@ let isInitialized = false;
  */
 export async function initDLQ(): Promise<void> {
   if (isInitialized) return;
-  
+
   await initEventLog();
   await mkdir(DLQ_DIR, { recursive: true });
-  
+
   // Load existing DLQ entries
   await loadDLQ();
-  
+
   isInitialized = true;
 }
 
@@ -89,11 +84,14 @@ export async function initDLQ(): Promise<void> {
  */
 async function loadDLQ(): Promise<void> {
   dlqEntries = [];
-  
+
   try {
     const content = await Bun.file(DLQ_FILE).text();
-    const lines = content.trim().split("\n").filter(l => l.trim());
-    
+    const lines = content
+      .trim()
+      .split("\n")
+      .filter((l) => l.trim());
+
     for (const line of lines) {
       try {
         const entry = JSON.parse(line) as DLQEntry;
@@ -130,7 +128,7 @@ export async function enqueue(
   event: EventRecord,
   retryHistory: RetryAttempt[],
   finalError: string,
-  errorType?: string
+  errorType?: string,
 ): Promise<DLQEntry> {
   await initDLQ();
 
@@ -151,13 +149,11 @@ export async function enqueue(
 
   // Add to in-memory array
   dlqEntries.push(entry);
-  
+
   // Persist to disk
   await saveDLQEntry(entry);
 
-  console.log(
-    `[dlq] Event ${event.id} (seq ${event.seq}) moved to DLQ: ${finalError}`
-  );
+  console.log(`[dlq] Event ${event.id} (seq ${event.seq}) moved to DLQ: ${finalError}`);
 
   return entry;
 }
@@ -174,13 +170,13 @@ export function list(): DLQEntry[] {
  */
 export function listPaginated(
   page: number = 1,
-  pageSize: number = 20
+  pageSize: number = 20,
 ): { entries: DLQEntry[]; total: number; page: number; totalPages: number } {
   const total = dlqEntries.length;
   const totalPages = Math.ceil(total / pageSize);
   const start = (page - 1) * pageSize;
   const end = start + pageSize;
-  
+
   return {
     entries: [...dlqEntries].reverse().slice(start, end),
     total,
@@ -193,14 +189,14 @@ export function listPaginated(
  * Find a DLQ entry by ID.
  */
 export function findById(id: string): DLQEntry | null {
-  return dlqEntries.find(e => e.id === id) ?? null;
+  return dlqEntries.find((e) => e.id === id) ?? null;
 }
 
 /**
  * Find a DLQ entry by original event ID.
  */
 export function findByEventId(eventId: string): DLQEntry | null {
-  return dlqEntries.find(e => e.originalEventId === eventId) ?? null;
+  return dlqEntries.find((e) => e.originalEventId === eventId) ?? null;
 }
 
 /**
@@ -209,7 +205,7 @@ export function findByEventId(eventId: string): DLQEntry | null {
  */
 export async function replay(dlqEntryId: string): Promise<EventRecord | null> {
   await initDLQ();
-  
+
   const entry = findById(dlqEntryId);
   if (!entry) {
     throw new Error(`DLQ entry ${dlqEntryId} not found`);
@@ -217,7 +213,7 @@ export async function replay(dlqEntryId: string): Promise<EventRecord | null> {
 
   // Create new event from DLQ entry
   const { append } = await import("./event-log");
-  
+
   const newEvent = await append({
     type: entry.event.type,
     source: entry.event.source,
@@ -242,7 +238,7 @@ export async function replay(dlqEntryId: string): Promise<EventRecord | null> {
   await rewriteDLQFile();
 
   console.log(
-    `[dlq] Replayed event ${entry.originalEventId} as ${newEvent.id} (seq ${newEvent.seq})`
+    `[dlq] Replayed event ${entry.originalEventId} as ${newEvent.id} (seq ${newEvent.seq})`,
   );
 
   return newEvent;
@@ -254,7 +250,7 @@ export async function replay(dlqEntryId: string): Promise<EventRecord | null> {
  */
 export async function replayAll(): Promise<number> {
   await initDLQ();
-  
+
   let count = 0;
   for (const entry of dlqEntries) {
     try {
@@ -274,8 +270,8 @@ export async function replayAll(): Promise<number> {
  */
 export async function remove(dlqEntryId: string): Promise<void> {
   await initDLQ();
-  
-  const index = dlqEntries.findIndex(e => e.id === dlqEntryId);
+
+  const index = dlqEntries.findIndex((e) => e.id === dlqEntryId);
   if (index === -1) {
     throw new Error(`DLQ entry ${dlqEntryId} not found`);
   }
@@ -291,7 +287,7 @@ export async function remove(dlqEntryId: string): Promise<void> {
  * Used after updates that modify entries.
  */
 async function rewriteDLQFile(): Promise<void> {
-  const lines = dlqEntries.map(e => JSON.stringify(e)).join("\n") + "\n";
+  const lines = dlqEntries.map((e) => JSON.stringify(e)).join("\n") + "\n";
   await Bun.write(DLQ_FILE, lines);
 }
 
@@ -314,7 +310,7 @@ export function getStats(): {
   }
 
   const sorted = [...dlqEntries].sort(
-    (a, b) => new Date(a.deadLetteredAt).getTime() - new Date(b.deadLetteredAt).getTime()
+    (a, b) => new Date(a.deadLetteredAt).getTime() - new Date(b.deadLetteredAt).getTime(),
   );
 
   const totalReplays = dlqEntries.reduce((sum, e) => sum + e.replayCount, 0);
@@ -332,10 +328,10 @@ export function getStats(): {
  */
 export async function clear(): Promise<void> {
   await initDLQ();
-  
+
   dlqEntries = [];
   await Bun.write(DLQ_FILE, "");
-  
+
   console.log("[dlq] Cleared all entries");
 }
 

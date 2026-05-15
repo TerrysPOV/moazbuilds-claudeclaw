@@ -1,6 +1,6 @@
 /**
  * Tests for policy/engine.ts
- * 
+ *
  * Run with: bun test src/__tests__/policy/engine.test.ts
  */
 
@@ -40,7 +40,10 @@ const createRequest = (overrides: Partial<ToolRequestContext> = {}): ToolRequest
 });
 
 // Helper to write a policy file
-async function writePolicyFile(rules: PolicyRule[], cache?: { enabled: boolean; maxEntries: number; ttlMs: number }): Promise<void> {
+async function writePolicyFile(
+  rules: PolicyRule[],
+  cache?: { enabled: boolean; maxEntries: number; ttlMs: number },
+): Promise<void> {
   const policy = {
     version: 1,
     rules,
@@ -68,10 +71,10 @@ describe("Policy Engine - Core Evaluation", () => {
 
   it("should deny request when no rules match", async () => {
     await writePolicyFile([]);
-    
+
     const request = createRequest();
     const decision = evaluate(request);
-    
+
     expect(decision.action).toBe("deny");
     expect(decision.matchedRuleId).toBeUndefined();
     expect(decision.reason).toContain("No matching policy rule");
@@ -88,11 +91,11 @@ describe("Policy Engine - Core Evaluation", () => {
         reason: "Allow all tools on telegram",
       },
     ]);
-    
+
     await loadRules();
     const request = createRequest();
     const decision = evaluate(request);
-    
+
     expect(decision.action).toBe("allow");
     expect(decision.matchedRuleId).toBe("allow-telegram");
   });
@@ -114,11 +117,11 @@ describe("Policy Engine - Core Evaluation", () => {
         reason: "Deny bash tool",
       },
     ]);
-    
+
     await loadRules();
     const request = createRequest();
     const decision = evaluate(request);
-    
+
     expect(decision.action).toBe("deny");
     expect(decision.matchedRuleId).toBe("deny-bash");
   });
@@ -133,11 +136,11 @@ describe("Policy Engine - Core Evaluation", () => {
         reason: "Edit requires approval",
       },
     ]);
-    
+
     await loadRules();
     const request = createRequest({ toolName: "Edit" });
     const decision = evaluate(request);
-    
+
     expect(decision.action).toBe("require_approval");
     expect(decision.matchedRuleId).toBe("approval-edit");
   });
@@ -157,11 +160,11 @@ describe("Policy Engine - Core Evaluation", () => {
         action: "deny",
       },
     ]);
-    
+
     await loadRules();
     const request = createRequest();
     const decision = evaluate(request);
-    
+
     expect(decision.action).toBe("deny");
     expect(decision.matchedRuleId).toBe("high-priority-deny");
   });
@@ -184,11 +187,11 @@ describe("Policy Engine - Core Evaluation", () => {
         reason: "Telegram specific deny",
       },
     ]);
-    
+
     await loadRules();
     const request = createRequest();
     const decision = evaluate(request);
-    
+
     // More specific rule (telegram-deny) should win
     expect(decision.action).toBe("deny");
     expect(decision.matchedRuleId).toBe("telegram-deny");
@@ -203,11 +206,11 @@ describe("Policy Engine - Core Evaluation", () => {
         action: "deny",
       },
     ]);
-    
+
     await loadRules();
     const request = createRequest({ toolName: "Bash" });
     const decision = evaluate(request);
-    
+
     expect(decision.action).toBe("deny");
   });
 
@@ -220,11 +223,11 @@ describe("Policy Engine - Core Evaluation", () => {
         action: "allow",
       },
     ]);
-    
+
     await loadRules();
     const request = createRequest({ toolName: "AnyTool" });
     const decision = evaluate(request);
-    
+
     expect(decision.action).toBe("allow");
   });
 
@@ -237,15 +240,15 @@ describe("Policy Engine - Core Evaluation", () => {
         action: "allow",
       },
     ]);
-    
+
     await loadRules();
-    
+
     const viewRequest = createRequest({ toolName: "View" });
     expect(evaluate(viewRequest).action).toBe("allow");
-    
+
     const editRequest = createRequest({ toolName: "Edit" });
     expect(evaluate(editRequest).action).toBe("allow");
-    
+
     const bashRequest = createRequest({ toolName: "Bash" });
     expect(evaluate(bashRequest).action).toBe("deny");
   });
@@ -260,15 +263,15 @@ describe("Policy Engine - Core Evaluation", () => {
         action: "allow",
       },
     ]);
-    
+
     await loadRules();
-    
+
     const telegramRequest = createRequest({ source: "telegram" });
     expect(evaluate(telegramRequest).action).toBe("allow");
-    
+
     const discordRequest = createRequest({ source: "discord" });
     expect(evaluate(discordRequest).action).toBe("allow");
-    
+
     const slackRequest = createRequest({ source: "slack" });
     expect(evaluate(slackRequest).action).toBe("deny");
   });
@@ -283,11 +286,11 @@ describe("Policy Engine - Core Evaluation", () => {
         action: "allow",
       },
     ]);
-    
+
     await loadRules();
     const request = createRequest();
     const decision = evaluate(request);
-    
+
     expect(decision.action).toBe("deny");
   });
 
@@ -301,12 +304,12 @@ describe("Policy Engine - Core Evaluation", () => {
         action: "allow",
       },
     ]);
-    
+
     await loadRules();
-    
+
     const adminRequest = createRequest({ userId: "admin-user" });
     expect(evaluate(adminRequest).action).toBe("allow");
-    
+
     const regularRequest = createRequest({ userId: "regular-user" });
     expect(evaluate(regularRequest).action).toBe("deny");
   });
@@ -321,16 +324,16 @@ describe("Policy Engine - Core Evaluation", () => {
         action: "allow",
       },
     ]);
-    
+
     await loadRules();
-    
-    const codeReviewRequest = createRequest({ 
+
+    const codeReviewRequest = createRequest({
       skillName: "code-review",
       toolName: "View",
     });
     expect(evaluate(codeReviewRequest).action).toBe("allow");
-    
-    const otherSkillRequest = createRequest({ 
+
+    const otherSkillRequest = createRequest({
       skillName: "other-skill",
       toolName: "View",
     });
@@ -352,7 +355,7 @@ describe("Policy Engine - Time Window Conditions", () => {
     const tomorrow = new Date(Date.now() + 86400000).toISOString();
     const lastWeek = new Date(Date.now() - 7 * 86400000).toISOString();
     const nextWeek = new Date(Date.now() + 7 * 86400000).toISOString();
-    
+
     await writePolicyFile([
       {
         id: "allow-business-hours",
@@ -364,11 +367,11 @@ describe("Policy Engine - Time Window Conditions", () => {
         },
       },
     ]);
-    
+
     await loadRules();
     const request = createRequest();
     const decision = evaluate(request);
-    
+
     expect(decision.action).toBe("deny");
   });
 });
@@ -383,7 +386,7 @@ describe("Policy Engine - Validation", () => {
         reason: "Valid rule",
       },
     ];
-    
+
     const result = validateRules(rules);
     expect(result.valid).toBe(true);
     expect(result.errors).toHaveLength(0);
@@ -397,10 +400,10 @@ describe("Policy Engine - Validation", () => {
         action: "allow",
       },
     ];
-    
+
     const result = validateRules(rules);
     expect(result.valid).toBe(false);
-    expect(result.errors.some(e => e.field === "id")).toBe(true);
+    expect(result.errors.some((e) => e.field === "id")).toBe(true);
   });
 
   it("should reject rule without tool", () => {
@@ -411,10 +414,10 @@ describe("Policy Engine - Validation", () => {
         action: "allow",
       },
     ] as unknown as PolicyRule[];
-    
+
     const result = validateRules(rules);
     expect(result.valid).toBe(false);
-    expect(result.errors.some(e => e.field === "tool")).toBe(true);
+    expect(result.errors.some((e) => e.field === "tool")).toBe(true);
   });
 
   it("should reject rule with invalid action", () => {
@@ -425,10 +428,10 @@ describe("Policy Engine - Validation", () => {
         action: "invalid" as any,
       },
     ];
-    
+
     const result = validateRules(rules);
     expect(result.valid).toBe(false);
-    expect(result.errors.some(e => e.field === "action")).toBe(true);
+    expect(result.errors.some((e) => e.field === "action")).toBe(true);
   });
 
   it("should warn about unscoped allow rules", () => {
@@ -439,9 +442,9 @@ describe("Policy Engine - Validation", () => {
         action: "allow",
       },
     ];
-    
+
     const result = validateRules(rules);
-    expect(result.warnings.some(w => w.field === "scope")).toBe(true);
+    expect(result.warnings.some((w) => w.field === "scope")).toBe(true);
   });
 
   it("should detect duplicate rule IDs", () => {
@@ -449,10 +452,10 @@ describe("Policy Engine - Validation", () => {
       { id: "duplicate", tool: "Bash", action: "allow" },
       { id: "duplicate", tool: "Edit", action: "deny" },
     ];
-    
+
     const result = validateRules(rules);
     expect(result.valid).toBe(false);
-    expect(result.errors.some(e => e.message.includes("Duplicate"))).toBe(true);
+    expect(result.errors.some((e) => e.message.includes("Duplicate"))).toBe(true);
   });
 
   it("should warn on invalid time window dates", () => {
@@ -466,7 +469,7 @@ describe("Policy Engine - Validation", () => {
         },
       },
     ];
-    
+
     const result = validateRules(rules);
     expect(result.errors.length).toBeGreaterThan(0);
   });
@@ -482,73 +485,85 @@ describe("Policy Engine - Cache", () => {
   });
 
   it("should cache decisions when cache enabled", async () => {
-    await writePolicyFile([
-      {
-        id: "allow-all",
-        priority: 100,
-        tool: "*",
-        action: "allow",
-      },
-    ], { enabled: true, maxEntries: 100, ttlMs: 60000 });
-    
+    await writePolicyFile(
+      [
+        {
+          id: "allow-all",
+          priority: 100,
+          tool: "*",
+          action: "allow",
+        },
+      ],
+      { enabled: true, maxEntries: 100, ttlMs: 60000 },
+    );
+
     await loadRules();
     expect(isCacheEnabled()).toBe(true);
-    
+
     const request = createRequest();
     const decision1 = evaluate(request);
     expect(decision1.action).toBe("allow");
-    
+
     // Second evaluation should use cache
     const decision2 = evaluate(request);
     expect(decision2.action).toBe("allow");
   });
 
   it("should clear cache on reload", async () => {
-    await writePolicyFile([
-      {
-        id: "allow-all",
-        priority: 100,
-        tool: "*",
-        action: "allow",
-      },
-    ], { enabled: true, maxEntries: 100, ttlMs: 60000 });
-    
+    await writePolicyFile(
+      [
+        {
+          id: "allow-all",
+          priority: 100,
+          tool: "*",
+          action: "allow",
+        },
+      ],
+      { enabled: true, maxEntries: 100, ttlMs: 60000 },
+    );
+
     await loadRules();
     const request = createRequest();
     evaluate(request);
-    
+
     // Change policy
-    await writePolicyFile([
-      {
-        id: "deny-all",
-        priority: 100,
-        tool: "*",
-        action: "deny",
-      },
-    ], { enabled: true, maxEntries: 100, ttlMs: 60000 });
-    
+    await writePolicyFile(
+      [
+        {
+          id: "deny-all",
+          priority: 100,
+          tool: "*",
+          action: "deny",
+        },
+      ],
+      { enabled: true, maxEntries: 100, ttlMs: 60000 },
+    );
+
     await loadRules();
     const decision = evaluate(request);
-    
+
     // Should reflect new policy, not cached
     expect(decision.action).toBe("deny");
     expect(decision.matchedRuleId).toBe("deny-all");
   });
 
   it("should not cache require_approval decisions", async () => {
-    await writePolicyFile([
-      {
-        id: "approval-edit",
-        priority: 100,
-        tool: "Edit",
-        action: "require_approval",
-      },
-    ], { enabled: true, maxEntries: 100, ttlMs: 60000 });
-    
+    await writePolicyFile(
+      [
+        {
+          id: "approval-edit",
+          priority: 100,
+          tool: "Edit",
+          action: "require_approval",
+        },
+      ],
+      { enabled: true, maxEntries: 100, ttlMs: 60000 },
+    );
+
     await loadRules();
     const request = createRequest({ toolName: "Edit" });
     const decision = evaluate(request);
-    
+
     expect(decision.action).toBe("require_approval");
     expect(decision.cacheable).toBe(false);
   });

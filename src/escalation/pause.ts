@@ -1,14 +1,14 @@
 /**
  * Pause Controller
- * 
+ *
  * Durable pause/resume control with explicit operating modes.
- * 
+ *
  * DESIGN:
  * - Pause state stored at .claude/claudeclaw/paused.json
  * - Supports modes: "admission_only" | "admission_and_scheduling"
  * - Gateway and orchestrator must check pause state before processing
  * - All pause/resume actions generate audit records
- * 
+ *
  * CRASH CONSCIOUSNESS:
  * - Pause state is persisted immediately
  * - State survives restart and is applied during startup reconstruction
@@ -118,19 +118,16 @@ async function doInit(): Promise<void> {
 
 /**
  * Pause the system.
- * 
+ *
  * @param mode - Pause mode: "admission_only" or "admission_and_scheduling"
  * @param options - Pause options including reason, actor, and metadata
  * @returns The pause action record
- * 
+ *
  * Semantics:
  * - "admission_only": Reject/defer new inbound work, allow running work to complete
  * - "admission_and_scheduling": Reject/defer new work AND stop scheduling new tasks
  */
-export async function pause(
-  mode: PauseMode,
-  options: PauseOptions = {}
-): Promise<PauseAction> {
+export async function pause(mode: PauseMode, options: PauseOptions = {}): Promise<PauseAction> {
   await initPauseController();
 
   const now = new Date().toISOString();
@@ -186,13 +183,11 @@ export async function pause(
 
 /**
  * Resume the system.
- * 
+ *
  * @param options - Resume options including reason and actor
  * @returns The resume action record
  */
-export async function resume(
-  options: ResumeOptions = {}
-): Promise<PauseAction> {
+export async function resume(options: ResumeOptions = {}): Promise<PauseAction> {
   await initPauseController();
 
   const now = new Date().toISOString();
@@ -251,7 +246,10 @@ export async function resume(
     action: "allow", // Using allow to indicate normal operation restored
     reason: `System resumed: ${options.reason || "No reason provided"}`,
     operatorId: options.resumedBy,
-    metadata: { previousPausedAt: previousState.pausedAt, previousPausedBy: previousState.pausedBy },
+    metadata: {
+      previousPausedAt: previousState.pausedAt,
+      previousPausedBy: previousState.pausedBy,
+    },
   });
 
   console.log(`[pause] System resumed: reason=${options.reason || "N/A"}`);
@@ -316,7 +314,7 @@ export async function getPauseHistory(limit: number = 100): Promise<PauseAction[
 
   try {
     const content = await readFile(PAUSE_ACTIONS_FILE, "utf8");
-    const lines = content.split("\n").filter(line => line.trim());
+    const lines = content.split("\n").filter((line) => line.trim());
 
     const actions: PauseAction[] = [];
 
@@ -324,16 +322,11 @@ export async function getPauseHistory(limit: number = 100): Promise<PauseAction[
       try {
         const action: PauseAction = JSON.parse(line);
         actions.push(action);
-      } catch {
-        // Skip malformed entries
-        continue;
-      }
+      } catch {}
     }
 
     // Sort by timestamp descending (newest first)
-    actions.sort((a, b) => 
-      new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-    );
+    actions.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
     return actions.slice(0, limit);
   } catch {
@@ -361,7 +354,8 @@ async function loadPauseState(): Promise<PauseState | null> {
 
     return {
       paused: parsed.paused,
-      mode: parsed.mode === "admission_and_scheduling" ? "admission_and_scheduling" : "admission_only",
+      mode:
+        parsed.mode === "admission_and_scheduling" ? "admission_and_scheduling" : "admission_only",
       reason: parsed.reason,
       pausedAt: parsed.pausedAt,
       pausedBy: parsed.pausedBy,
@@ -381,7 +375,7 @@ async function savePauseState(state: PauseState): Promise<void> {
 
 async function recordPauseAction(action: PauseAction): Promise<void> {
   const line = JSON.stringify(action) + "\n";
-  
+
   let existingContent = "";
   try {
     if (existsSync(PAUSE_ACTIONS_FILE)) {
@@ -404,7 +398,7 @@ async function recordPauseAction(action: PauseAction): Promise<void> {
 export async function resetPauseController(): Promise<void> {
   cachedState = null;
   initializationPromise = null;
-  
+
   try {
     if (existsSync(PAUSE_STATE_FILE)) {
       await writeFile(PAUSE_STATE_FILE, JSON.stringify(DEFAULT_STATE, null, 2) + "\n", "utf8");

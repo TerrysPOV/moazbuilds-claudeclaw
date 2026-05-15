@@ -1,6 +1,6 @@
 /**
  * Workflow Orchestration Types
- * 
+ *
  * Core type definitions for workflow definitions, task definitions,
  * workflow state, and task runtime state.
  */
@@ -113,7 +113,7 @@ export interface TaskRuntimeState {
 /**
  * Task status - terminal or active states
  */
-export type TaskStatus = 
+export type TaskStatus =
   | "pending"
   | "ready"
   | "running"
@@ -142,8 +142,14 @@ export interface ValidationResult {
 /**
  * Handler registry for action/compensation references
  */
-export type ActionHandler = (input: Record<string, unknown>, context: ExecutionContext) => Promise<unknown>;
-export type CompensationHandler = (input: Record<string, unknown>, context: ExecutionContext) => Promise<unknown>;
+export type ActionHandler = (
+  input: Record<string, unknown>,
+  context: ExecutionContext,
+) => Promise<unknown>;
+export type CompensationHandler = (
+  input: Record<string, unknown>,
+  context: ExecutionContext,
+) => Promise<unknown>;
 
 export interface HandlerRegistry {
   actions: Record<string, ActionHandler>;

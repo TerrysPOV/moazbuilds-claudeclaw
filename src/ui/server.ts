@@ -123,12 +123,12 @@ export function startWebUi(opts: StartWebUiOptions): WebServerHandle {
       const url = new URL(req.url);
 
       // Plugin HTTP gateway — handles /api/plugin/* routes
-      if (url.pathname.startsWith('/api/plugin/')) {
+      if (url.pathname.startsWith("/api/plugin/")) {
         try {
           const gatewayResp = await getHttpGateway().handleRequest(req, url);
           if (gatewayResp !== null) return gatewayResp;
         } catch (e) {
-          return Response.json({ error: 'gateway_error', message: String(e) }, { status: 500 });
+          return Response.json({ error: "gateway_error", message: String(e) }, { status: 500 });
         }
       }
 
@@ -342,7 +342,11 @@ export function startWebUi(opts: StartWebUiOptions): WebServerHandle {
         }
       }
 
-      if (url.pathname.startsWith("/api/sessions/") && url.pathname.endsWith("/messages") && req.method === "GET") {
+      if (
+        url.pathname.startsWith("/api/sessions/") &&
+        url.pathname.endsWith("/messages") &&
+        req.method === "GET"
+      ) {
         const sessionId = url.pathname.slice("/api/sessions/".length, -"/messages".length);
         const limit = clampInt(url.searchParams.get("limit"), 10, 1, 2000);
         const rawOffset = url.searchParams.get("offset");
@@ -392,7 +396,9 @@ export function startWebUi(opts: StartWebUiOptions): WebServerHandle {
             data: string; // base64
           }
 
-          const rawAttachments = Array.isArray(body?.attachments) ? (body.attachments as unknown[]) : [];
+          const rawAttachments = Array.isArray(body?.attachments)
+            ? (body.attachments as unknown[])
+            : [];
 
           // Validate attachments
           if (rawAttachments.length > 5) {
@@ -419,8 +425,22 @@ export function startWebUi(opts: StartWebUiOptions): WebServerHandle {
           }
 
           const TEXT_EXTENSIONS = new Set([
-            "js", "ts", "py", "json", "yaml", "yml", "md", "txt", "csv",
-            "xml", "sh", "sql", "toml", "ini", "env", "log",
+            "js",
+            "ts",
+            "py",
+            "json",
+            "yaml",
+            "yml",
+            "md",
+            "txt",
+            "csv",
+            "xml",
+            "sh",
+            "sql",
+            "toml",
+            "ini",
+            "env",
+            "log",
           ]);
 
           const tempImagePaths: string[] = [];
@@ -431,28 +451,31 @@ export function startWebUi(opts: StartWebUiOptions): WebServerHandle {
             if (att.type.startsWith("text/") || TEXT_EXTENSIONS.has(ext)) {
               const content = Buffer.from(att.data, "base64").toString("utf-8");
               attachmentBlocks.push(
-                `[Attached file: ${att.name}]\n\`\`\`${ext}\n${content}\n\`\`\``
+                `[Attached file: ${att.name}]\n\`\`\`${ext}\n${content}\n\`\`\``,
               );
             } else if (att.type.startsWith("image/")) {
               const uploadDir = `${tmpdir()}/claudeclaw-uploads`;
-              await import("fs/promises").then(({ mkdir }) => mkdir(uploadDir, { recursive: true })).catch(() => {});
+              await import("fs/promises")
+                .then(({ mkdir }) => mkdir(uploadDir, { recursive: true }))
+                .catch(() => {});
               const filePath = `${uploadDir}/${randomUUID()}.${ext || "bin"}`;
               const buffer = Buffer.from(att.data, "base64");
               await Bun.write(filePath, buffer);
               tempImagePaths.push(filePath);
               attachmentBlocks.push(
-                `[Attached image: ${att.name} — file saved at ${filePath}, you can read it with your Read tool]`
+                `[Attached image: ${att.name} — file saved at ${filePath}, you can read it with your Read tool]`,
               );
             } else {
               attachmentBlocks.push(
-                `[Attached file: ${att.name} — unsupported type, content not included]`
+                `[Attached file: ${att.name} — unsupported type, content not included]`,
               );
             }
           }
 
-          const enrichedMessage = attachmentBlocks.length > 0
-            ? attachmentBlocks.join("\n\n") + (message ? "\n\n" + message : "")
-            : message;
+          const enrichedMessage =
+            attachmentBlocks.length > 0
+              ? attachmentBlocks.join("\n\n") + (message ? "\n\n" + message : "")
+              : message;
 
           const encoder = new TextEncoder();
           const onChat = opts.onChat;
@@ -466,7 +489,13 @@ export function startWebUi(opts: StartWebUiOptions): WebServerHandle {
                   enrichedMessage,
                   (chunk) => send({ type: "chunk", text: chunk }),
                   () => send({ type: "unblock" }),
-                  (ev) => send({ type: ev.type === "spawn" ? "agent_spawn" : "agent_done", id: ev.id, description: ev.description, result: ev.result })
+                  (ev) =>
+                    send({
+                      type: ev.type === "spawn" ? "agent_spawn" : "agent_done",
+                      id: ev.id,
+                      description: ev.description,
+                      result: ev.result,
+                    }),
                 );
                 send({ type: "done" });
               } catch (err) {
@@ -476,11 +505,14 @@ export function startWebUi(opts: StartWebUiOptions): WebServerHandle {
                 controller.close();
                 // Fire-and-forget cleanup of temp image files
                 for (const p of tempImagePaths) {
-                  Bun.file(p).exists().then((exists) => {
-                    if (exists) {
-                      import("fs").then(({ unlink }) => unlink(p, () => {})).catch(() => {});
-                    }
-                  }).catch(() => {});
+                  Bun.file(p)
+                    .exists()
+                    .then((exists) => {
+                      if (exists) {
+                        import("fs").then(({ unlink }) => unlink(p, () => {})).catch(() => {});
+                      }
+                    })
+                    .catch(() => {});
                 }
               }
             },
@@ -490,7 +522,7 @@ export function startWebUi(opts: StartWebUiOptions): WebServerHandle {
             headers: {
               "Content-Type": "text/event-stream",
               "Cache-Control": "no-cache",
-              "Connection": "keep-alive",
+              Connection: "keep-alive",
               "X-Accel-Buffering": "no",
             },
           });
@@ -508,7 +540,7 @@ export function startWebUi(opts: StartWebUiOptions): WebServerHandle {
         const csrfError = requireCsrf(req);
         if (csrfError) return csrfError;
         try {
-          const body = await req.json() as KanbanBoard;
+          const body = (await req.json()) as KanbanBoard;
           await writeKanban(body);
           return json({ ok: true });
         } catch (err) {

@@ -50,13 +50,17 @@ export class McpProxyPlugin {
     try {
       const stat = statSync(this.configPath);
       if (stat.mode & 0o077) {
-        console.error(`[mcp-proxy] WARN: ${this.configPath} has permissive permissions (${(stat.mode & 0o777).toString(8)}); recommended 0600.`);
+        console.error(
+          `[mcp-proxy] WARN: ${this.configPath} has permissive permissions (${(stat.mode & 0o777).toString(8)}); recommended 0600.`,
+        );
       }
     } catch {} // missing config handled below with a clearer message
 
     const config = this._loadConfig();
     if (!config) {
-      console.error("[mcp-proxy] No config found — registering with zero tools (graceful degradation)");
+      console.error(
+        "[mcp-proxy] No config found — registering with zero tools (graceful degradation)",
+      );
       this._registerWithGateway([]);
       return;
     }
@@ -64,51 +68,57 @@ export class McpProxyPlugin {
     const enabledServers = Object.entries(config.servers).filter(([, s]) => s.enabled);
     const allTools: { name: string; description: string; schema: Record<string, unknown> }[] = [];
 
-    await Promise.allSettled(enabledServers.map(async ([name, cfg]) => {
-      const proc = new McpServerProcess(name, cfg as McpServerConfig, {
-        onCrash: (n, reason) => this._onServerCrash(n, reason),
-      });
+    await Promise.allSettled(
+      enabledServers.map(async ([name, cfg]) => {
+        const proc = new McpServerProcess(name, cfg as McpServerConfig, {
+          onCrash: (n, reason) => this._onServerCrash(n, reason),
+        });
 
-      try {
-        await proc.start();
-        this.servers.set(name, proc);
+        try {
+          await proc.start();
+          this.servers.set(name, proc);
 
-        for (const tool of proc.tools) {
-          const fqn = `${name}__${tool.name}`;
-          try {
-            getMcpBridge().registerPluginTool("mcp-proxy", {
-              name: fqn,
-              description: tool.description,
-              schema: z.object({
-                arguments: z.record(z.unknown()).optional().default({}),
-                mode: z.enum(["direct", "reasoned"]).optional().default("direct"),
-              }),
-              handler: async (input) => {
-                const mode = input.mode ?? "direct";
-                const args = input.arguments ?? {};
-                if (mode === "reasoned") {
-                  return this._invokeReasoned(fqn, args);
-                }
-                const result = await proc.call(tool.name, args);
-                const resultStr = JSON.stringify(result);
-                const resultBytes = Buffer.byteLength(resultStr, "utf8");
-                if (resultBytes > MAX_RESULT_BYTES) {
-                  throw new Error(`Tool result exceeds ${MAX_RESULT_BYTES} bytes (got ${resultBytes})`);
-                }
-                return result;
-              },
-            });
-            allTools.push({ name: fqn, description: tool.description, schema: tool.inputSchema });
-          } catch {
-            // duplicate or error — skip
+          for (const tool of proc.tools) {
+            const fqn = `${name}__${tool.name}`;
+            try {
+              getMcpBridge().registerPluginTool("mcp-proxy", {
+                name: fqn,
+                description: tool.description,
+                schema: z.object({
+                  arguments: z.record(z.unknown()).optional().default({}),
+                  mode: z.enum(["direct", "reasoned"]).optional().default("direct"),
+                }),
+                handler: async (input) => {
+                  const mode = input.mode ?? "direct";
+                  const args = input.arguments ?? {};
+                  if (mode === "reasoned") {
+                    return this._invokeReasoned(fqn, args);
+                  }
+                  const result = await proc.call(tool.name, args);
+                  const resultStr = JSON.stringify(result);
+                  const resultBytes = Buffer.byteLength(resultStr, "utf8");
+                  if (resultBytes > MAX_RESULT_BYTES) {
+                    throw new Error(
+                      `Tool result exceeds ${MAX_RESULT_BYTES} bytes (got ${resultBytes})`,
+                    );
+                  }
+                  return result;
+                },
+              });
+              allTools.push({ name: fqn, description: tool.description, schema: tool.inputSchema });
+            } catch {
+              // duplicate or error — skip
+            }
           }
-        }
 
-        console.error(`[mcp-proxy] Server '${name}' ready — ${proc.tools.length} tools`);
-      } catch (err) {
-        console.error(`[mcp-proxy] Server '${name}' failed to start: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }));
+          console.error(`[mcp-proxy] Server '${name}' ready — ${proc.tools.length} tools`);
+        } catch (err) {
+          console.error(
+            `[mcp-proxy] Server '${name}' failed to start: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }),
+    );
 
     this._registerWithGateway(allTools);
   }
@@ -123,7 +133,9 @@ export class McpProxyPlugin {
     for (const [name, proc] of this.servers) {
       servers[name] = {
         status: proc.status,
-        uptime_s: proc.startedAt ? Math.floor((Date.now() - proc.startedAt.getTime()) / 1000) : null,
+        uptime_s: proc.startedAt
+          ? Math.floor((Date.now() - proc.startedAt.getTime()) / 1000)
+          : null,
         last_invocation_at: proc.lastInvocationAt?.toISOString() ?? null,
         tools: proc.tools.map((t) => t.name),
       };
@@ -132,10 +144,7 @@ export class McpProxyPlugin {
   }
 
   private _loadConfig(): ProxyConfig | null {
-    const paths = [
-      this.configPath,
-      join(homedir(), ".config", "claude", "mcp.json"),
-    ];
+    const paths = [this.configPath, join(homedir(), ".config", "claude", "mcp.json")];
     for (const p of paths) {
       if (!existsSync(p)) continue;
       try {
@@ -147,7 +156,9 @@ export class McpProxyPlugin {
     return null;
   }
 
-  private _registerWithGateway(tools: { name: string; description: string; schema: Record<string, unknown> }[]): void {
+  private _registerWithGateway(
+    tools: { name: string; description: string; schema: Record<string, unknown> }[],
+  ): void {
     const gateway = getHttpGateway();
     this.pluginToken = gateway.registerInProcess("mcp-proxy", {
       version: "1.0.0",
@@ -160,7 +171,9 @@ export class McpProxyPlugin {
     writeFileSync(this.tokenPath, this.pluginToken.toString("hex"), { encoding: "utf8" });
     chmodSync(this.tokenPath, 0o600);
 
-    console.error(`[mcp-proxy] Registered with gateway — ${tools.length} tools. Token stored at ${this.tokenPath}`);
+    console.error(
+      `[mcp-proxy] Registered with gateway — ${tools.length} tools. Token stored at ${this.tokenPath}`,
+    );
   }
 
   private _onServerCrash(name: string, reason: string): void {
@@ -193,4 +206,6 @@ export function getMcpProxyPlugin(opts?: McpProxyPluginOpts): McpProxyPlugin {
   return _proxy;
 }
 
-export function _resetMcpProxy(): void { _proxy = null; }
+export function _resetMcpProxy(): void {
+  _proxy = null;
+}

@@ -4,15 +4,38 @@ import { homedir } from "os";
 import { extractErrorDetail } from "../messaging";
 import { join } from "path";
 import { fileURLToPath } from "url";
-import { run, runUserMessage, streamUserMessage, bootstrap, ensureProjectClaudeMd, loadHeartbeatPromptTemplate, isRateLimited, getRateLimitResetAt, wasRateLimitNotified, markRateLimitNotified, probeClaudeCliVersion } from "../runner";
-import { initGatewayProcessor, registerGatewayDelivery, unregisterGatewayDelivery } from "../event-processor";
+import {
+  run,
+  runUserMessage,
+  streamUserMessage,
+  bootstrap,
+  ensureProjectClaudeMd,
+  loadHeartbeatPromptTemplate,
+  isRateLimited,
+  getRateLimitResetAt,
+  wasRateLimitNotified,
+  markRateLimitNotified,
+  probeClaudeCliVersion,
+} from "../runner";
+import {
+  initGatewayProcessor,
+  registerGatewayDelivery,
+  unregisterGatewayDelivery,
+} from "../event-processor";
 import { writeState, type StateData } from "../statusline";
 import { cronMatches, nextCronMatch } from "../cron";
 import { clearJobSchedule, loadJobs, resolveJobModel, snapshotJobFrontmatter } from "../jobs";
 import { migrateLegacyAgentJobs } from "../migrations";
 import { ensureUserSymlinks } from "../install";
 import { writePidFile, cleanupPidFile, checkExistingDaemon } from "../pid";
-import { initConfig, loadSettings, reloadSettings, resolvePrompt, type HeartbeatConfig, type Settings } from "../config";
+import {
+  initConfig,
+  loadSettings,
+  reloadSettings,
+  resolvePrompt,
+  type HeartbeatConfig,
+  type Settings,
+} from "../config";
 import { getDayAndMinuteAtOffset, buildClockPromptPrefix } from "../timezone";
 import { startWebUi, type WebServerHandle } from "../web";
 import { initializeJobSystem } from "../orchestrator/resumable-jobs";
@@ -140,7 +163,11 @@ function isHeartbeatExcludedNow(config: HeartbeatConfig, timezoneOffsetMinutes: 
   return isHeartbeatExcludedAt(config, timezoneOffsetMinutes, new Date());
 }
 
-function isHeartbeatExcludedAt(config: HeartbeatConfig, timezoneOffsetMinutes: number, at: Date): boolean {
+function isHeartbeatExcludedAt(
+  config: HeartbeatConfig,
+  timezoneOffsetMinutes: number,
+  at: Date,
+): boolean {
   if (!Array.isArray(config.excludeWindows) || config.excludeWindows.length === 0) return false;
   const local = getDayAndMinuteAtOffset(at, timezoneOffsetMinutes);
 
@@ -173,13 +200,16 @@ function nextAllowedHeartbeatAt(
   config: HeartbeatConfig,
   timezoneOffsetMinutes: number,
   intervalMs: number,
-  fromMs: number
+  fromMs: number,
 ): number {
   const interval = Math.max(60_000, Math.round(intervalMs));
   let candidate = fromMs + interval;
   let guard = 0;
 
-  while (isHeartbeatExcludedAt(config, timezoneOffsetMinutes, new Date(candidate)) && guard < 20_000) {
+  while (
+    isHeartbeatExcludedAt(config, timezoneOffsetMinutes, new Date(candidate)) &&
+    guard < 20_000
+  ) {
     candidate += interval;
     guard++;
   }
@@ -271,7 +301,9 @@ export async function start(args: string[] = []) {
   }
   const payload = payloadParts.join(" ").trim();
   if (hasPromptFlag && !payload) {
-    console.error("Usage: claudeclaw start --prompt <prompt> [--trigger] [--telegram] [--discord] [--slack] [--debug] [--web] [--web-port <port>] [--replace-existing]");
+    console.error(
+      "Usage: claudeclaw start --prompt <prompt> [--trigger] [--telegram] [--discord] [--slack] [--debug] [--web] [--web-port <port>] [--replace-existing]",
+    );
     process.exit(1);
   }
   if (!hasPromptFlag && payload) {
@@ -299,8 +331,12 @@ export async function start(args: string[] = []) {
   if (hasPromptFlag && !hasTriggerFlag) {
     const existingPid = await checkExistingDaemon();
     if (existingPid) {
-      console.error(`\x1b[31mAborted: daemon already running in this directory (PID ${existingPid})\x1b[0m`);
-      console.error("Use `claudeclaw send <message> [--telegram] [--discord]` while daemon is running.");
+      console.error(
+        `\x1b[31mAborted: daemon already running in this directory (PID ${existingPid})\x1b[0m`,
+      );
+      console.error(
+        "Use `claudeclaw send <message> [--telegram] [--discord]` while daemon is running.",
+      );
       process.exit(1);
     }
 
@@ -316,7 +352,9 @@ export async function start(args: string[] = []) {
   const existingPid = await checkExistingDaemon();
   if (existingPid) {
     if (!replaceExistingFlag) {
-      console.error(`\x1b[31mAborted: daemon already running in this directory (PID ${existingPid})\x1b[0m`);
+      console.error(
+        `\x1b[31mAborted: daemon already running in this directory (PID ${existingPid})\x1b[0m`,
+      );
       console.error(`Use --stop first, or kill PID ${existingPid} manually.`);
       process.exit(1);
     }
@@ -352,7 +390,9 @@ export async function start(args: string[] = []) {
     const links = await ensureUserSymlinks();
     const now = new Date().toLocaleTimeString();
     if (links.created.length > 0) {
-      console.log(`[${now}] Installed ${links.created.length} user symlink(s): ${links.created.join(", ")}`);
+      console.log(
+        `[${now}] Installed ${links.created.length} user symlink(s): ${links.created.join(", ")}`,
+      );
     }
     if (links.errors.length > 0) {
       for (const e of links.errors) {
@@ -388,7 +428,9 @@ export async function start(args: string[] = []) {
   // Initialize job system: wires governance adapter and resumes any pending workflows
   const { pendingResumed, pendingFailed } = await initializeJobSystem();
   if (pendingResumed > 0 || pendingFailed > 0) {
-    console.log(`[${new Date().toLocaleTimeString()}] Job system: ${pendingResumed} resumed, ${pendingFailed} failed`);
+    console.log(
+      `[${new Date().toLocaleTimeString()}] Job system: ${pendingResumed} resumed, ${pendingFailed} failed`,
+    );
   }
 
   const webEnabled = webFlag || webPortFlag !== null || settings.web.enabled;
@@ -436,14 +478,18 @@ export async function start(args: string[] = []) {
   } else if (cliProbe.known) {
     console.log(`  Claude CLI: ${cliProbe.version} (validated)`);
   } else {
-    console.warn(`  Claude CLI: ${cliProbe.version} (NOT in PTY parser's known-good list; turn-boundary detection may degrade — check .planning/pty-migration/SPEC.md §2)`);
+    console.warn(
+      `  Claude CLI: ${cliProbe.version} (NOT in PTY parser's known-good list; turn-boundary detection may degrade — check .planning/pty-migration/SPEC.md §2)`,
+    );
   }
   console.log(`  Security: ${settings.security.level}`);
   if (settings.security.allowedTools.length > 0)
     console.log(`    + allowed: ${settings.security.allowedTools.join(", ")}`);
   if (settings.security.disallowedTools.length > 0)
     console.log(`    - blocked: ${settings.security.disallowedTools.join(", ")}`);
-  console.log(`  Heartbeat: ${settings.heartbeat.enabled ? `every ${settings.heartbeat.interval}m` : "disabled"}`);
+  console.log(
+    `  Heartbeat: ${settings.heartbeat.enabled ? `every ${settings.heartbeat.interval}m` : "disabled"}`,
+  );
   console.log(`  Web UI: ${webEnabled ? `http://${settings.web.host}:${webPort}` : "disabled"}`);
   if (debugFlag) console.log("  Debug: enabled");
   console.log(`  Jobs loaded: ${jobs.length}`);
@@ -469,7 +515,9 @@ export async function start(args: string[] = []) {
       telegramToken = token;
       telegramReceiveEnabled = receiveEnabled;
       // Register the outbound delivery hook so gateway-routed events get a reply.
-      registerGatewayDelivery("telegram", (event, result) => deliverGatewayReply(token, event, result));
+      registerGatewayDelivery("telegram", (event, result) =>
+        deliverGatewayReply(token, event, result),
+      );
       console.log(`[${ts()}] Telegram: enabled${receiveEnabled ? "" : " (send-only)"}`);
     } else if (token && token === telegramToken && receiveEnabled !== telegramReceiveEnabled) {
       const { startPolling, stopPolling } = await import("./telegram");
@@ -502,14 +550,18 @@ export async function start(args: string[] = []) {
 
   async function initDiscord(token: string) {
     if (token && token !== discordToken) {
-      const { startGateway, sendMessageToUser, stopGateway, deliverGatewayReply } = await import("./discord");
+      const { startGateway, sendMessageToUser, stopGateway, deliverGatewayReply } = await import(
+        "./discord"
+      );
       if (discordToken) stopGateway();
       startGateway(debugFlag);
       discordStopGateway = stopGateway;
       discordSendToUser = (userId, text) => sendMessageToUser(token, userId, text);
       discordToken = token;
       // Register the outbound delivery hook so gateway-routed events get a reply.
-      registerGatewayDelivery("discord", (event, result) => deliverGatewayReply(token, event, result));
+      registerGatewayDelivery("discord", (event, result) =>
+        deliverGatewayReply(token, event, result),
+      );
       console.log(`[${ts()}] Discord: enabled`);
     } else if (!token && discordToken) {
       if (discordStopGateway) discordStopGateway();
@@ -583,12 +635,25 @@ export async function start(args: string[] = []) {
       reasonedInvokeFn: async (fqn, args) => {
         const prompt = `Use tool \`${fqn}\` with these arguments: ${JSON.stringify(args)}. Return ONLY the raw JSON result of the tool, no prose, no markdown.`;
         const result = await runUserMessage("inject", prompt);
-        const text = result.stdout.trim().replace(/^```[a-z]*\n?/, "").replace(/\n?```$/, "").trim();
-        try { return JSON.parse(text); } catch { return text; }
+        const text = result.stdout
+          .trim()
+          .replace(/^```[a-z]*\n?/, "")
+          .replace(/\n?```$/, "")
+          .trim();
+        try {
+          return JSON.parse(text);
+        } catch {
+          return text;
+        }
       },
-    }).start().catch((err) => {
-      console.error("[mcp-proxy] Startup error (non-fatal):", err instanceof Error ? err.message : String(err));
-    });
+    })
+      .start()
+      .catch((err) => {
+        console.error(
+          "[mcp-proxy] Startup error (non-fatal):",
+          err instanceof Error ? err.message : String(err),
+        );
+      });
   }
 
   function isAddrInUse(err: unknown): boolean {
@@ -623,7 +688,10 @@ export async function start(args: string[] = []) {
           },
           onHeartbeatSettingsChanged: (patch) => {
             let changed = false;
-            if (typeof patch.enabled === "boolean" && currentSettings.heartbeat.enabled !== patch.enabled) {
+            if (
+              typeof patch.enabled === "boolean" &&
+              currentSettings.heartbeat.enabled !== patch.enabled
+            ) {
               currentSettings.heartbeat.enabled = patch.enabled;
               changed = true;
             }
@@ -634,21 +702,24 @@ export async function start(args: string[] = []) {
                 changed = true;
               }
             }
-          if (typeof patch.prompt === "string" && currentSettings.heartbeat.prompt !== patch.prompt) {
-            currentSettings.heartbeat.prompt = patch.prompt;
-            changed = true;
-          }
-          if (Array.isArray(patch.excludeWindows)) {
-            const prev = JSON.stringify(currentSettings.heartbeat.excludeWindows);
-            const next = JSON.stringify(patch.excludeWindows);
-            if (prev !== next) {
-              currentSettings.heartbeat.excludeWindows = patch.excludeWindows;
+            if (
+              typeof patch.prompt === "string" &&
+              currentSettings.heartbeat.prompt !== patch.prompt
+            ) {
+              currentSettings.heartbeat.prompt = patch.prompt;
               changed = true;
             }
-          }
-          if (!changed) return;
-          scheduleHeartbeat();
-          updateState();
+            if (Array.isArray(patch.excludeWindows)) {
+              const prev = JSON.stringify(currentSettings.heartbeat.excludeWindows);
+              const next = JSON.stringify(patch.excludeWindows);
+              if (prev !== next) {
+                currentSettings.heartbeat.excludeWindows = patch.excludeWindows;
+                changed = true;
+              }
+            }
+            if (!changed) return;
+            scheduleHeartbeat();
+            updateState();
             console.log(`[${ts()}] Heartbeat settings updated from Web UI`);
           },
           onJobsChanged: async () => {
@@ -679,11 +750,15 @@ export async function start(args: string[] = []) {
     currentSettings.web.enabled = true;
     web = startWebWithFallback(currentSettings.web.host, webPort);
     currentSettings.web.port = web.port;
-    console.log(`[${new Date().toLocaleTimeString()}] Web UI listening on http://${web.host}:${web.port}`);
+    console.log(
+      `[${new Date().toLocaleTimeString()}] Web UI listening on http://${web.host}:${web.port}`,
+    );
   }
 
   // --- Helpers ---
-  function ts() { return new Date().toLocaleTimeString(); }
+  function ts() {
+    return new Date().toLocaleTimeString();
+  }
 
   function startPreflightInBackground(projectPath: string): void {
     try {
@@ -699,38 +774,50 @@ export async function start(args: string[] = []) {
     }
   }
 
-  function forwardToTelegram(label: string, result: { exitCode: number; stdout: string; stderr: string }) {
+  function forwardToTelegram(
+    label: string,
+    result: { exitCode: number; stdout: string; stderr: string },
+  ) {
     if (!telegramSend || currentSettings.telegram.allowedUserIds.length === 0) return;
-    const text = result.exitCode === 0
-      ? `${label ? `[${label}]\n` : ""}${result.stdout || "(empty)"}`
-      : `${label ? `[${label}] ` : ""}error (exit ${result.exitCode}): ${extractErrorDetail(result) || "Unknown"}`;
+    const text =
+      result.exitCode === 0
+        ? `${label ? `[${label}]\n` : ""}${result.stdout || "(empty)"}`
+        : `${label ? `[${label}] ` : ""}error (exit ${result.exitCode}): ${extractErrorDetail(result) || "Unknown"}`;
     for (const userId of currentSettings.telegram.allowedUserIds) {
       telegramSend(userId, text).catch((err) =>
-        console.error(`[Telegram] Failed to forward to ${userId}: ${err}`)
+        console.error(`[Telegram] Failed to forward to ${userId}: ${err}`),
       );
     }
   }
 
-  function forwardToDiscord(label: string, result: { exitCode: number; stdout: string; stderr: string }) {
+  function forwardToDiscord(
+    label: string,
+    result: { exitCode: number; stdout: string; stderr: string },
+  ) {
     if (!discordSendToUser || currentSettings.discord.allowedUserIds.length === 0) return;
-    const text = result.exitCode === 0
-      ? `${label ? `[${label}]\n` : ""}${result.stdout || "(empty)"}`
-      : `${label ? `[${label}] ` : ""}error (exit ${result.exitCode}): ${extractErrorDetail(result) || "Unknown"}`;
+    const text =
+      result.exitCode === 0
+        ? `${label ? `[${label}]\n` : ""}${result.stdout || "(empty)"}`
+        : `${label ? `[${label}] ` : ""}error (exit ${result.exitCode}): ${extractErrorDetail(result) || "Unknown"}`;
     for (const userId of currentSettings.discord.allowedUserIds) {
       discordSendToUser(userId, text).catch((err) =>
-        console.error(`[Discord] Failed to forward to ${userId}: ${err}`)
+        console.error(`[Discord] Failed to forward to ${userId}: ${err}`),
       );
     }
   }
 
-  function forwardToSlack(label: string, result: { exitCode: number; stdout: string; stderr: string }) {
+  function forwardToSlack(
+    label: string,
+    result: { exitCode: number; stdout: string; stderr: string },
+  ) {
     if (!slackSendToUser || currentSettings.slack.allowedUserIds.length === 0) return;
-    const text = result.exitCode === 0
-      ? `${label ? `[${label}]\n` : ""}${result.stdout || "(empty)"}`
-      : `${label ? `[${label}] ` : ""}error (exit ${result.exitCode}): ${extractErrorDetail(result) || "Unknown"}`;
+    const text =
+      result.exitCode === 0
+        ? `${label ? `[${label}]\n` : ""}${result.stdout || "(empty)"}`
+        : `${label ? `[${label}] ` : ""}error (exit ${result.exitCode}): ${extractErrorDetail(result) || "Unknown"}`;
     for (const userId of currentSettings.slack.allowedUserIds) {
       slackSendToUser(userId, text).catch((err) =>
-        console.error(`[Slack] Failed to forward to ${userId}: ${err}`)
+        console.error(`[Slack] Failed to forward to ${userId}: ${err}`),
       );
     }
   }
@@ -750,7 +837,7 @@ export async function start(args: string[] = []) {
       currentSettings.heartbeat,
       currentSettings.timezoneOffsetMinutes,
       ms,
-      Date.now()
+      Date.now(),
     );
 
     function tick() {
@@ -765,20 +852,19 @@ export async function start(args: string[] = []) {
         }
         return;
       }
-      if (isHeartbeatExcludedNow(currentSettings.heartbeat, currentSettings.timezoneOffsetMinutes)) {
+      if (
+        isHeartbeatExcludedNow(currentSettings.heartbeat, currentSettings.timezoneOffsetMinutes)
+      ) {
         console.log(`[${ts()}] Heartbeat skipped (excluded window)`);
         nextHeartbeatAt = nextAllowedHeartbeatAt(
           currentSettings.heartbeat,
           currentSettings.timezoneOffsetMinutes,
           ms,
-          Date.now()
+          Date.now(),
         );
         return;
       }
-      Promise.all([
-        resolvePrompt(currentSettings.heartbeat.prompt),
-        loadHeartbeatPromptTemplate(),
-      ])
+      Promise.all([resolvePrompt(currentSettings.heartbeat.prompt), loadHeartbeatPromptTemplate()])
         .then(([prompt, template]) => {
           const userPromptSection = prompt.trim()
             ? `User custom heartbeat prompt:\n${prompt.trim()}`
@@ -793,7 +879,8 @@ export async function start(args: string[] = []) {
         .then((r) => {
           if (!r) return;
           const normalized = r.stdout.trim();
-          const shouldSuppress = normalized.startsWith("HEARTBEAT_OK") || normalized.endsWith("HEARTBEAT_OK");
+          const shouldSuppress =
+            normalized.startsWith("HEARTBEAT_OK") || normalized.endsWith("HEARTBEAT_OK");
           const shouldForward = currentSettings.heartbeat.forwardToTelegram || !shouldSuppress;
           if (shouldForward) {
             forwardToTelegram("", r);
@@ -806,7 +893,7 @@ export async function start(args: string[] = []) {
         currentSettings.heartbeat,
         currentSettings.timezoneOffsetMinutes,
         ms,
-        Date.now()
+        Date.now(),
       );
     }
 
@@ -827,7 +914,9 @@ export async function start(args: string[] = []) {
     if (discordFlag) forwardToDiscord("", triggerResult);
     if (slackFlag) forwardToSlack("", triggerResult);
     if (triggerResult.exitCode !== 0) {
-      console.error(`[${ts()}] Startup trigger failed (exit ${triggerResult.exitCode}). Daemon will continue running.`);
+      console.error(
+        `[${ts()}] Startup trigger failed (exit ${triggerResult.exitCode}). Daemon will continue running.`,
+      );
     }
   } else {
     // Bootstrap the session first so system prompt is initial context
@@ -853,20 +942,25 @@ export async function start(args: string[] = []) {
         newSettings.heartbeat.prompt !== currentSettings.heartbeat.prompt ||
         newSettings.timezoneOffsetMinutes !== currentSettings.timezoneOffsetMinutes ||
         newSettings.timezone !== currentSettings.timezone ||
-        JSON.stringify(newSettings.heartbeat.excludeWindows) !== JSON.stringify(currentSettings.heartbeat.excludeWindows);
+        JSON.stringify(newSettings.heartbeat.excludeWindows) !==
+          JSON.stringify(currentSettings.heartbeat.excludeWindows);
 
       // Detect security config changes
       const secChanged =
         newSettings.security.level !== currentSettings.security.level ||
-        newSettings.security.allowedTools.join(",") !== currentSettings.security.allowedTools.join(",") ||
-        newSettings.security.disallowedTools.join(",") !== currentSettings.security.disallowedTools.join(",");
+        newSettings.security.allowedTools.join(",") !==
+          currentSettings.security.allowedTools.join(",") ||
+        newSettings.security.disallowedTools.join(",") !==
+          currentSettings.security.disallowedTools.join(",");
 
       if (secChanged) {
         console.log(`[${ts()}] Security level changed → ${newSettings.security.level}`);
       }
 
       if (hbChanged) {
-        console.log(`[${ts()}] Config change detected — heartbeat: ${newSettings.heartbeat.enabled ? `every ${newSettings.heartbeat.interval}m` : "disabled"}`);
+        console.log(
+          `[${ts()}] Config change detected — heartbeat: ${newSettings.heartbeat.enabled ? `every ${newSettings.heartbeat.interval}m` : "disabled"}`,
+        );
         currentSettings = newSettings;
         scheduleHeartbeat();
       } else {
@@ -878,8 +972,14 @@ export async function start(args: string[] = []) {
       }
 
       // Detect job changes
-      const jobNames = newJobs.map((j) => `${j.name}:${j.schedule}:${j.prompt}`).sort().join("|");
-      const oldJobNames = currentJobs.map((j) => `${j.name}:${j.schedule}:${j.prompt}`).sort().join("|");
+      const jobNames = newJobs
+        .map((j) => `${j.name}:${j.schedule}:${j.prompt}`)
+        .sort()
+        .join("|");
+      const oldJobNames = currentJobs
+        .map((j) => `${j.name}:${j.schedule}:${j.prompt}`)
+        .sort()
+        .join("|");
       if (jobNames !== oldJobNames) {
         console.log(`[${ts()}] Jobs reloaded: ${newJobs.length} job(s)`);
         newJobs.forEach((j) => console.log(`    - ${j.name} [${j.schedule}]`));
@@ -903,9 +1003,7 @@ export async function start(args: string[] = []) {
   function updateState() {
     const now = new Date();
     const state: StateData = {
-      heartbeat: currentSettings.heartbeat.enabled
-        ? { nextAt: nextHeartbeatAt }
-        : undefined,
+      heartbeat: currentSettings.heartbeat.enabled ? { nextAt: nextHeartbeatAt } : undefined,
       jobs: currentJobs.map((job) => {
         const last = jobLastResult.get(job.name);
         const retryState = jobRetryState.get(job.name);
@@ -940,63 +1038,64 @@ export async function start(args: string[] = []) {
 
   function runJob(job: (typeof currentJobs)[0]) {
     const timeoutMs = job.timeoutSeconds ? job.timeoutSeconds * 1000 : undefined;
-    snapshotJobFrontmatter(job.name)
-      .then((restoreFrontmatter) =>
-        resolvePrompt(job.prompt)
-          .then(async (prompt) => {
-            const modelOverride = await resolveJobModel(job);
-            const clock = buildClockPromptPrefix(new Date(), currentSettings.timezoneOffsetMinutes);
-            return run(
-              job.name,
-              `${clock}\n${prompt}`,
-              job.agent ? `agent:${job.agent}` : job.name,
-              modelOverride ?? job.model,
-              timeoutMs,
-              job.agent,
-              "job"
-            );
-          })
-          .then(async (r) => {
-            const restored = await restoreFrontmatter();
-            if (restored) console.log(`[${ts()}] Restored frontmatter for job: ${job.name}`);
-            jobLastResult.set(job.name, {
-              result: r.exitCode === 0 ? "ok" : "error",
-              ranAt: Date.now(),
-            });
-            if (r.exitCode === 0) {
+    snapshotJobFrontmatter(job.name).then((restoreFrontmatter) =>
+      resolvePrompt(job.prompt)
+        .then(async (prompt) => {
+          const modelOverride = await resolveJobModel(job);
+          const clock = buildClockPromptPrefix(new Date(), currentSettings.timezoneOffsetMinutes);
+          return run(
+            job.name,
+            `${clock}\n${prompt}`,
+            job.agent ? `agent:${job.agent}` : job.name,
+            modelOverride ?? job.model,
+            timeoutMs,
+            job.agent,
+            "job",
+          );
+        })
+        .then(async (r) => {
+          const restored = await restoreFrontmatter();
+          if (restored) console.log(`[${ts()}] Restored frontmatter for job: ${job.name}`);
+          jobLastResult.set(job.name, {
+            result: r.exitCode === 0 ? "ok" : "error",
+            ranAt: Date.now(),
+          });
+          if (r.exitCode === 0) {
+            jobRetryState.delete(job.name);
+          } else if (job.retry && job.retry > 0) {
+            // Preserve existing state so failCount accumulates correctly across retries.
+            const state = jobRetryState.get(job.name) ?? { failCount: 0, retryAt: 0 };
+            state.failCount += 1;
+            if (state.failCount <= job.retry) {
+              const delayMs = (job.retryDelay ?? 300) * 1000;
+              state.retryAt = Date.now() + delayMs;
+              jobRetryState.set(job.name, state);
+              console.log(
+                `[${ts()}] Job ${job.name} failed (attempt ${state.failCount}/${job.retry}), retrying in ${job.retryDelay ?? 300}s`,
+              );
+            } else {
               jobRetryState.delete(job.name);
-            } else if (job.retry && job.retry > 0) {
-              // Preserve existing state so failCount accumulates correctly across retries.
-              const state = jobRetryState.get(job.name) ?? { failCount: 0, retryAt: 0 };
-              state.failCount += 1;
-              if (state.failCount <= job.retry) {
-                const delayMs = (job.retryDelay ?? 300) * 1000;
-                state.retryAt = Date.now() + delayMs;
-                jobRetryState.set(job.name, state);
-                console.log(`[${ts()}] Job ${job.name} failed (attempt ${state.failCount}/${job.retry}), retrying in ${job.retryDelay ?? 300}s`);
-              } else {
-                jobRetryState.delete(job.name);
-                console.log(`[${ts()}] Job ${job.name} exhausted ${job.retry} retries`);
-              }
+              console.log(`[${ts()}] Job ${job.name} exhausted ${job.retry} retries`);
             }
-            if (job.notify === false) return;
-            if (job.notify === "error" && r.exitCode === 0) return;
-            const forwardLabel = job.agent && job.label ? `${job.agent}: ${job.label}` : job.name;
-            forwardToTelegram(forwardLabel, r);
-            forwardToDiscord(forwardLabel, r);
-          })
-          .finally(async () => {
-            if (job.recurring) return;
-            // Only clear one-shot schedule when no retry is pending.
-            if (jobRetryState.has(job.name)) return;
-            try {
-              await clearJobSchedule(job.name);
-              console.log(`[${ts()}] Cleared schedule for one-time job: ${job.name}`);
-            } catch (err) {
-              console.error(`[${ts()}] Failed to clear schedule for ${job.name}:`, err);
-            }
-          })
-      );
+          }
+          if (job.notify === false) return;
+          if (job.notify === "error" && r.exitCode === 0) return;
+          const forwardLabel = job.agent && job.label ? `${job.agent}: ${job.label}` : job.name;
+          forwardToTelegram(forwardLabel, r);
+          forwardToDiscord(forwardLabel, r);
+        })
+        .finally(async () => {
+          if (job.recurring) return;
+          // Only clear one-shot schedule when no retry is pending.
+          if (jobRetryState.has(job.name)) return;
+          try {
+            await clearJobSchedule(job.name);
+            console.log(`[${ts()}] Cleared schedule for one-time job: ${job.name}`);
+          } catch (err) {
+            console.error(`[${ts()}] Failed to clear schedule for ${job.name}:`, err);
+          }
+        }),
+    );
   }
 
   setInterval(() => {
@@ -1009,7 +1108,9 @@ export async function start(args: string[] = []) {
           // Push retryAt to sentinel so subsequent cron ticks don't re-fire while in flight.
           // runJob's .then() handler overwrites this with the real next-retry time (or deletes it).
           retryState.retryAt = Number.MAX_SAFE_INTEGER;
-          console.log(`[${ts()}] Retrying job: ${job.name} (attempt ${retryState.failCount + 1}/${job.retry})`);
+          console.log(
+            `[${ts()}] Retrying job: ${job.name} (attempt ${retryState.failCount + 1}/${job.retry})`,
+          );
           runJob(job);
           continue;
         }

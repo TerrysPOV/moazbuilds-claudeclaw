@@ -1,6 +1,6 @@
 /**
  * Tests for escalation/triggers.ts
- * 
+ *
  * Run with: bun test src/__tests__/escalation/triggers.test.ts
  */
 
@@ -41,7 +41,7 @@ describe("Escalation Triggers - Policy Management", () => {
 
   it("should have default policy", () => {
     const policy = getEscalationPolicy();
-    
+
     expect(policy.pauseOnCriticalPolicyDenial).toBe(true);
     expect(policy.pauseOnWatchdogSuspend).toBe(true);
     expect(policy.createHandoffOnPolicyDenial).toBe(true);
@@ -55,7 +55,7 @@ describe("Escalation Triggers - Policy Management", () => {
       pauseOnCriticalPolicyDenial: false,
       minHandoffSeverity: "critical",
     });
-    
+
     const policy = getEscalationPolicy();
     expect(policy.pauseOnCriticalPolicyDenial).toBe(false);
     expect(policy.minHandoffSeverity).toBe("critical");
@@ -66,7 +66,7 @@ describe("Escalation Triggers - Policy Management", () => {
   it("should reset policy to defaults", () => {
     configureEscalationPolicy({ pauseOnCriticalPolicyDenial: false });
     resetEscalationPolicy();
-    
+
     const policy = getEscalationPolicy();
     expect(policy.pauseOnCriticalPolicyDenial).toBe(true);
   });
@@ -82,7 +82,7 @@ describe("Escalation Triggers - shouldPause", () => {
       source: "policy_denial",
       severity: "critical",
     };
-    
+
     expect(shouldPause(context)).toBe(true);
   });
 
@@ -91,7 +91,7 @@ describe("Escalation Triggers - shouldPause", () => {
       source: "policy_denial",
       severity: "warning",
     };
-    
+
     expect(shouldPause(context)).toBe(false);
   });
 
@@ -104,12 +104,12 @@ describe("Escalation Triggers - shouldPause", () => {
       recommendedAction: "pause",
       evaluatedAt: new Date().toISOString(),
     };
-    
+
     const context: TriggerContext = {
       source: "watchdog",
       watchdogDecision: decision,
     };
-    
+
     expect(shouldPause(context)).toBe(true);
   });
 
@@ -122,12 +122,12 @@ describe("Escalation Triggers - shouldPause", () => {
       recommendedAction: "terminate",
       evaluatedAt: new Date().toISOString(),
     };
-    
+
     const context: TriggerContext = {
       source: "watchdog",
       watchdogDecision: decision,
     };
-    
+
     expect(shouldPause(context)).toBe(true);
   });
 
@@ -140,12 +140,12 @@ describe("Escalation Triggers - shouldPause", () => {
       recommendedAction: "review",
       evaluatedAt: new Date().toISOString(),
     };
-    
+
     const context: TriggerContext = {
       source: "watchdog",
       watchdogDecision: decision,
     };
-    
+
     expect(shouldPause(context)).toBe(false);
   });
 
@@ -154,18 +154,18 @@ describe("Escalation Triggers - shouldPause", () => {
       source: "manual_escalation",
       severity: "critical",
     };
-    
+
     expect(shouldPause(context)).toBe(false);
   });
 
   it("should respect policy disable", () => {
     configureEscalationPolicy({ pauseOnCriticalPolicyDenial: false });
-    
+
     const context: TriggerContext = {
       source: "policy_denial",
       severity: "critical",
     };
-    
+
     expect(shouldPause(context)).toBe(false);
   });
 });
@@ -180,18 +180,18 @@ describe("Escalation Triggers - shouldCreateHandoff", () => {
       source: "policy_denial",
       severity: "warning",
     };
-    
+
     expect(shouldCreateHandoff(context)).toBe(true);
   });
 
   it("should not create handoff below minimum severity", () => {
     configureEscalationPolicy({ minHandoffSeverity: "critical" });
-    
+
     const context: TriggerContext = {
       source: "policy_denial",
       severity: "warning",
     };
-    
+
     expect(shouldCreateHandoff(context)).toBe(false);
   });
 
@@ -200,7 +200,7 @@ describe("Escalation Triggers - shouldCreateHandoff", () => {
       source: "watchdog",
       severity: "warning",
     };
-    
+
     expect(shouldCreateHandoff(context)).toBe(true);
   });
 
@@ -209,7 +209,7 @@ describe("Escalation Triggers - shouldCreateHandoff", () => {
       source: "manual_escalation",
       severity: "warning",
     };
-    
+
     expect(shouldCreateHandoff(context)).toBe(true);
   });
 
@@ -218,7 +218,7 @@ describe("Escalation Triggers - shouldCreateHandoff", () => {
       source: "dlq_overflow",
       severity: "critical",
     };
-    
+
     expect(shouldCreateHandoff(context)).toBe(true);
   });
 
@@ -227,7 +227,7 @@ describe("Escalation Triggers - shouldCreateHandoff", () => {
       source: "dlq_overflow",
       severity: "warning",
     };
-    
+
     expect(shouldCreateHandoff(context)).toBe(false);
   });
 });
@@ -242,7 +242,7 @@ describe("Escalation Triggers - shouldNotify", () => {
       "manual_escalation",
       "policy_approval_timeout",
     ];
-    
+
     for (const source of sources) {
       expect(shouldNotify({ source })).toBe(true);
     }
@@ -250,7 +250,7 @@ describe("Escalation Triggers - shouldNotify", () => {
 
   it("should respect notification policy settings", () => {
     configureEscalationPolicy({ notifyOnPolicyDenial: false });
-    
+
     expect(shouldNotify({ source: "policy_denial" })).toBe(false);
     expect(shouldNotify({ source: "watchdog" })).toBe(true); // Still enabled
   });
@@ -282,13 +282,11 @@ describe("Escalation Triggers - Integration", () => {
   });
 
   it("should handle policy denial trigger", async () => {
-    const action = await handlePolicyDenial(
-      "evt-123",
-      "Bash",
-      "Security policy violation",
-      { severity: "warning", channelId: "telegram:123" }
-    );
-    
+    const action = await handlePolicyDenial("evt-123", "Bash", "Security policy violation", {
+      severity: "warning",
+      channelId: "telegram:123",
+    });
+
     expect(action.pause).toBe(false); // Not critical
     expect(action.handoff).toBe(true);
     expect(action.notification).toBe(true);
@@ -296,16 +294,13 @@ describe("Escalation Triggers - Integration", () => {
   });
 
   it("should pause on critical policy denial", async () => {
-    const action = await handlePolicyDenial(
-      "evt-456",
-      "Edit",
-      "Critical security violation",
-      { severity: "critical" }
-    );
-    
+    const action = await handlePolicyDenial("evt-456", "Edit", "Critical security violation", {
+      severity: "critical",
+    });
+
     expect(action.pause).toBe(true);
     expect(action.pauseMode).toBe("admission_and_scheduling");
-    
+
     // Verify pause state
     const pauseState = await getPauseState();
     expect(pauseState.paused).toBe(true);
@@ -320,12 +315,12 @@ describe("Escalation Triggers - Integration", () => {
       recommendedAction: "pause",
       evaluatedAt: new Date().toISOString(),
     };
-    
+
     const action = await handleWatchdogTrigger(decision, {
       invocationId: "inv-123",
       sessionId: "session-456",
     });
-    
+
     expect(action.pause).toBe(true);
     expect(action.handoff).toBe(true);
     expect(action.notification).toBe(true);
@@ -336,7 +331,7 @@ describe("Escalation Triggers - Integration", () => {
       eventId: "evt-789",
       workflowId: "wf-abc",
     });
-    
+
     expect(action.notification).toBe(true);
     // Not critical, so no handoff
     expect(action.handoff).toBe(false);
@@ -346,32 +341,32 @@ describe("Escalation Triggers - Integration", () => {
     const action = await handleDlqOverflow(300, 100, {
       eventId: "evt-critical",
     });
-    
+
     expect(action.notification).toBe(true);
     expect(action.handoff).toBe(true); // Critical creates handoff
   });
 
   it("should track repeated orchestration failures", async () => {
     const workflowId = "wf-repeated";
-    
+
     // First two failures should not pause
     await handleOrchestrationFailure(workflowId, "Error 1");
     await handleOrchestrationFailure(workflowId, "Error 2");
-    
+
     const counts = getFailureCounts();
     expect(counts[workflowId].count).toBe(2);
-    
+
     // Third failure should trigger pause
     const action = await handleOrchestrationFailure(workflowId, "Error 3");
     expect(action.pause).toBe(true);
   });
 
   it("should handle manual escalation", async () => {
-    const action = await handleManualEscalation(
-      "Operator needs assistance",
-      { severity: "warning", workflowId: "wf-help" }
-    );
-    
+    const action = await handleManualEscalation("Operator needs assistance", {
+      severity: "warning",
+      workflowId: "wf-help",
+    });
+
     expect(action.pause).toBe(false); // Manual doesn't auto-pause
     expect(action.handoff).toBe(true);
     expect(action.notification).toBe(true);
@@ -383,11 +378,11 @@ describe("Escalation Triggers - Integration", () => {
       sessionId: "session-test",
       channelId: "telegram:123",
     });
-    
+
     const handoffs = await listHandoffs();
     expect(handoffs.length).toBeGreaterThanOrEqual(1);
-    
-    const handoff = handoffs.find(h => h.reason.includes("Test"));
+
+    const handoff = handoffs.find((h) => h.reason.includes("Test"));
     expect(handoff).toBeDefined();
   });
 
@@ -397,7 +392,7 @@ describe("Escalation Triggers - Integration", () => {
       severity: "warning",
       message: "Audit test",
     });
-    
+
     expect(action.actionId).toBeDefined();
     expect(action.timestamp).toBeDefined();
   });
@@ -411,36 +406,36 @@ describe("Escalation Triggers - Failure Count Management", () => {
 
   it("should track failure counts per workflow", () => {
     const workflowId = "test-workflow";
-    
+
     clearFailureCount(workflowId);
-    
+
     // Simulate failures
     const context1: TriggerContext = { source: "orchestration_failure", workflowId };
     const context2: TriggerContext = { source: "orchestration_failure", workflowId };
-    
+
     shouldPause({ ...context1, severity: "warning" });
     shouldPause({ ...context2, severity: "warning" });
-    
+
     const counts = getFailureCounts();
     expect(counts[workflowId].count).toBe(2);
   });
 
   it("should clear failure counts", () => {
     const workflowId = "test-workflow";
-    
+
     shouldPause({ source: "orchestration_failure", workflowId, severity: "warning" });
     clearFailureCount(workflowId);
-    
+
     const counts = getFailureCounts();
     expect(counts[workflowId]).toBeUndefined();
   });
 
   it("should reset failure counts with policy", () => {
     const workflowId = "test-workflow";
-    
+
     shouldPause({ source: "orchestration_failure", workflowId, severity: "warning" });
     resetEscalationPolicy();
-    
+
     const counts = getFailureCounts();
     expect(Object.keys(counts).length).toBe(0);
   });
@@ -464,7 +459,7 @@ describe("Escalation Triggers - Pause Mode Determination", () => {
 
   it("should use admission_and_scheduling for critical severity", async () => {
     await handlePolicyDenial("evt-1", "Bash", "Critical", { severity: "critical" });
-    
+
     const state = await getPauseState();
     expect(state.mode).toBe("admission_and_scheduling");
   });
@@ -472,7 +467,7 @@ describe("Escalation Triggers - Pause Mode Determination", () => {
   it("should use admission_only for warning severity", async () => {
     // Disable auto-pause for critical to test warning
     configureEscalationPolicy({ pauseOnCriticalPolicyDenial: false });
-    
+
     // Create a watchdog suspend (which pauses)
     const decision: WatchdogDecision = {
       invocationId: "inv-1",
@@ -482,9 +477,9 @@ describe("Escalation Triggers - Pause Mode Determination", () => {
       recommendedAction: "pause",
       evaluatedAt: new Date().toISOString(),
     };
-    
+
     await handleWatchdogTrigger(decision, { invocationId: "inv-1" });
-    
+
     const state = await getPauseState();
     expect(state.mode).toBe("admission_only");
   });

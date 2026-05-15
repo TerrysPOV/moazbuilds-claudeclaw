@@ -1,8 +1,8 @@
 /**
  * Runaway Watchdog
- * 
+ *
  * Detects and controls runaway execution patterns safely and durably.
- * 
+ *
  * DESIGN PRINCIPLES:
  * - Watchdog monitors durable execution metrics per invocation/session
  * - "kill" is modeled as a governance outcome first, then mapped to execution control
@@ -187,7 +187,7 @@ function normalizeToolCall(tool: string, input: unknown): { tool: string; inputH
   let hash = 0;
   for (let i = 0; i < inputStr.length; i++) {
     const char = inputStr.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
+    hash = (hash << 5) - hash + char;
     hash = hash & hash; // Convert to 32bit integer
   }
   const inputHash = Math.abs(hash).toString(16);
@@ -199,7 +199,7 @@ function normalizeToolCall(tool: string, input: unknown): { tool: string; inputH
  * Detect repeated tool call patterns.
  */
 function detectRepeatedPatterns(
-  toolCalls: Array<{ tool: string; inputHash: string; timestamp: string }>
+  toolCalls: Array<{ tool: string; inputHash: string; timestamp: string }>,
 ): { pattern: string; count: number }[] {
   const patterns: Record<string, number> = {};
 
@@ -228,7 +228,7 @@ export async function recordExecutionMetric(
     toolCallCount?: number;
     turnCount?: number;
     toolCalls?: Array<{ tool: string; input: unknown; timestamp?: string }>;
-  }
+  },
 ): Promise<void> {
   await initWatchdog();
 
@@ -278,7 +278,7 @@ export async function recordExecutionMetric(
 export async function incrementToolCall(
   invocationId: string,
   tool: string,
-  input: unknown
+  input: unknown,
 ): Promise<void> {
   await initWatchdog();
 
@@ -336,12 +336,10 @@ export async function incrementTurnCount(invocationId: string): Promise<void> {
 /**
  * Check limits for an invocation.
  */
-export async function checkLimits(
-  context: {
-    invocationId: string;
-    sessionId?: string;
-  }
-): Promise<WatchdogDecision> {
+export async function checkLimits(context: {
+  invocationId: string;
+  sessionId?: string;
+}): Promise<WatchdogDecision> {
   await initWatchdog();
 
   const now = new Date().toISOString();
@@ -390,7 +388,9 @@ export async function checkLimits(
       triggeredLimits.push(`maxRuntimeSeconds=${elapsedSeconds}/${limits.maxRuntimeSeconds}`);
       worstState = worstState === "healthy" ? "suspend" : worstState;
     } else if (elapsedSeconds >= limits.maxRuntimeSeconds * 0.8) {
-      triggeredLimits.push(`maxRuntimeSeconds_warning=${elapsedSeconds}/${limits.maxRuntimeSeconds}`);
+      triggeredLimits.push(
+        `maxRuntimeSeconds_warning=${elapsedSeconds}/${limits.maxRuntimeSeconds}`,
+      );
       if (worstState === "healthy") worstState = "warn";
     }
   }
@@ -401,12 +401,12 @@ export async function checkLimits(
     const totalRepeatedCalls = repeatedPatterns.reduce((sum, p) => sum + p.count, 0);
     if (totalRepeatedCalls >= limits.maxRepeatedTools) {
       triggeredLimits.push(
-        `maxRepeatedTools=${totalRepeatedCalls}/${limits.maxRepeatedTools} (patterns: ${repeatedPatterns.map(p => `${p.pattern}=${p.count}`).join(", ")})`
+        `maxRepeatedTools=${totalRepeatedCalls}/${limits.maxRepeatedTools} (patterns: ${repeatedPatterns.map((p) => `${p.pattern}=${p.count}`).join(", ")})`,
       );
       worstState = worstState === "healthy" ? "suspend" : worstState;
     } else if (totalRepeatedCalls >= limits.maxRepeatedTools * 0.7) {
       triggeredLimits.push(
-        `maxRepeatedTools_warning=${totalRepeatedCalls}/${limits.maxRepeatedTools}`
+        `maxRepeatedTools_warning=${totalRepeatedCalls}/${limits.maxRepeatedTools}`,
       );
       if (worstState === "healthy") worstState = "warn";
     }
@@ -454,19 +454,16 @@ export async function handleTrigger(
     invocationId: string;
     sessionId?: string;
   },
-  decision: WatchdogDecision
+  decision: WatchdogDecision,
 ): Promise<{ action: string; success: boolean }> {
   await initWatchdog();
 
   const now = new Date().toISOString();
 
   switch (decision.state) {
-    case "kill":
+    case "kill": {
       // Record kill in usage tracker for audit
-      await recordInvocationKilled(
-        context.invocationId,
-        `Watchdog kill: ${decision.reason}`
-      );
+      await recordInvocationKilled(context.invocationId, `Watchdog kill: ${decision.reason}`);
 
       // Remove from active invocations
       delete watchdogIndex!.activeInvocations[context.invocationId];
@@ -487,8 +484,9 @@ export async function handleTrigger(
         action: "terminated",
         success: true,
       };
+    }
 
-    case "suspend":
+    case "suspend": {
       // Suspend is advisory - execution should pause but not terminate
       // This would need support from the execution layer
       const suspendEvent: WatchdogEventRecord = {
@@ -505,8 +503,9 @@ export async function handleTrigger(
         action: "suspended",
         success: true,
       };
+    }
 
-    case "warn":
+    case "warn": {
       // Just log the warning
       const warnEvent: WatchdogEventRecord = {
         id: randomUUID(),
@@ -522,6 +521,7 @@ export async function handleTrigger(
         action: "warning_logged",
         success: true,
       };
+    }
 
     case "healthy":
     default:
@@ -535,9 +535,7 @@ export async function handleTrigger(
 /**
  * Get active invocation metrics.
  */
-export async function getActiveInvocation(
-  invocationId: string
-): Promise<ExecutionMetrics | null> {
+export async function getActiveInvocation(invocationId: string): Promise<ExecutionMetrics | null> {
   await initWatchdog();
   return watchdogIndex?.activeInvocations[invocationId] || null;
 }
@@ -545,9 +543,7 @@ export async function getActiveInvocation(
 /**
  * Get all active invocations for a session.
  */
-export async function getSessionActiveInvocations(
-  sessionId: string
-): Promise<ExecutionMetrics[]> {
+export async function getSessionActiveInvocations(sessionId: string): Promise<ExecutionMetrics[]> {
   await initWatchdog();
 
   const invocations: ExecutionMetrics[] = [];
@@ -591,7 +587,10 @@ export async function getWatchdogStats(): Promise<{
   try {
     if (existsSync(WATCHDOG_EVENTS_FILE)) {
       const content = await Bun.file(WATCHDOG_EVENTS_FILE).text();
-      eventsLogged = content.trim().split("\n").filter((l) => l.trim()).length;
+      eventsLogged = content
+        .trim()
+        .split("\n")
+        .filter((l) => l.trim()).length;
     }
   } catch {
     // File might not exist

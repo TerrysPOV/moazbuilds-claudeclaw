@@ -11,7 +11,7 @@ function bumpVersion(version: string, bumpType: BumpType): string {
     throw new Error(`Unsupported plugin version format: ${version}`);
   }
 
-  let [, major, minor, patch] = match;
+  const [, major, minor, patch] = match;
   let nextMajor = Number(major);
   let nextMinor = Number(minor);
   let nextPatch = Number(patch);

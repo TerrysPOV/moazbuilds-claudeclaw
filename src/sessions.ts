@@ -54,7 +54,7 @@ async function saveSession(session: GlobalSession, agentName?: string): Promise<
 
 /** Returns the existing session or null. Never creates one. */
 export async function getSession(
-  agentName?: string
+  agentName?: string,
 ): Promise<{ sessionId: string; turnCount: number; compactWarned: boolean } | null> {
   const existing = await loadSession(agentName);
   if (existing) {
@@ -63,20 +63,27 @@ export async function getSession(
     if (typeof existing.compactWarned !== "boolean") existing.compactWarned = false;
     existing.lastUsedAt = new Date().toISOString();
     await saveSession(existing, agentName);
-    return { sessionId: existing.sessionId, turnCount: existing.turnCount, compactWarned: existing.compactWarned };
+    return {
+      sessionId: existing.sessionId,
+      turnCount: existing.turnCount,
+      compactWarned: existing.compactWarned,
+    };
   }
   return null;
 }
 
 /** Save a session ID obtained from Claude Code's output. */
 export async function createSession(sessionId: string, agentName?: string): Promise<void> {
-  await saveSession({
-    sessionId,
-    createdAt: new Date().toISOString(),
-    lastUsedAt: new Date().toISOString(),
-    turnCount: 0,
-    compactWarned: false,
-  }, agentName);
+  await saveSession(
+    {
+      sessionId,
+      createdAt: new Date().toISOString(),
+      lastUsedAt: new Date().toISOString(),
+      turnCount: 0,
+      compactWarned: false,
+    },
+    agentName,
+  );
 }
 
 /** Returns session metadata without mutating lastUsedAt. */
@@ -126,12 +133,16 @@ export async function resetSession(agentName?: string): Promise<void> {
 const FALLBACK_SESSION_FILE = join(HEARTBEAT_DIR, "session_fallback.json");
 
 function fallbackSessionPathFor(agentName?: string, threadId?: string): string {
-  if (threadId) return join(HEARTBEAT_DIR, "fallback-sessions", `${encodeURIComponent(threadId)}.json`);
+  if (threadId)
+    return join(HEARTBEAT_DIR, "fallback-sessions", `${encodeURIComponent(threadId)}.json`);
   if (agentName) return join(getAgentsDir(), agentName, "session_fallback.json");
   return FALLBACK_SESSION_FILE;
 }
 
-async function loadFallbackSession(agentName?: string, threadId?: string): Promise<GlobalSession | null> {
+async function loadFallbackSession(
+  agentName?: string,
+  threadId?: string,
+): Promise<GlobalSession | null> {
   try {
     return await Bun.file(fallbackSessionPathFor(agentName, threadId)).json();
   } catch {
@@ -139,7 +150,11 @@ async function loadFallbackSession(agentName?: string, threadId?: string): Promi
   }
 }
 
-async function saveFallbackSession(session: GlobalSession, agentName?: string, threadId?: string): Promise<void> {
+async function saveFallbackSession(
+  session: GlobalSession,
+  agentName?: string,
+  threadId?: string,
+): Promise<void> {
   const path = fallbackSessionPathFor(agentName, threadId);
   await mkdir(dirname(path), { recursive: true });
   await Bun.write(path, JSON.stringify(session, null, 2) + "\n");
@@ -147,7 +162,7 @@ async function saveFallbackSession(session: GlobalSession, agentName?: string, t
 
 export async function getFallbackSession(
   agentName?: string,
-  threadId?: string
+  threadId?: string,
 ): Promise<{ sessionId: string; turnCount: number } | null> {
   const existing = await loadFallbackSession(agentName, threadId);
   if (existing) {
@@ -159,17 +174,28 @@ export async function getFallbackSession(
   return null;
 }
 
-export async function createFallbackSession(sessionId: string, agentName?: string, threadId?: string): Promise<void> {
-  await saveFallbackSession({
-    sessionId,
-    createdAt: new Date().toISOString(),
-    lastUsedAt: new Date().toISOString(),
-    turnCount: 0,
-    compactWarned: false,
-  }, agentName, threadId);
+export async function createFallbackSession(
+  sessionId: string,
+  agentName?: string,
+  threadId?: string,
+): Promise<void> {
+  await saveFallbackSession(
+    {
+      sessionId,
+      createdAt: new Date().toISOString(),
+      lastUsedAt: new Date().toISOString(),
+      turnCount: 0,
+      compactWarned: false,
+    },
+    agentName,
+    threadId,
+  );
 }
 
-export async function incrementFallbackTurn(agentName?: string, threadId?: string): Promise<number> {
+export async function incrementFallbackTurn(
+  agentName?: string,
+  threadId?: string,
+): Promise<number> {
   const existing = await loadFallbackSession(agentName, threadId);
   if (!existing) return 0;
   if (typeof existing.turnCount !== "number") existing.turnCount = 0;

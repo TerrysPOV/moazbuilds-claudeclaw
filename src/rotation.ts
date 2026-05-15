@@ -42,7 +42,7 @@ export async function rotateSession(config: SessionConfig): Promise<string | nul
 
   const ageH = Math.round((Date.now() - new Date(session.createdAt).getTime()) / 3_600_000);
   console.log(
-    `[${new Date().toLocaleTimeString()}] Rotating session ${session.sessionId.slice(0, 8)} (messages: ${session.messageCount ?? 0}, age: ${ageH}h)`
+    `[${new Date().toLocaleTimeString()}] Rotating session ${session.sessionId.slice(0, 8)} (messages: ${session.messageCount ?? 0}, age: ${ageH}h)`,
   );
 
   let freshSummary: string | null = null;
@@ -60,7 +60,9 @@ export async function rotateSession(config: SessionConfig): Promise<string | nul
   }
 
   await resetSession();
-  console.log(`[${new Date().toLocaleTimeString()}] Session rotated — next message will create a new session`);
+  console.log(
+    `[${new Date().toLocaleTimeString()}] Session rotated — next message will create a new session`,
+  );
   return freshSummary;
 }
 
@@ -72,19 +74,22 @@ async function generateSummary(sessionId: string, summaryPath: string): Promise<
   try {
     summaryPrompt = await Bun.file(SUMMARY_PROMPT_FILE).text();
   } catch {
-    summaryPrompt = "Generate a brief session summary in markdown. Include: key decisions, unfinished tasks, important context for the next session. Max 500 words.";
+    summaryPrompt =
+      "Generate a brief session summary in markdown. Include: key decisions, unfinished tasks, important context for the next session. Max 500 words.";
   }
 
   const proc = Bun.spawn(
     ["claude", "-p", summaryPrompt, "--resume", sessionId, "--output-format", "text"],
-    { stdout: "pipe", stderr: "pipe", env: cleanEnv() }
+    { stdout: "pipe", stderr: "pipe", env: cleanEnv() },
   );
 
   // Kill the subprocess and skip summary if it takes too long.
   let killed = false;
   const timer = setTimeout(() => {
     killed = true;
-    try { proc.kill(); } catch {}
+    try {
+      proc.kill();
+    } catch {}
   }, SUMMARY_TIMEOUT_MS);
 
   const [stdout, stderr] = await Promise.all([
@@ -95,12 +100,17 @@ async function generateSummary(sessionId: string, summaryPath: string): Promise<
   clearTimeout(timer);
 
   if (killed) {
-    console.warn(`[${new Date().toLocaleTimeString()}] Summary generation timed out after ${SUMMARY_TIMEOUT_MS / 1000}s — continuing rotation without summary`);
+    console.warn(
+      `[${new Date().toLocaleTimeString()}] Summary generation timed out after ${SUMMARY_TIMEOUT_MS / 1000}s — continuing rotation without summary`,
+    );
     return null;
   }
 
   if (proc.exitCode !== 0 || !stdout.trim()) {
-    console.error(`[${new Date().toLocaleTimeString()}] Summary generation failed (exit ${proc.exitCode}):`, stderr);
+    console.error(
+      `[${new Date().toLocaleTimeString()}] Summary generation failed (exit ${proc.exitCode}):`,
+      stderr,
+    );
     return null;
   }
 

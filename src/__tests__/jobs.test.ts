@@ -7,7 +7,13 @@
 import { describe, it, expect, afterEach, test, beforeEach, afterAll } from "bun:test";
 import { rm, mkdir, writeFile } from "fs/promises";
 import { join } from "path";
-import { loadJobs, validateModelString, resolveJobModel, VALID_MODEL_STRINGS, type Job } from "../jobs";
+import {
+  loadJobs,
+  validateModelString,
+  resolveJobModel,
+  VALID_MODEL_STRINGS,
+  type Job,
+} from "../jobs";
 import { spyOn } from "bun:test";
 
 const PROJECT = process.cwd();
@@ -23,7 +29,12 @@ function uniq(suffix: string): string {
   return name;
 }
 
-async function writeAgentJob(agent: string, label: string, frontmatter: string, body = "do the thing"): Promise<void> {
+async function writeAgentJob(
+  agent: string,
+  label: string,
+  frontmatter: string,
+  body = "do the thing",
+): Promise<void> {
   const dir = join(UNIT_AGENTS_DIR, agent, "jobs");
   await mkdir(dir, { recursive: true });
   await writeFile(join(dir, `${label}.md`), `---\n${frontmatter}\n---\n${body}\n`, "utf8");
@@ -296,10 +307,7 @@ describe("loadJobs (sandbox integration)", () => {
   });
 
   test("loads job from legacy .claude/claudeclaw/jobs/", async () => {
-    await writeFile(
-      join(LEGACY_JOBS_DIR, "nightly.md"),
-      jobMd("0 3 * * *", "Run nightly report")
-    );
+    await writeFile(join(LEGACY_JOBS_DIR, "nightly.md"), jobMd("0 3 * * *", "Run nightly report"));
     const jobs = await loadJobsInSandbox();
     const job = jobs.find((j) => j.name === "nightly");
     expect(job).toBeDefined();
@@ -311,7 +319,7 @@ describe("loadJobs (sandbox integration)", () => {
   test("loads job from agents/<name>/jobs/ (Phase 17 path)", async () => {
     await writeFile(
       join(AGENTS_DIR, "suzy", "jobs", "daily-digest.md"),
-      jobMd("0 9 * * *", "Summarise today's news")
+      jobMd("0 9 * * *", "Summarise today's news"),
     );
     const jobs = await loadJobsInSandbox();
     const job = jobs.find((j) => j.name === "suzy/daily-digest");
@@ -326,7 +334,7 @@ describe("loadJobs (sandbox integration)", () => {
     // Even if the .md file says agent: wrong, the enclosing dir wins.
     await writeFile(
       join(AGENTS_DIR, "reg", "jobs", "seo.md"),
-      jobMd("30 10 * * *", "SEO review", "agent: wrong-agent")
+      jobMd("30 10 * * *", "SEO review", "agent: wrong-agent"),
     );
     const jobs = await loadJobsInSandbox();
     const job = jobs.find((j) => j.name === "reg/seo");
@@ -336,7 +344,7 @@ describe("loadJobs (sandbox integration)", () => {
   test("enabled: false excludes job", async () => {
     await writeFile(
       join(AGENTS_DIR, "suzy", "jobs", "disabled.md"),
-      jobMd("0 12 * * *", "Disabled", "enabled: false")
+      jobMd("0 12 * * *", "Disabled", "enabled: false"),
     );
     const jobs = await loadJobsInSandbox();
     expect(jobs.find((j) => j.name === "suzy/disabled")).toBeUndefined();
@@ -367,7 +375,7 @@ describe("loadJobs (sandbox integration)", () => {
   test("job file without schedule: field is skipped gracefully", async () => {
     await writeFile(
       join(AGENTS_DIR, "suzy", "jobs", "bad.md"),
-      "---\nprompt: test\n---\nNo schedule line.\n"
+      "---\nprompt: test\n---\nNo schedule line.\n",
     );
     // Should not throw, should return other valid jobs
     const jobs = await loadJobsInSandbox();
@@ -416,8 +424,12 @@ describe("sessions — agent-scoped paths", () => {
     const runnerSrc = await Bun.file(join(import.meta.dir, "../runner.ts")).text();
     const discordSrc = await Bun.file(join(import.meta.dir, "../commands/discord.ts")).text();
 
-    expect(sessionsSrc).toContain('join(HEARTBEAT_DIR, "fallback-sessions", `${encodeURIComponent(threadId)}.json`)');
-    expect(sessionsSrc).toContain("getFallbackSession(\n  agentName?: string,\n  threadId?: string");
+    expect(sessionsSrc).toContain(
+      'join(HEARTBEAT_DIR, "fallback-sessions", `${encodeURIComponent(threadId)}.json`)',
+    );
+    expect(sessionsSrc).toContain(
+      "getFallbackSession(\n  agentName?: string,\n  threadId?: string",
+    );
     expect(runnerSrc).toContain("getFallbackSession(agentName, threadId)");
     expect(runnerSrc).toContain("createFallbackSession(exec.sessionId, agentName, threadId)");
     expect(discordSrc).toContain("resetFallbackSession(undefined, interaction.channel_id!)");

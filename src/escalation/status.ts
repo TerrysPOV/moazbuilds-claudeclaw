@@ -1,8 +1,8 @@
 /**
  * Escalation Status View
- * 
+ *
  * Provide a durable read-side view of current pause/escalation/handoff status.
- * 
+ *
  * DESIGN:
  * - Status view derives from persisted escalation state
  * - Read-only view that aggregates pause, handoff, and notification status
@@ -15,7 +15,11 @@ import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { PauseState } from "./pause";
 import type { HandoffPackage, HandoffStatus, HandoffSeverity } from "./handoff";
-import type { EscalationNotification, NotificationType, NotificationSeverity } from "./notifications";
+import type {
+  EscalationNotification,
+  NotificationType,
+  NotificationSeverity,
+} from "./notifications";
 
 // ============================================================================
 // Types
@@ -65,7 +69,13 @@ export interface NotificationSummary {
 export interface EscalationActionSummary {
   actionId: string;
   timestamp: string;
-  action: "pause" | "resume" | "handoff_created" | "handoff_accepted" | "handoff_closed" | "notification";
+  action:
+    | "pause"
+    | "resume"
+    | "handoff_created"
+    | "handoff_accepted"
+    | "handoff_closed"
+    | "notification";
   actor: string;
   details?: Record<string, unknown>;
 }
@@ -105,13 +115,11 @@ const HANDOFF_ACTIONS_FILE = join(ESCALATION_DIR, "handoff-actions.jsonl");
 /**
  * Get the complete escalation status.
  * This is the main entry point for status views.
- * 
+ *
  * @param filters - Optional filters for the status view
  * @returns The complete escalation status
  */
-export async function getEscalationStatus(
-  filters: StatusFilters = {}
-): Promise<EscalationStatus> {
+export async function getEscalationStatus(filters: StatusFilters = {}): Promise<EscalationStatus> {
   const timestamp = new Date().toISOString();
 
   // Get all status components in parallel
@@ -125,10 +133,11 @@ export async function getEscalationStatus(
   // Calculate summary
   const summary: EscalationSummary = {
     totalHandoffs: handoffs.length,
-    openHandoffs: handoffs.filter(h => h.status === "open").length,
-    criticalHandoffs: handoffs.filter(h => h.severity === "critical" && h.status !== "closed").length,
-    totalNotifications24h: notifications.filter(n => isWithinHours(n.createdAt, 24)).length,
-    undeliveredNotifications: notifications.filter(n => !n.delivered).length,
+    openHandoffs: handoffs.filter((h) => h.status === "open").length,
+    criticalHandoffs: handoffs.filter((h) => h.severity === "critical" && h.status !== "closed")
+      .length,
+    totalNotifications24h: notifications.filter((n) => isWithinHours(n.createdAt, 24)).length,
+    undeliveredNotifications: notifications.filter((n) => !n.delivered).length,
     isPaused: pause.paused,
   };
 
@@ -154,10 +163,11 @@ export async function getEscalationSummary(): Promise<EscalationSummary> {
 
   return {
     totalHandoffs: handoffs.length,
-    openHandoffs: handoffs.filter(h => h.status === "open").length,
-    criticalHandoffs: handoffs.filter(h => h.severity === "critical" && h.status !== "closed").length,
-    totalNotifications24h: notifications.filter(n => isWithinHours(n.createdAt, 24)).length,
-    undeliveredNotifications: notifications.filter(n => !n.delivered).length,
+    openHandoffs: handoffs.filter((h) => h.status === "open").length,
+    criticalHandoffs: handoffs.filter((h) => h.severity === "critical" && h.status !== "closed")
+      .length,
+    totalNotifications24h: notifications.filter((n) => isWithinHours(n.createdAt, 24)).length,
+    undeliveredNotifications: notifications.filter((n) => !n.delivered).length,
     isPaused: pauseStatus.paused,
   };
 }
@@ -243,7 +253,7 @@ async function getHandoffSummaries(filters: StatusFilters): Promise<HandoffSumma
     }
 
     const files = await readdir(HANDOFFS_DIR);
-    const jsonFiles = files.filter(f => f.endsWith(".json") && f !== "index.json");
+    const jsonFiles = files.filter((f) => f.endsWith(".json") && f !== "index.json");
 
     for (const file of jsonFiles) {
       try {
@@ -271,28 +281,21 @@ async function getHandoffSummaries(filters: StatusFilters): Promise<HandoffSumma
           acceptedBy: handoff.acceptedBy,
           closedBy: handoff.closedBy,
         });
-      } catch {
-        // Skip malformed files
-        continue;
-      }
+      } catch {}
     }
   } catch {
     // Directory might not exist
   }
 
   // Sort by createdAt descending (newest first)
-  summaries.sort((a, b) => 
-    new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-  );
+  summaries.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
   // Apply limit
   const limit = filters.handoffLimit ?? 50;
   return summaries.slice(0, limit);
 }
 
-async function getNotificationSummaries(
-  filters: StatusFilters
-): Promise<NotificationSummary[]> {
+async function getNotificationSummaries(filters: StatusFilters): Promise<NotificationSummary[]> {
   const summaries: NotificationSummary[] = [];
 
   try {
@@ -301,7 +304,7 @@ async function getNotificationSummaries(
     }
 
     const files = await readdir(NOTIFICATIONS_DIR);
-    const jsonFiles = files.filter(f => f.endsWith(".json"));
+    const jsonFiles = files.filter((f) => f.endsWith(".json"));
 
     for (const file of jsonFiles) {
       try {
@@ -323,19 +326,14 @@ async function getNotificationSummaries(
           eventId: notification.eventId,
           workflowId: notification.workflowId,
         });
-      } catch {
-        // Skip malformed files
-        continue;
-      }
+      } catch {}
     }
   } catch {
     // Directory might not exist
   }
 
   // Sort by createdAt descending (newest first)
-  summaries.sort((a, b) => 
-    new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-  );
+  summaries.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
   // Apply limit
   const limit = filters.notificationLimit ?? 50;
@@ -349,7 +347,7 @@ async function getRecentActions(filters: StatusFilters): Promise<EscalationActio
   try {
     if (existsSync(PAUSE_ACTIONS_FILE)) {
       const content = await readFile(PAUSE_ACTIONS_FILE, "utf8");
-      const lines = content.split("\n").filter(line => line.trim());
+      const lines = content.split("\n").filter((line) => line.trim());
 
       for (const line of lines) {
         try {
@@ -365,9 +363,7 @@ async function getRecentActions(filters: StatusFilters): Promise<EscalationActio
             actor: action.actor,
             details: { mode: action.mode, reason: action.reason },
           });
-        } catch {
-          continue;
-        }
+        } catch {}
       }
     }
   } catch {
@@ -378,7 +374,7 @@ async function getRecentActions(filters: StatusFilters): Promise<EscalationActio
   try {
     if (existsSync(HANDOFF_ACTIONS_FILE)) {
       const content = await readFile(HANDOFF_ACTIONS_FILE, "utf8");
-      const lines = content.split("\n").filter(line => line.trim());
+      const lines = content.split("\n").filter((line) => line.trim());
 
       for (const line of lines) {
         try {
@@ -409,9 +405,7 @@ async function getRecentActions(filters: StatusFilters): Promise<EscalationActio
             actor: action.actor,
             details: { handoffId: action.handoffId },
           });
-        } catch {
-          continue;
-        }
+        } catch {}
       }
     }
   } catch {
@@ -419,9 +413,7 @@ async function getRecentActions(filters: StatusFilters): Promise<EscalationActio
   }
 
   // Sort by timestamp descending (newest first)
-  actions.sort((a, b) => 
-    new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-  );
+  actions.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
   // Apply limit
   const limit = filters.actionLimit ?? 50;
@@ -475,7 +467,9 @@ export function formatStatus(status: EscalationStatus): string {
 
   // Handoffs
   lines.push("─".repeat(60));
-  lines.push(`HANDOFFS (${status.summary.openHandoffs} open, ${status.summary.criticalHandoffs} critical)`);
+  lines.push(
+    `HANDOFFS (${status.summary.openHandoffs} open, ${status.summary.criticalHandoffs} critical)`,
+  );
   lines.push("─".repeat(60));
   if (status.handoffs.length === 0) {
     lines.push("No handoffs");
@@ -487,7 +481,9 @@ export function formatStatus(status: EscalationStatus): string {
       } else if (h.severity === "warning") {
         icon = "🟡";
       }
-      lines.push(`${icon} [${h.status.toUpperCase()}] ${h.reason.slice(0, 50)}${h.reason.length > 50 ? "..." : ""}`);
+      lines.push(
+        `${icon} [${h.status.toUpperCase()}] ${h.reason.slice(0, 50)}${h.reason.length > 50 ? "..." : ""}`,
+      );
       lines.push(`   ID: ${h.handoffId} | Created: ${h.createdAt}`);
     }
     if (status.handoffs.length > 10) {
@@ -505,7 +501,9 @@ export function formatStatus(status: EscalationStatus): string {
   } else {
     for (const n of status.notifications.slice(0, 5)) {
       const icon = n.delivered ? "✅" : "📤";
-      lines.push(`${icon} [${n.severity.toUpperCase()}] ${n.type}: ${n.message.slice(0, 40)}${n.message.length > 40 ? "..." : ""}`);
+      lines.push(
+        `${icon} [${n.severity.toUpperCase()}] ${n.type}: ${n.message.slice(0, 40)}${n.message.length > 40 ? "..." : ""}`,
+      );
     }
     if (status.notifications.length > 5) {
       lines.push(`... and ${status.notifications.length - 5} more`);

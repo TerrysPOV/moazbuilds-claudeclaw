@@ -40,7 +40,7 @@ describe("PtyProcess — lifecycle", () => {
       baseOpts({
         _commandOverride: "/bin/cat",
         _argsOverride: [],
-      })
+      }),
     );
     expect(proc.isAlive()).toBe(true);
     expect(proc.pid).toBeGreaterThan(0);
@@ -52,9 +52,7 @@ describe("PtyProcess — lifecycle", () => {
   });
 
   test("dispose is idempotent", async () => {
-    const proc = await spawnPty(
-      baseOpts({ _commandOverride: "/bin/cat", _argsOverride: [] })
-    );
+    const proc = await spawnPty(baseOpts({ _commandOverride: "/bin/cat", _argsOverride: [] }));
     await proc.dispose();
     await proc.dispose();
     expect(proc.isAlive()).toBe(false);
@@ -66,7 +64,7 @@ describe("PtyProcess — lifecycle", () => {
       baseOpts({
         _commandOverride: "/bin/echo",
         _argsOverride: ["hi"],
-      })
+      }),
     );
     // Give the process a moment to exit naturally.
     await new Promise<void>((resolve) => setTimeout(resolve, 200));
@@ -81,7 +79,7 @@ describe("PtyProcess — lifecycle", () => {
         baseOpts({
           _commandOverride: "/usr/local/bin/definitely-not-a-real-binary-xyzzy",
           _argsOverride: [],
-        })
+        }),
       );
     } catch (e) {
       err = e;
@@ -106,7 +104,7 @@ describe("PtyProcess — runTurn idle timeout", () => {
         _commandOverride: "/bin/cat",
         _argsOverride: [],
         turnIdleTimeoutMs: 150, // short timeout for test speed
-      })
+      }),
     );
     const result = await proc.runTurn("hello world", { timeoutMs: 5000 });
     expect(result.cleanBoundary).toBe(false);
@@ -124,7 +122,7 @@ describe("PtyProcess — runTurn idle timeout", () => {
         _commandOverride: "/bin/cat",
         _argsOverride: [],
         turnIdleTimeoutMs: 150,
-      })
+      }),
     );
     const longPrompt = "x".repeat(500);
     const result = await proc.runTurn(longPrompt, { timeoutMs: 5000 });
@@ -146,7 +144,7 @@ describe("PtyProcess — runTurn hard timeout", () => {
         _commandOverride: "/bin/sh",
         _argsOverride: ["-c", "sleep 5"],
         turnIdleTimeoutMs: 10_000, // longer than the hard timeoutMs below
-      })
+      }),
     );
     let err: unknown;
     try {
@@ -177,7 +175,7 @@ describe("PtyProcess — runTurn clean boundary", () => {
         _commandOverride: "/bin/sh",
         _argsOverride: ["-c", oscScript],
         turnIdleTimeoutMs: 10_000,
-      })
+      }),
     );
 
     let chunkBytes = 0;
@@ -205,7 +203,7 @@ describe("PtyProcess — concurrency", () => {
         _commandOverride: "/bin/cat",
         _argsOverride: [],
         turnIdleTimeoutMs: 300,
-      })
+      }),
     );
     const t1 = proc.runTurn("first", { timeoutMs: 5000 });
     let err: unknown;
@@ -231,7 +229,7 @@ describe("PtyProcess — runTurn on closed PTY", () => {
         _commandOverride: "/bin/sh",
         _argsOverride: ["-c", "sleep 0.1; exit 7"],
         turnIdleTimeoutMs: 10_000,
-      })
+      }),
     );
     let err: unknown;
     try {
@@ -289,10 +287,7 @@ describe("PtyProcess — buildClaudeArgs emits appendSystemPrompt (Phase D fix #
 
 describe("PtyProcess — buildClaudeArgs honours securityArgs (Phase D fix #3)", () => {
   test("when securityArgs is provided, it's used verbatim instead of derived flags", () => {
-    const explicitArgs = [
-      "--permission-mode", "plan",
-      "--tools", "Read,Grep,Glob,Write",
-    ];
+    const explicitArgs = ["--permission-mode", "plan", "--tools", "Read,Grep,Glob,Write"];
     const opts: PtyProcessOptions = {
       sessionId: "",
       cwd: "/tmp",
@@ -376,7 +371,7 @@ describe("PtyProcess — sessionId", () => {
         _commandOverride: "/bin/cat",
         _argsOverride: [],
         sessionId: sid,
-      })
+      }),
     );
     expect(proc.sessionId).toBe(sid);
     await proc.dispose();
@@ -390,7 +385,7 @@ describe("PtyProcess — sessionId", () => {
         _argsOverride: [],
         sessionId: "",
         newSessionId: sid,
-      })
+      }),
     );
     expect(proc.sessionId).toBe(sid);
     await proc.dispose();
