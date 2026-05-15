@@ -66,6 +66,16 @@ export interface PtyProcessOptions {
   appendSystemPrompt?: string;
   /** Env vars to pass to the child. Caller is responsible for a sanitised env. */
   env: Record<string, string>;
+  /**
+   * Absolute path to a synthesized `--mcp-config` JSON written by the
+   * supervisor (see SPEC §4.5). When set, the PTY appends
+   * `--mcp-config <path>` to claude's argv so the child consults the
+   * multiplexer's shared MCP servers via local HTTP instead of stdio-spawning
+   * its own MCP children. When unset, claude falls back to its default MCP
+   * discovery (`~/.claude/mcp.json` etc.) — byte-identical to today's PTY
+   * behaviour when `settings.mcp.shared` is empty.
+   */
+  mcpConfigPath?: string;
   /** Initial PTY columns. Default 100. */
   cols?: number;
   /** Initial PTY rows. Default 30. */
@@ -228,6 +238,16 @@ function buildClaudeArgs(opts: PtyProcessOptions): string[] {
   // claude accepts --append-system-prompt (verified via `claude --help`).
   if (opts.appendSystemPrompt && opts.appendSystemPrompt.length > 0) {
     args.push("--append-system-prompt", opts.appendSystemPrompt);
+  }
+
+  // MCP multiplexer (SPEC §4.5): when the supervisor synthesized a per-PTY
+  // `--mcp-config` file, point claude at it so the child consults shared
+  // MCP-server HTTP endpoints instead of stdio-spawning its own children.
+  // Additive — Claude Code merges this with `~/.claude/mcp.json` (no
+  // `--strict-mcp-config`), so non-shared MCPs from the operator's global
+  // config still load per-PTY as today.
+  if (opts.mcpConfigPath && opts.mcpConfigPath.length > 0) {
+    args.push("--mcp-config", opts.mcpConfigPath);
   }
 
   return args;
