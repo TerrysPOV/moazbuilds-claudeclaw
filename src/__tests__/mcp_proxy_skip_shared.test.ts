@@ -68,18 +68,13 @@ afterEach(async () => {
 });
 
 describe("McpProxyPlugin — skip rule for shared servers", () => {
-  it("starts every enabled server when mcp.shared is empty", async () => {
+  it("starts every enabled server when the multiplexer claims nothing", async () => {
     const cfgPath = writeProxyConfig(tmpDir, ["alpha", "beta"]);
-
-    // Patch live settings cache to ensure mcp.shared is empty.
-    const settings = (await loadSettings()) as unknown as {
-      mcp?: { shared?: string[] };
-    };
-    settings.mcp = { shared: [] };
 
     const plugin = new McpProxyPlugin({
       configPath: cfgPath,
       tokenPath: join(tmpDir, "mcp-proxy.token"),
+      claimedByMultiplexer: () => new Set(),
     });
     await plugin.start();
 
@@ -94,17 +89,13 @@ describe("McpProxyPlugin — skip rule for shared servers", () => {
     }
   });
 
-  it("skips servers listed in mcp.shared", async () => {
+  it("skips servers actively claimed by the multiplexer", async () => {
     const cfgPath = writeProxyConfig(tmpDir, ["alpha", "beta", "gamma"]);
-
-    const settings = (await loadSettings()) as unknown as {
-      mcp?: { shared?: string[] };
-    };
-    settings.mcp = { shared: ["alpha", "beta"] };
 
     const plugin = new McpProxyPlugin({
       configPath: cfgPath,
       tokenPath: join(tmpDir, "mcp-proxy.token"),
+      claimedByMultiplexer: () => new Set(["alpha", "beta"]),
     });
     await plugin.start();
 
@@ -112,46 +103,55 @@ describe("McpProxyPlugin — skip rule for shared servers", () => {
       const fqns = getMcpBridge().listTools().map((t) => t.fqn);
       expect(fqns).not.toContain("mcp-proxy__alpha__echo");
       expect(fqns).not.toContain("mcp-proxy__beta__echo");
-      // gamma was not in shared → mcp-proxy still owns it.
+      // gamma was not claimed → mcp-proxy still owns it.
       expect(fqns).toContain("mcp-proxy__gamma__echo");
     } finally {
       await plugin.stop();
     }
   });
 
-  it("missing mcp settings (W2 not yet wired) is treated as empty shared", async () => {
+  it("Codex PR #71 P1 regression — DOES NOT skip when multiplexer is dormant despite mcp.shared being populated", async () => {
+    // Scenario: operator put `mcp.shared = ["alpha"]` in settings, but the
+    // multiplexer plugin went dormant for any reason (web disabled,
+    // non-loopback host, zero claimed servers, missing mcp-proxy.json).
+    // Before the fix, mcp-proxy still skipped "alpha" → tools became
+    // unreachable from BOTH paths. After the fix, mcp-proxy spawns it
+    // because the multiplexer isn't actually serving it.
     const cfgPath = writeProxyConfig(tmpDir, ["alpha"]);
 
+    // Even with settings.mcp.shared populated, the multiplexer hasn't
+    // claimed anything → resolver returns empty set.
     const settings = (await loadSettings()) as unknown as {
       mcp?: { shared?: string[] };
     };
-    delete settings.mcp;
+    settings.mcp = { shared: ["alpha"] };
 
     const plugin = new McpProxyPlugin({
       configPath: cfgPath,
       tokenPath: join(tmpDir, "mcp-proxy.token"),
+      claimedByMultiplexer: () => new Set(), // dormant
     });
     await plugin.start();
 
     try {
       const fqns = getMcpBridge().listTools().map((t) => t.fqn);
+      // mcp-proxy still serves alpha — legacy callsites keep working.
       expect(fqns).toContain("mcp-proxy__alpha__echo");
     } finally {
       await plugin.stop();
     }
   });
 
-  it("non-array mcp.shared is treated as empty", async () => {
+  it("defaults to the production resolver when no test seam is provided", async () => {
+    // Smoke test: in the absence of an active multiplexer plugin singleton,
+    // the production resolver should return an empty set and proxy spawns
+    // everything.
     const cfgPath = writeProxyConfig(tmpDir, ["alpha"]);
-
-    const settings = (await loadSettings()) as unknown as {
-      mcp?: unknown;
-    };
-    settings.mcp = { shared: "not-an-array" };
 
     const plugin = new McpProxyPlugin({
       configPath: cfgPath,
       tokenPath: join(tmpDir, "mcp-proxy.token"),
+      // No claimedByMultiplexer override — uses default resolver.
     });
     await plugin.start();
 

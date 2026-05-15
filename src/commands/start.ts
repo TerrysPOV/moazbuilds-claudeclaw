@@ -587,15 +587,28 @@ export async function start(args: string[] = []) {
     try {
       const plugin = getMcpMultiplexerPlugin();
       await plugin.start();
-      // Wire the supervisor seam so PTY spawns synthesize per-PTY configs.
-      // bridgeBaseUrl reads from the plugin so supervisor and plugin can't
-      // drift on the URL the multiplexer actually bound to.
-      injectMcpIdentityIssuer({
-        issue: (ptyId) => plugin.issueIdentity(ptyId),
-        revoke: (ptyId) => plugin.releaseIdentity(ptyId),
-        bridgeBaseUrl: () => plugin.bridgeBaseUrl(),
-      });
-      console.log("[mcp-multiplexer] started");
+      // Codex PR #71 P1: plugin.start() can return successfully but leave
+      // the multiplexer dormant (missing/invalid mcp-proxy.json, zero
+      // claimed servers, etc). Only wire the supervisor seam when the
+      // plugin is *actually* serving — otherwise the supervisor would
+      // synthesize --mcp-config entries pointing at routes that were
+      // never registered. When dormant, supervisor's existing
+      // null-issuer guard skips synthesis and PTYs fall back to default
+      // MCP discovery, exactly as the surrounding comment promises.
+      if (plugin.isActive()) {
+        // bridgeBaseUrl reads from the plugin so supervisor and plugin
+        // can't drift on the URL the multiplexer actually bound to.
+        injectMcpIdentityIssuer({
+          issue: (ptyId) => plugin.issueIdentity(ptyId),
+          revoke: (ptyId) => plugin.releaseIdentity(ptyId),
+          bridgeBaseUrl: () => plugin.bridgeBaseUrl(),
+        });
+        console.log("[mcp-multiplexer] started");
+      } else {
+        console.warn(
+          "[mcp-multiplexer] start() returned dormant — supervisor wiring skipped, PTYs fall back to default MCP discovery.",
+        );
+      }
     } catch (err) {
       // Don't crash the daemon — log clearly and fall back to per-PTY MCP
       // discovery (settings.mcp.shared becomes effectively dormant).
