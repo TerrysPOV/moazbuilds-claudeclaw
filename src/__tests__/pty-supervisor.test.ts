@@ -24,10 +24,13 @@ import {
   injectEnsureAgentDir,
   injectMaxConcurrentForTests,
   injectMaxRetriesForTests,
+  injectNewSessionId,
   killAllPtys,
   __resetSupervisorForTests,
   __isSupervisorInitialisedForTests,
 } from "../runner/pty-supervisor";
+import { getSession, resetSession } from "../sessions";
+import { getThreadSession } from "../sessionManager";
 import {
   PtyClosedError,
   PtyTurnTimeoutError,
@@ -962,5 +965,143 @@ describe("pty-supervisor env-sanitisation (Phase D fix #1)", () => {
         else process.env[k] = v;
       }
     }
+  });
+});
+
+describe("pty-supervisor fresh-session persistence (Codex Phase D #2)", () => {
+  it("agent: with no stored session, spawn pre-allocates --session-id and persists to disk", async () => {
+    let captured: PtyProcessOptions | null = null;
+    const { spawn } = makeSpawnTracker((opts) => {
+      captured = opts;
+      return makeFakePty("agent:alice", {});
+    });
+    injectSpawnPty(spawn);
+    injectNewSessionId(() => "uuid-alice-fresh");
+
+    await runOnPty("agent:alice", "first turn", {
+      timeoutMs: 60_000,
+      agentName: "alice",
+    });
+
+    // The supervisor passed `newSessionId` to the spawn, and the stored
+    // sessionId was empty (fresh agent — no prior session.json).
+    expect(captured).not.toBeNull();
+    expect(captured!.sessionId).toBe("");
+    expect(captured!.newSessionId).toBe("uuid-alice-fresh");
+
+    // The UUID has been persisted to agents/alice/session.json — verify via
+    // the public getSession() helper that the supervisor uses for resume.
+    const stored = await getSession("alice");
+    expect(stored?.sessionId).toBe("uuid-alice-fresh");
+  });
+
+  it("thread: with no stored session, spawn pre-allocates --session-id and persists to disk", async () => {
+    let captured: PtyProcessOptions | null = null;
+    const { spawn } = makeSpawnTracker((opts) => {
+      captured = opts;
+      return makeFakePty("thread:t-fresh", {});
+    });
+    injectSpawnPty(spawn);
+    injectNewSessionId(() => "uuid-thread-fresh");
+
+    await runOnPty("thread:t-fresh", "first turn", {
+      timeoutMs: 60_000,
+      threadId: "t-fresh",
+    });
+
+    expect(captured!.sessionId).toBe("");
+    expect(captured!.newSessionId).toBe("uuid-thread-fresh");
+
+    const stored = await getThreadSession("t-fresh");
+    expect(stored?.sessionId).toBe("uuid-thread-fresh");
+  });
+
+  it("global: with no stored session, spawn pre-allocates --session-id and persists to disk", async () => {
+    // Other test files in the suite may have populated the in-memory global
+    // session cache. Clear it so this test reflects a true cold-boot.
+    await resetSession();
+    let captured: PtyProcessOptions | null = null;
+    const { spawn } = makeSpawnTracker((opts) => {
+      captured = opts;
+      return makeFakePty("global", {});
+    });
+    injectSpawnPty(spawn);
+    injectNewSessionId(() => "uuid-global-fresh");
+
+    await runOnPty("global", "first turn", { timeoutMs: 60_000 });
+
+    expect(captured!.sessionId).toBe("");
+    expect(captured!.newSessionId).toBe("uuid-global-fresh");
+
+    const stored = await getSession();
+    expect(stored?.sessionId).toBe("uuid-global-fresh");
+  });
+
+  it("simulated daemon restart: persisted UUID is used as --resume on next runOnPty", async () => {
+    // First boot — spawn pre-allocates and persists.
+    {
+      const { spawn } = makeSpawnTracker(() =>
+        makeFakePty("agent:suzy", { initialSessionId: "uuid-suzy-fresh" }),
+      );
+      injectSpawnPty(spawn);
+      injectNewSessionId(() => "uuid-suzy-fresh");
+
+      await runOnPty("agent:suzy", "first turn", {
+        timeoutMs: 60_000,
+        agentName: "suzy",
+      });
+    }
+    expect((await getSession("suzy"))?.sessionId).toBe("uuid-suzy-fresh");
+
+    // Simulate daemon restart — wipe all in-memory supervisor state. The
+    // on-disk session.json must survive.
+    __resetSupervisorForTests();
+    injectEnsureAgentDir(async (name: string) => `/tmp/agents/${name}`);
+
+    // Second boot — supervisor must read the stored UUID and pass it as
+    // `sessionId` (not `newSessionId`).
+    let captured: PtyProcessOptions | null = null;
+    const { spawn: spawn2 } = makeSpawnTracker((opts) => {
+      captured = opts;
+      return makeFakePty("agent:suzy", { initialSessionId: opts.sessionId });
+    });
+    injectSpawnPty(spawn2);
+    // Force a different UUID for any fresh-session path — we expect this NOT
+    // to be used because the supervisor must find the persisted one.
+    injectNewSessionId(() => "uuid-suzy-wrong");
+
+    await runOnPty("agent:suzy", "second turn", {
+      timeoutMs: 60_000,
+      agentName: "suzy",
+    });
+
+    expect(captured!.sessionId).toBe("uuid-suzy-fresh");
+    expect(captured!.newSessionId).toBeUndefined();
+  });
+
+  it("does not pre-allocate when stored sessionId exists", async () => {
+    await resetSession();
+    // Seed the global session store first.
+    const { spawn: seedSpawn } = makeSpawnTracker(() =>
+      makeFakePty("global", { initialSessionId: "uuid-global-seed" }),
+    );
+    injectSpawnPty(seedSpawn);
+    injectNewSessionId(() => "uuid-global-seed");
+    await runOnPty("global", "seed", { timeoutMs: 60_000 });
+
+    // Now restart and run again — sessionId should be passed via --resume
+    // (not via --session-id), and newSessionId should be undefined.
+    __resetSupervisorForTests();
+    let captured: PtyProcessOptions | null = null;
+    const { spawn: spawn2 } = makeSpawnTracker((opts) => {
+      captured = opts;
+      return makeFakePty("global", { initialSessionId: opts.sessionId });
+    });
+    injectSpawnPty(spawn2);
+    injectNewSessionId(() => "uuid-should-not-be-used");
+
+    await runOnPty("global", "again", { timeoutMs: 60_000 });
+    expect(captured!.sessionId).toBe("uuid-global-seed");
+    expect(captured!.newSessionId).toBeUndefined();
   });
 });

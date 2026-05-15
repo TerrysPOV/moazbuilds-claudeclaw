@@ -162,6 +162,10 @@ let _spawnPty: SpawnPty | null = null;
 let _clock: () => number = () => Date.now();
 let _sleep: (ms: number) => Promise<void> = (ms) =>
   new Promise<void>((r) => setTimeout(r, ms));
+/** Injectable UUID generator. Used to pre-allocate a session ID for fresh
+ *  PTY spawns so the conversation survives daemon restart. Phase D fix
+ *  (Codex HIGH #2). */
+let _newSessionId: () => string = () => crypto.randomUUID();
 
 /** For tests only. Inject a fake spawnPty before any runOnPty call. */
 export function injectSpawnPty(fn: SpawnPty | null): void {
@@ -185,6 +189,12 @@ export function injectSleep(fn: (ms: number) => Promise<void>): void {
 
 export function resetSleep(): void {
   _sleep = (ms) => new Promise<void>((r) => setTimeout(r, ms));
+}
+
+/** For tests only. Inject a deterministic UUID generator so fresh-session
+ *  persistence can be pinned without randomness. */
+export function injectNewSessionId(fn: (() => string) | null): void {
+  _newSessionId = fn ?? (() => crypto.randomUUID());
 }
 
 /**
@@ -226,6 +236,7 @@ export function __resetSupervisorForTests(): void {
   _buildSecurityArgs = null;
   _maxConcurrentOverride = null;
   _maxRetriesOverride = null;
+  _newSessionId = () => crypto.randomUUID();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -628,6 +639,21 @@ async function buildSpawnOptions(
     sessionId = g?.sessionId ?? "";
   }
 
+  // Phase D fix (Codex HIGH #2): no stored session ID for this key. Pre-allocate
+  // a deterministic UUID and pass it via `--session-id` so the conversation
+  // survives daemon restart / idle reap / `/kill` / crash. Without this, fresh
+  // PTY conversations only live in the long-lived process — subsequent turns
+  // would start a brand-new Claude Code session every time.
+  //
+  // The supervisor persists this UUID to disk immediately after spawn (see
+  // `spawnEntry`), not on first-turn completion, so a daemon that dies between
+  // spawn and the first response still recovers the same conversation on
+  // restart.
+  let newSessionId: string | undefined;
+  if (!sessionId) {
+    newSessionId = _newSessionId();
+  }
+
   // Phase D fix #1: canonical env-sanitiser from runner.ts. Don't reinvent
   // the strip list — divergence here re-introduces the ANTHROPIC_API_KEY
   // billing leak.
@@ -650,6 +676,7 @@ async function buildSpawnOptions(
 
   return {
     sessionId,
+    newSessionId,
     cwd,
     agentName: entry.agentName,
     modelOverride: modelOverride ?? undefined,
@@ -721,6 +748,21 @@ async function spawnEntry(
   );
   entry.spawnOpts = spawnOpts;
   entry.pty = await spawn(spawnOpts);
+
+  // Phase D fix (Codex HIGH #2): persist a freshly pre-allocated session ID
+  // to disk immediately after spawn — not on first-turn completion. If the
+  // daemon dies between spawn and the first response (idle reap, /kill,
+  // crash, restart), the conversation is still resumable via --resume <id>
+  // on next message for the same sessionKey.
+  if (spawnOpts.newSessionId) {
+    try {
+      await persistSessionId(entry, spawnOpts.newSessionId);
+    } catch {
+      // Best-effort. If the on-disk write fails (filesystem error), the live
+      // PTY still has the UUID in its own state; persistence will be retried
+      // on the first runTurn completion via the existing post-turn path.
+    }
+  }
 }
 
 async function respawnEntry(entry: PtyEntry): Promise<void> {
