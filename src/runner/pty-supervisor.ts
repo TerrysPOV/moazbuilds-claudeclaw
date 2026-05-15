@@ -53,6 +53,13 @@ import { PtyClosedError, PtyTurnTimeoutError } from "./pty-process";
 import { getSettings, type SecurityConfig } from "../config";
 import { getSession, createSession } from "../sessions";
 import { getThreadSession, createThreadSession } from "../sessionManager";
+import {
+  writeConfigForPty,
+  deleteConfigForPty,
+  type PtyIdentity,
+  type SharedServerEntry,
+  type PerPtyServerEntry,
+} from "./pty-mcp-config-writer";
 
 // Lazy import for `ensureAgentDir` to avoid the circular-import hazard
 // (runner.ts imports this module to route into the supervisor; importing
@@ -74,6 +81,43 @@ async function ensureAgentDirLazy(name: string): Promise<string> {
 /** For tests only. Stub the agent-dir resolver. */
 export function injectEnsureAgentDir(fn: EnsureAgentDirFn | null): void {
   _ensureAgentDir = fn;
+}
+
+// ─── MCP multiplexer integration seam (SPEC §4.3 §4.5) ───────────────────────
+// The MCP multiplexer plugin (W1, src/plugins/mcp-multiplexer/) mints
+// per-PTY identities and routes shared MCP-server calls over local HTTP.
+// The supervisor only needs two operations from it: issue an identity for a
+// new PTY and revoke it on dispose. The full plugin doesn't exist in W2's
+// worktree, so this seam stays an optional dependency: when no issuer is
+// wired, the synthesis path simply doesn't fire and PTY behaviour is
+// byte-identical to today (matches the SPEC §6.1 dormant-multiplexer
+// contract from the perspective of the supervisor).
+//
+// At daemon startup (production), commands/start.ts calls
+// `injectMcpIdentityIssuer({ issue, revoke })` after the multiplexer plugin
+// starts. The issuer is opaque here — the supervisor only ever asks for
+// (ptyId) → PtyIdentity and (ptyId) → void.
+
+/** Function that returns a per-PTY identity (HMAC bearer header included). */
+export type McpIdentityIssuer = (ptyId: string) => PtyIdentity;
+/** Function that releases the per-PTY identity and any associated bridge
+ *  session state. Called from the supervisor's dispose paths. Safe to call
+ *  for an unknown ptyId (idempotent). */
+export type McpIdentityRevoker = (ptyId: string) => void | Promise<void>;
+
+let _mcpIssueIdentity: McpIdentityIssuer | null = null;
+let _mcpRevokeIdentity: McpIdentityRevoker | null = null;
+
+/** Wire the multiplexer plugin's identity functions. Called once at daemon
+ *  startup (after the plugin's `.start()` returns) and by tests via the
+ *  injectMcpIdentityIssuer test seam. Passing `null` for either function
+ *  disables the synthesis path entirely. */
+export function injectMcpIdentityIssuer(opts: {
+  issue?: McpIdentityIssuer | null;
+  revoke?: McpIdentityRevoker | null;
+}): void {
+  if (opts.issue !== undefined) _mcpIssueIdentity = opts.issue;
+  if (opts.revoke !== undefined) _mcpRevokeIdentity = opts.revoke;
 }
 
 // Lazy imports of the canonical env-sanitiser + security-args builder +
@@ -247,6 +291,10 @@ export function __resetSupervisorForTests(): void {
     } catch {
       // ignore
     }
+    // Release multiplexer identity + delete synthesized config (SPEC §4.5).
+    // Fire-and-forget — __resetSupervisorForTests is synchronous and tests
+    // don't await it.
+    void releaseMcpIdentityFor(entry);
   }
   state.ptys.clear();
   if (state.reapTimer) {
@@ -263,6 +311,8 @@ export function __resetSupervisorForTests(): void {
   _maxConcurrentOverride = null;
   _maxRetriesOverride = null;
   _newSessionId = () => crypto.randomUUID();
+  _mcpIssueIdentity = null;
+  _mcpRevokeIdentity = null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -384,6 +434,9 @@ export async function shutdownSupervisor(): Promise<void> {
         }),
       );
     }
+    // Release multiplexer identity + delete synthesized config (SPEC §4.5).
+    // Best-effort, doesn't block dispose.
+    disposals.push(releaseMcpIdentityFor(entry));
   }
   await Promise.allSettled(disposals);
   state.ptys.clear();
@@ -427,6 +480,8 @@ export async function killAllPtys(): Promise<number> {
         }),
       );
     }
+    // Release multiplexer identity + delete synthesized config (SPEC §4.5).
+    disposals.push(releaseMcpIdentityFor(entry));
     state.ptys.delete(entry.sessionKey);
   }
   await Promise.allSettled(disposals);
@@ -637,6 +692,8 @@ async function enforceMaxConcurrent(incomingKey: string): Promise<void> {
       // ignore
     }
   }
+  // Release multiplexer identity + delete synthesized config (SPEC §4.5).
+  await releaseMcpIdentityFor(lruEntry);
   state.ptys.delete(lruEntry.sessionKey);
 }
 
@@ -717,6 +774,16 @@ async function buildSpawnOptions(
     }
   }
 
+  // MCP multiplexer (SPEC §4.5): synthesize a per-PTY `--mcp-config` JSON
+  // when the multiplexer is active. "Active" iff (per SPEC §6.3):
+  //   - settings.mcp.shared is non-empty, AND
+  //   - settings.web.enabled is true (the multiplexer mounts on the gateway), AND
+  //   - the multiplexer plugin has wired its issuer (injectMcpIdentityIssuer).
+  // Otherwise: skip — leave mcpConfigPath unset so buildClaudeArgs emits no
+  // --mcp-config flag and the PTY's claude falls back to default MCP discovery.
+  // This preserves byte-identical behaviour with today (settings.mcp.shared=[]).
+  const mcpConfigPath = synthesizeMcpConfigIfActive(entry.sessionKey, cwd, settings);
+
   return {
     sessionId,
     newSessionId,
@@ -730,7 +797,97 @@ async function buildSpawnOptions(
     cols: settings.pty.cols,
     rows: settings.pty.rows,
     turnIdleTimeoutMs: settings.pty.turnIdleTimeoutMs,
+    ...(mcpConfigPath ? { mcpConfigPath } : {}),
   };
+}
+
+/**
+ * Synthesize the per-PTY `--mcp-config` JSON when the multiplexer is active.
+ * Returns the absolute path on success, or `undefined` when synthesis is
+ * skipped (multiplexer dormant, gateway disabled, issuer not wired, etc.).
+ *
+ * Failure to write when synthesis IS active throws — the supervisor lets the
+ * error propagate to `spawnEntry`, which fails the spawn with a clear
+ * message. SPEC §4.5: "do NOT silently fall through to no-MCP mode".
+ */
+function synthesizeMcpConfigIfActive(
+  ptyId: string,
+  cwd: string,
+  settings: ReturnType<typeof getSettings>,
+): string | undefined {
+  const shared = settings.mcp?.shared ?? [];
+  if (shared.length === 0) return undefined; // dormant — fast path
+  if (!settings.web?.enabled) {
+    // SPEC §6.3: gateway disabled means the multiplexer's HTTP routes
+    // aren't mounted, so synthesizing a config pointing at a non-existent
+    // listener would produce confusing "Connection refused" errors. The
+    // config parser already logged a warning at parseSettings time.
+    return undefined;
+  }
+  if (!_mcpIssueIdentity) {
+    // Issuer not wired (no multiplexer plugin started, or W1 hasn't merged
+    // yet). Skip synthesis silently — the plugin's own startup path is
+    // responsible for warning operators when this combination occurs.
+    return undefined;
+  }
+
+  const identity = _mcpIssueIdentity(ptyId);
+  const sharedServers: SharedServerEntry[] = shared.map((name) => ({ name }));
+  // Per-PTY stdio entries are not synthesized by W2 — that's an
+  // operator-managed concern via mcp-proxy.json. The writer accepts
+  // perPtyServers for forward-compat, but we pass an empty list here. If
+  // settings.mcp.perPtyOnly becomes a real synthesis surface later, the
+  // wiring lands here.
+  const perPtyServers: PerPtyServerEntry[] = [];
+
+  const bridgePort = settings.web?.port ?? 4632;
+  const bridgeBaseUrl = `http://127.0.0.1:${bridgePort}`;
+
+  const { path } = writeConfigForPty({
+    ptyId,
+    cwd,
+    sharedServers,
+    perPtyServers,
+    bridgeBaseUrl,
+    identity,
+  });
+  return path.length > 0 ? path : undefined;
+}
+
+/**
+ * Release multiplexer identity + delete the synthesized config file for a
+ * PTY entry that is being permanently disposed (idle reap, LRU evict,
+ * shutdown, `/kill`, test reset). Best-effort — errors are swallowed so
+ * cleanup never blocks the supervisor's dispose path.
+ *
+ * NOT called on crash-respawn (`respawnEntry`) — the bearer token rotates
+ * via the next `writeConfigForPty` call on the same path. SPEC §4.5.
+ */
+async function releaseMcpIdentityFor(entry: PtyEntry): Promise<void> {
+  const cfgPath = entry.spawnOpts?.mcpConfigPath;
+  const cwd = entry.spawnOpts?.cwd;
+
+  // Revoke identity (drops HMAC secret + per-PTY session map entries in the
+  // multiplexer). Safe to call even if no identity was ever issued — the
+  // multiplexer's `revokeIdentity` is documented as idempotent.
+  if (_mcpRevokeIdentity) {
+    try {
+      await _mcpRevokeIdentity(entry.sessionKey);
+    } catch {
+      // best-effort
+    }
+  }
+
+  // Delete the synthesized JSON. We pass through cwd from cached spawnOpts
+  // rather than recomputing — keeps cleanup decoupled from any later cwd
+  // changes (operator-renamed agent dir, etc.).
+  if (cfgPath && cwd) {
+    try {
+      deleteConfigForPty(cwd, entry.sessionKey);
+    } catch {
+      // best-effort — operator may have manually removed the directory.
+    }
+  }
 }
 
 function cloneSecurity(security: SecurityConfig): SecurityConfig {
@@ -792,7 +949,18 @@ async function spawnEntry(
     appendSystemPrompt,
   );
   entry.spawnOpts = spawnOpts;
-  entry.pty = await spawn(spawnOpts);
+  try {
+    entry.pty = await spawn(spawnOpts);
+  } catch (err) {
+    // If the spawn itself failed AFTER we synthesized an --mcp-config file,
+    // clean up the on-disk artifact so the next attempt doesn't leak it on
+    // permanent failure. Best-effort — caller surfaces the spawn error.
+    if (spawnOpts.mcpConfigPath) {
+      await releaseMcpIdentityFor(entry);
+      entry.spawnOpts = { ...spawnOpts, mcpConfigPath: undefined };
+    }
+    throw err;
+  }
 
   // Phase D fix (Codex HIGH #2): persist a freshly pre-allocated session ID
   // to disk immediately after spawn — not on first-turn completion. If the
@@ -821,6 +989,33 @@ async function respawnEntry(entry: PtyEntry): Promise<void> {
     ...entry.spawnOpts,
     sessionId: lastSessionId ?? "",
   };
+
+  // MCP multiplexer (SPEC §4.5 "Respawn behaviour"): rotate the bearer token
+  // on crash-respawn. A crashed PTY may have leaked its bearer via core dump,
+  // so we don't reuse it. We DO keep the same on-disk path (it's keyed on
+  // ptyId) — `writeConfigForPty` overwrites idempotently.
+  //
+  // We do NOT revoke the multiplexer identity here — the same ptyId continues
+  // (this is a respawn, not a permanent dispose). `issueIdentity(ptyId)` is
+  // expected to either return the cached identity OR rotate (W1's choice).
+  // The writer just embeds whatever the issuer hands back into the new file.
+  if (entry.spawnOpts.mcpConfigPath) {
+    const settings = getSettings();
+    const refreshedPath = synthesizeMcpConfigIfActive(
+      entry.sessionKey,
+      entry.spawnOpts.cwd,
+      settings,
+    );
+    if (refreshedPath) {
+      opts.mcpConfigPath = refreshedPath;
+    } else {
+      // Synthesis is no longer active (operator dropped settings.mcp.shared
+      // since the original spawn). Strip the stale path — claude will fall
+      // back to default MCP discovery.
+      delete opts.mcpConfigPath;
+    }
+  }
+
   const spawn = await ensureSpawnPty();
   // Best-effort dispose of the dead one (may already be exited).
   if (entry.pty) {
@@ -978,6 +1173,8 @@ async function reapIdle(opts: SupervisorOptions): Promise<void> {
         // ignore
       }
     }
+    // Release multiplexer identity + delete synthesized config (SPEC §4.5).
+    await releaseMcpIdentityFor(entry);
     state.ptys.delete(entry.sessionKey);
   }
 }
