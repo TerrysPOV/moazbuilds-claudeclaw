@@ -286,6 +286,7 @@ const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024; // 25MB
 // --- Security: Filename sanitization ---
 function sanitizeFilename(name: string): string {
   // Remove path traversal attempts and null bytes
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: intentional null-byte strip for filename safety.
   const sanitized = name.replace(/\x00/g, "").replace(/\.\./g, "_");
   // Keep only safe characters
   const safe = sanitized.replace(/[^a-zA-Z0-9._-]/g, "_");
@@ -1704,7 +1705,7 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
     const busy = isMainBusy();
     const verbose = verboseChats.has(chatId);
     const modelOverride = chatModels.get(chatId);
-    let result;
+    let result: Awaited<ReturnType<typeof runUserMessage>>;
     let streamMsgId: number | null = null;
     let hadToolLines = false;
     if (busy) {

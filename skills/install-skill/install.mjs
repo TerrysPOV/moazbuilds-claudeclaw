@@ -2,8 +2,8 @@
 // Usage: node install.mjs <owner/repo> <skill-name> [target-dir]
 // Works with Node 18+, Bun, Deno
 
-import { mkdirSync, writeFileSync } from "fs";
-import { join } from "path";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 const repo = process.argv[2];
 const skillName = process.argv[3];
@@ -23,6 +23,7 @@ try {
     headers: { "User-Agent": "claudeclaw-skill-installer" },
   });
 
+  let files;
   if (!res.ok) {
     // Try root-level skill (some repos put SKILL.md at root)
     const rootRes = await fetch(`https://api.github.com/repos/${repo}/contents/${skillName}`, {
@@ -36,9 +37,9 @@ try {
       );
       process.exit(1);
     }
-    var files = await rootRes.json();
+    files = await rootRes.json();
   } else {
-    var files = await res.json();
+    files = await res.json();
   }
 
   if (!Array.isArray(files)) files = [files];

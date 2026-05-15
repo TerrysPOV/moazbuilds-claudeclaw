@@ -328,8 +328,11 @@ class PtyProcessImpl implements PtyProcess {
       const decoded = this._streamDecoder.decode(bytes, { stream: true });
       // Strip ANSI inline so the callback sees plain text.
       const stripped = decoded
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI/OSC escape sequences require control bytes.
         .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI CSI escape stripper.
         .replace(/\x1b\[[?0-9;]*[ -/]*[@-~]/g, "")
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: catch-all ESC byte stripper.
         .replace(/\x1b/g, "");
       if (stripped.length > 0) {
         try {
@@ -346,8 +349,11 @@ class PtyProcessImpl implements PtyProcess {
     if (this._turnInProgress && this._onToolEvent) {
       const text = new TextDecoder().decode(bytes);
       const stripped = text
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI/OSC escape sequences require control bytes.
         .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI CSI escape stripper.
         .replace(/\x1b\[[?0-9;]*[ -/]*[@-~]/g, "")
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: catch-all ESC byte stripper.
         .replace(/\x1b/g, "")
         .replace(/\r\n/g, "\n")
         .replace(/\r/g, "");

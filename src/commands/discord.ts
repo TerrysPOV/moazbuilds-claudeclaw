@@ -167,6 +167,7 @@ const MAX_DISCORD_FILE_SIZE_BYTES = 25 * 1024 * 1024; // 25MB
 
 // --- Security: Filename sanitization ---
 function sanitizeDiscordFilename(name: string): string {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: intentional null-byte strip for filename safety.
   const sanitized = name.replace(/\x00/g, "").replace(/\.\./g, "_");
   const safe = sanitized.replace(/[^a-zA-Z0-9._-]/g, "_");
   return safe.slice(0, 255);

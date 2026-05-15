@@ -44,8 +44,12 @@ describe("Workflow Executor", () => {
     setGovernanceClient(null);
 
     // Clear mock actions
-    Object.keys(mockActions).forEach((key) => delete mockActions[key]);
-    Object.keys(mockCompensations).forEach((key) => delete mockCompensations[key]);
+    Object.keys(mockActions).forEach((key) => {
+      delete mockActions[key];
+    });
+    Object.keys(mockCompensations).forEach((key) => {
+      delete mockCompensations[key];
+    });
   });
 
   describe("handler registration", () => {

@@ -28,7 +28,7 @@ export abstract class BaseSubject extends TunableSubject {
   }
 
   private async _scanDir(dir: string, results: string[]): Promise<void> {
-    let entries;
+    let entries: Awaited<ReturnType<typeof readdir>>;
     try {
       entries = await readdir(dir, { withFileTypes: true });
     } catch {

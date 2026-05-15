@@ -493,7 +493,9 @@ export async function start(args: string[] = []) {
   console.log(`  Web UI: ${webEnabled ? `http://${settings.web.host}:${webPort}` : "disabled"}`);
   if (debugFlag) console.log("  Debug: enabled");
   console.log(`  Jobs loaded: ${jobs.length}`);
-  jobs.forEach((j) => console.log(`    - ${j.name} [${j.schedule}]`));
+  jobs.forEach((j) => {
+    console.log(`    - ${j.name} [${j.schedule}]`);
+  });
 
   // --- Mutable state ---
   let currentSettings: Settings = settings;
@@ -982,7 +984,9 @@ export async function start(args: string[] = []) {
         .join("|");
       if (jobNames !== oldJobNames) {
         console.log(`[${ts()}] Jobs reloaded: ${newJobs.length} job(s)`);
-        newJobs.forEach((j) => console.log(`    - ${j.name} [${j.schedule}]`));
+        newJobs.forEach((j) => {
+          console.log(`    - ${j.name} [${j.schedule}]`);
+        });
       }
       currentJobs = newJobs;
 

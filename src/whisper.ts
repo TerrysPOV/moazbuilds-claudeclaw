@@ -88,7 +88,7 @@ async function findExecutable(dir: string, names: string[]): Promise<string | nu
   const targets = names.flatMap((n) => (suffix ? [n + suffix, n] : [n]));
 
   async function search(current: string): Promise<string | null> {
-    let entries;
+    let entries: Awaited<ReturnType<typeof readdir>>;
     try {
       entries = await readdir(current, { withFileTypes: true });
     } catch {

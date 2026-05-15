@@ -1213,7 +1213,7 @@ async function handleMessage(event: SlackMessage): Promise<void> {
         })()
       : undefined;
 
-    let result;
+    let result: Awaited<ReturnType<typeof runUserMessage>>;
     try {
       result = await runUserMessage("slack", prefixedPrompt, sessionThreadId, agentName);
     } finally {

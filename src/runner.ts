@@ -887,6 +887,7 @@ async function runClaudeStreaming(
     buf += decoder.decode(value, { stream: true });
 
     let nl: number;
+    // biome-ignore lint/suspicious/noAssignInExpressions: standard indexOf-loop idiom; refactor would obscure intent.
     while ((nl = buf.indexOf("\n")) !== -1) {
       const line = buf.slice(0, nl).trim();
       buf = buf.slice(nl + 1);

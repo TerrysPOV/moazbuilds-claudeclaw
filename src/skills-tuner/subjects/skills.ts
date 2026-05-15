@@ -335,7 +335,7 @@ export class SkillsSubject extends BaseSubject {
       const expanded = dir.replace(/^~/, homedir());
       if (!existsSync(expanded)) continue;
 
-      let entries;
+      let entries: Awaited<ReturnType<typeof readdir>>;
       try {
         entries = await readdir(expanded, { withFileTypes: true });
       } catch {

@@ -19,12 +19,13 @@ try {
     "g",
   );
   let match;
+  // biome-ignore lint/suspicious/noAssignInExpressions: standard regex exec loop idiom.
   while ((match = pattern.exec(html)) !== null) {
     skills.push({
       source: match[1],
       id: match[2],
       name: match[3],
-      installs: parseInt(match[4]),
+      installs: parseInt(match[4], 10),
     });
   }
 

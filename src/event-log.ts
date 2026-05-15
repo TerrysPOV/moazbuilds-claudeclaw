@@ -41,6 +41,7 @@ function sanitizeForLog(value: unknown, maxLength = 1000): string {
   if (value === null || value === undefined) return "";
   const str = String(value);
   // Remove control characters except common whitespace
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: intentional sanitisation of control chars before logging.
   const sanitized = str.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
   return sanitized.slice(0, maxLength);
 }

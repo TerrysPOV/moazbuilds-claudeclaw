@@ -130,11 +130,17 @@ export function stripAnsi(text: string): string {
   // OSC: ESC ] ... terminator (BEL or ESC \)
   // CSI/ESC[: ESC [ <params/intermediates>* <final byte>
   // Catch-all single ESC: drop it.
-  return text
-    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
-    .replace(/\x1b\[[?0-9;]*[ -/]*[@-~]/g, "")
-    .replace(/\x1b[()][0-9A-Za-z]/g, "")
-    .replace(/\x1b/g, "");
+  return (
+    text
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI/OSC escape sequences require control bytes.
+      .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI CSI escape stripper.
+      .replace(/\x1b\[[?0-9;]*[ -/]*[@-~]/g, "")
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI charset-select escape stripper.
+      .replace(/\x1b[()][0-9A-Za-z]/g, "")
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: catch-all ESC byte stripper.
+      .replace(/\x1b/g, "")
+  );
 }
 
 /**

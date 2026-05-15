@@ -339,6 +339,7 @@ async function processDueRetries(): Promise<void> {
     let processed = 0;
     let entry: RetryEntry | null;
 
+    // biome-ignore lint/suspicious/noAssignInExpressions: standard pop-loop idiom; refactor would obscure intent.
     while ((entry = popDue()) !== null) {
       processed++;
 
