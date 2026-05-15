@@ -968,6 +968,95 @@ describe("pty-supervisor env-sanitisation (Phase D fix #1)", () => {
   });
 });
 
+describe("pty-supervisor model + provider env threading (Codex Phase D #1)", () => {
+  it("threads resolved modelOverride through to PtyProcessOptions.modelOverride", async () => {
+    let captured: PtyProcessOptions | null = null;
+    const { spawn } = makeSpawnTracker((opts) => {
+      captured = opts;
+      return makeFakePty("agent:alice", {});
+    });
+    injectSpawnPty(spawn);
+
+    await runOnPty("agent:alice", "hello", {
+      timeoutMs: 60_000,
+      agentName: "alice",
+      modelOverride: "claude-opus-4-5",
+    });
+
+    expect(captured).not.toBeNull();
+    expect(captured!.modelOverride).toBe("claude-opus-4-5");
+  });
+
+  it("ANTHROPIC_AUTH_TOKEN from `api` lands in the spawned PTY env", async () => {
+    let capturedEnv: Record<string, string> | undefined;
+    const { spawn } = makeSpawnTracker((opts) => {
+      capturedEnv = opts.env;
+      return makeFakePty("agent:alice", {});
+    });
+    injectSpawnPty(spawn);
+
+    const apiToken = "sk-test-pty-auth-token-do-not-leak-anywhere";
+    await runOnPty("agent:alice", "hello", {
+      timeoutMs: 60_000,
+      agentName: "alice",
+      modelOverride: "claude-sonnet-4-5",
+      api: apiToken,
+    });
+
+    expect(capturedEnv).toBeDefined();
+    expect(capturedEnv!["ANTHROPIC_AUTH_TOKEN"]).toBe(apiToken);
+    // The sanitiser still ran — ANTHROPIC_API_KEY must be absent.
+    expect(capturedEnv!["ANTHROPIC_API_KEY"]).toBeUndefined();
+  });
+
+  it("model 'glm' rewrites ANTHROPIC_BASE_URL and sets API_TIMEOUT_MS", async () => {
+    let capturedEnv: Record<string, string> | undefined;
+    const { spawn } = makeSpawnTracker((opts) => {
+      capturedEnv = opts.env;
+      return makeFakePty("agent:alice", {});
+    });
+    injectSpawnPty(spawn);
+
+    await runOnPty("agent:alice", "hello", {
+      timeoutMs: 60_000,
+      agentName: "alice",
+      modelOverride: "glm",
+      api: "z-ai-token",
+    });
+
+    expect(capturedEnv!["ANTHROPIC_BASE_URL"]).toBe(
+      "https://api.z.ai/api/anthropic",
+    );
+    expect(capturedEnv!["API_TIMEOUT_MS"]).toBe("3000000");
+    expect(capturedEnv!["ANTHROPIC_AUTH_TOKEN"]).toBe("z-ai-token");
+  });
+
+  it("non-glm model with no api leaves ANTHROPIC_AUTH_TOKEN unset", async () => {
+    let capturedEnv: Record<string, string> | undefined;
+    const { spawn } = makeSpawnTracker((opts) => {
+      capturedEnv = opts.env;
+      return makeFakePty("agent:alice", {});
+    });
+    injectSpawnPty(spawn);
+
+    // No `api` provided — buildChildEnv should NOT inject AUTH_TOKEN.
+    const before = process.env["ANTHROPIC_AUTH_TOKEN"];
+    delete process.env["ANTHROPIC_AUTH_TOKEN"];
+    try {
+      await runOnPty("agent:alice", "hello", {
+        timeoutMs: 60_000,
+        agentName: "alice",
+        modelOverride: "claude-sonnet-4-5",
+      });
+      expect(capturedEnv!["ANTHROPIC_AUTH_TOKEN"]).toBeUndefined();
+      // No base-URL rewrite either.
+      expect(capturedEnv!["ANTHROPIC_BASE_URL"]).toBeUndefined();
+    } finally {
+      if (before !== undefined) process.env["ANTHROPIC_AUTH_TOKEN"] = before;
+    }
+  });
+});
+
 describe("pty-supervisor fresh-session persistence (Codex Phase D #2)", () => {
   it("agent: with no stored session, spawn pre-allocates --session-id and persists to disk", async () => {
     let captured: PtyProcessOptions | null = null;

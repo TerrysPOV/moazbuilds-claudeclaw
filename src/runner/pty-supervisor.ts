@@ -76,24 +76,38 @@ export function injectEnsureAgentDir(fn: EnsureAgentDirFn | null): void {
   _ensureAgentDir = fn;
 }
 
-// Lazy imports of the canonical env-sanitiser + security-args builder from
-// runner.ts (same circular-import dance as ensureAgentDir). Phase D fixes
-// #1 / #3: keep one source of truth for the strip list AND for permission-
-// mode argv so the PTY path can't silently diverge from `claude -p` policy.
+// Lazy imports of the canonical env-sanitiser + security-args builder +
+// child-env shim from runner.ts (same circular-import dance as
+// ensureAgentDir). Phase D fixes #1 / #3 and Codex Phase D #1: keep one
+// source of truth for the strip list, the permission-mode argv, AND the
+// provider env so the PTY path can't silently diverge from `claude -p`
+// policy.
 type CleanSpawnEnvFn = () => Record<string, string>;
 type BuildSecurityArgsFn = (security: SecurityConfig) => string[];
+type BuildChildEnvFn = (
+  baseEnv: Record<string, string>,
+  model: string,
+  api: string,
+) => Record<string, string>;
 let _cleanSpawnEnv: CleanSpawnEnvFn | null = null;
 let _buildSecurityArgs: BuildSecurityArgsFn | null = null;
+let _buildChildEnv: BuildChildEnvFn | null = null;
 async function getRunnerHelpers(): Promise<{
   cleanSpawnEnv: CleanSpawnEnvFn;
   buildSecurityArgs: BuildSecurityArgsFn;
+  buildChildEnv: BuildChildEnvFn;
 }> {
-  if (_cleanSpawnEnv && _buildSecurityArgs) {
-    return { cleanSpawnEnv: _cleanSpawnEnv, buildSecurityArgs: _buildSecurityArgs };
+  if (_cleanSpawnEnv && _buildSecurityArgs && _buildChildEnv) {
+    return {
+      cleanSpawnEnv: _cleanSpawnEnv,
+      buildSecurityArgs: _buildSecurityArgs,
+      buildChildEnv: _buildChildEnv,
+    };
   }
   const mod = (await import("../runner")) as {
     cleanSpawnEnv?: CleanSpawnEnvFn;
     buildSecurityArgs?: BuildSecurityArgsFn;
+    buildChildEnv?: BuildChildEnvFn;
   };
   if (!mod.cleanSpawnEnv) {
     throw new Error("[pty-supervisor] runner.ts does not export cleanSpawnEnv");
@@ -101,22 +115,33 @@ async function getRunnerHelpers(): Promise<{
   if (!mod.buildSecurityArgs) {
     throw new Error("[pty-supervisor] runner.ts does not export buildSecurityArgs");
   }
+  if (!mod.buildChildEnv) {
+    throw new Error("[pty-supervisor] runner.ts does not export buildChildEnv");
+  }
   _cleanSpawnEnv = _cleanSpawnEnv ?? mod.cleanSpawnEnv;
   _buildSecurityArgs = _buildSecurityArgs ?? mod.buildSecurityArgs;
-  return { cleanSpawnEnv: _cleanSpawnEnv, buildSecurityArgs: _buildSecurityArgs };
+  _buildChildEnv = _buildChildEnv ?? mod.buildChildEnv;
+  return {
+    cleanSpawnEnv: _cleanSpawnEnv,
+    buildSecurityArgs: _buildSecurityArgs,
+    buildChildEnv: _buildChildEnv,
+  };
 }
 async function getCleanSpawnEnv(): Promise<CleanSpawnEnvFn> {
   const h = await getRunnerHelpers();
   return h.cleanSpawnEnv;
 }
 
-/** For tests only. Stub the runner helpers (cleanSpawnEnv + buildSecurityArgs). */
+/** For tests only. Stub the runner helpers (cleanSpawnEnv + buildSecurityArgs
+ *  + buildChildEnv). */
 export function injectRunnerHelpers(opts: {
   cleanSpawnEnv?: CleanSpawnEnvFn | null;
   buildSecurityArgs?: BuildSecurityArgsFn | null;
+  buildChildEnv?: BuildChildEnvFn | null;
 }): void {
   if (opts.cleanSpawnEnv !== undefined) _cleanSpawnEnv = opts.cleanSpawnEnv;
   if (opts.buildSecurityArgs !== undefined) _buildSecurityArgs = opts.buildSecurityArgs;
+  if (opts.buildChildEnv !== undefined) _buildChildEnv = opts.buildChildEnv;
 }
 
 /** Back-compat shim — fix #1's test used this name. Same behaviour. */
@@ -234,6 +259,7 @@ export function __resetSupervisorForTests(): void {
   _ensureAgentDir = null;
   _cleanSpawnEnv = null;
   _buildSecurityArgs = null;
+  _buildChildEnv = null;
   _maxConcurrentOverride = null;
   _maxRetriesOverride = null;
   _newSessionId = () => crypto.randomUUID();
@@ -452,6 +478,11 @@ export async function runOnPty(
     threadId?: string;
     agentName?: string;
     modelOverride?: string;
+    /** Codex Phase D #1: resolved auth token from settings/agentic routing/job
+     *  override. The supervisor passes this to `buildChildEnv` so the PTY's
+     *  env carries `ANTHROPIC_AUTH_TOKEN` and the GLM/Kimi base-URL shims
+     *  identical to the legacy `claude -p` path. */
+    api?: string;
     /** Phase D fix #3: pre-built security argv from runner.ts:buildSecurityArgs. */
     securityArgs?: string[];
     /** Phase D fix #2: assembled --append-system-prompt payload. */
@@ -612,6 +643,7 @@ async function enforceMaxConcurrent(incomingKey: string): Promise<void> {
 async function buildSpawnOptions(
   entry: PtyEntry,
   modelOverride: string | undefined,
+  api: string | undefined,
   securityArgs: string[] | undefined,
   appendSystemPrompt: string | undefined,
 ): Promise<PtyProcessOptions> {
@@ -661,12 +693,23 @@ async function buildSpawnOptions(
   // Phase D fix #3: derive securityArgs from runner.ts:buildSecurityArgs
   // when the caller didn't pre-build them (e.g. legacy tests). The supervisor
   // is otherwise allowed to pass through whatever the caller assembled.
-  const cleanEnv = await getCleanSpawnEnv();
+  //
+  // Codex Phase D #1: build the child env with the same `buildChildEnv` the
+  // legacy path uses so ANTHROPIC_AUTH_TOKEN and the GLM/Kimi base-URL shims
+  // are applied to PTY spawns. Without this, the PTY path always inherited
+  // the daemon's raw env regardless of the resolved model/provider.
+  const runnerHelpers = await getRunnerHelpers();
+  const cleanEnv = runnerHelpers.cleanSpawnEnv();
+  const childEnv = runnerHelpers.buildChildEnv(
+    cleanEnv,
+    modelOverride ?? "",
+    api ?? "",
+  );
+
   let resolvedSecurityArgs = securityArgs;
   if (!resolvedSecurityArgs) {
     try {
-      const { buildSecurityArgs } = await getRunnerHelpers();
-      resolvedSecurityArgs = buildSecurityArgs(security);
+      resolvedSecurityArgs = runnerHelpers.buildSecurityArgs(security);
     } catch {
       // Fall through — buildClaudeArgs will use its internal legacy
       // derivation when securityArgs is undefined.
@@ -683,7 +726,7 @@ async function buildSpawnOptions(
     security: cloneSecurity(security),
     securityArgs: resolvedSecurityArgs,
     appendSystemPrompt,
-    env: cleanEnv(),
+    env: childEnv,
     cols: settings.pty.cols,
     rows: settings.pty.rows,
     turnIdleTimeoutMs: settings.pty.turnIdleTimeoutMs,
@@ -736,6 +779,7 @@ async function ensureSpawnPty(): Promise<SpawnPty> {
 async function spawnEntry(
   entry: PtyEntry,
   modelOverride: string | undefined,
+  api: string | undefined,
   securityArgs: string[] | undefined,
   appendSystemPrompt: string | undefined,
 ): Promise<void> {
@@ -743,6 +787,7 @@ async function spawnEntry(
   const spawnOpts = await buildSpawnOptions(
     entry,
     modelOverride,
+    api,
     securityArgs,
     appendSystemPrompt,
   );
@@ -798,6 +843,7 @@ async function runTurnWithRetries(
     threadId?: string;
     agentName?: string;
     modelOverride?: string;
+    api?: string;
     securityArgs?: string[];
     appendSystemPrompt?: string;
     onChunk?: (text: string) => void;
@@ -811,6 +857,7 @@ async function runTurnWithRetries(
       await spawnEntry(
         entry,
         callOpts.modelOverride,
+        callOpts.api,
         callOpts.securityArgs,
         callOpts.appendSystemPrompt,
       );

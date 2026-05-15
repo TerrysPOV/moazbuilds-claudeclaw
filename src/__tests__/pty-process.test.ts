@@ -328,6 +328,46 @@ describe("PtyProcess — buildClaudeArgs honours securityArgs (Phase D fix #3)",
   });
 });
 
+describe("PtyProcess — buildClaudeArgs honours modelOverride (Codex Phase D #1)", () => {
+  test("non-glm modelOverride lands as --model <name>", () => {
+    const opts: PtyProcessOptions = {
+      sessionId: "",
+      cwd: "/tmp",
+      security: { level: "moderate", allowedTools: [], disallowedTools: [] },
+      modelOverride: "claude-opus-4-5",
+      env: {},
+    };
+    const args = __buildClaudeArgsForTests(opts);
+    const idx = args.indexOf("--model");
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(args[idx + 1]).toBe("claude-opus-4-5");
+  });
+
+  test("modelOverride 'glm' is NOT emitted as --model (env shim handles routing)", () => {
+    const opts: PtyProcessOptions = {
+      sessionId: "",
+      cwd: "/tmp",
+      security: { level: "moderate", allowedTools: [], disallowedTools: [] },
+      modelOverride: "glm",
+      env: {},
+    };
+    const args = __buildClaudeArgsForTests(opts);
+    expect(args).not.toContain("--model");
+  });
+
+  test("empty modelOverride is NOT emitted as --model", () => {
+    const opts: PtyProcessOptions = {
+      sessionId: "",
+      cwd: "/tmp",
+      security: { level: "moderate", allowedTools: [], disallowedTools: [] },
+      modelOverride: "",
+      env: {},
+    };
+    const args = __buildClaudeArgsForTests(opts);
+    expect(args).not.toContain("--model");
+  });
+});
+
 describe("PtyProcess — sessionId", () => {
   test("sessionId from opts.sessionId is exposed verbatim", async () => {
     const sid = "test-session-uuid-1234";

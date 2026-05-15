@@ -419,7 +419,24 @@ function isNotFoundError(error: unknown): boolean {
   return /enoent|no such file or directory/i.test(message);
 }
 
-function buildChildEnv(baseEnv: Record<string, string>, model: string, api: string): Record<string, string> {
+/**
+ * Apply provider-specific env vars on top of a sanitised base env. The same
+ * helper is used by both the legacy `claude -p` path and the PTY supervisor
+ * so model/provider selection (and GLM/Kimi base-URL shims) behave
+ * identically across the two transports.
+ *
+ * - `api` (the resolved auth token from settings/agentic routing/overrides)
+ *   becomes `ANTHROPIC_AUTH_TOKEN` so Claude Code reaches the right account.
+ * - `model === "glm"` rewrites `ANTHROPIC_BASE_URL` to z.ai's Anthropic
+ *   shim and extends the API timeout.
+ * - `model === "kimi-k2p6"` rewrites `ANTHROPIC_BASE_URL` to Kimi's coding
+ *   endpoint and prefers `KIMI_API_KEY` when set.
+ *
+ * Exported (Phase D / Codex HIGH #1) so the PTY supervisor can build child
+ * env via this single source of truth — without it, the PTY path silently
+ * dropped configured model selection and provider routing.
+ */
+export function buildChildEnv(baseEnv: Record<string, string>, model: string, api: string): Record<string, string> {
   const childEnv: Record<string, string> = { ...baseEnv };
   const normalizedModel = model.trim().toLowerCase();
 
@@ -1458,12 +1475,21 @@ async function execClaude(
     // to the PTY path so named agents keep their identity/memory and the
     // operator's permissionMode is honoured (instead of always
     // --dangerously-skip-permissions).
+    //
+    // Codex Phase D #1: ALSO thread the resolved primaryConfig.model and
+    // primaryConfig.api through, so the PTY supervisor can:
+    //   - pass `--model <model>` (matching what the legacy path does), and
+    //   - build child env with `buildChildEnv(baseEnv, model, api)` —
+    //     applying ANTHROPIC_AUTH_TOKEN, the GLM/Kimi base-URL shims, etc.
+    // Without these, settings.api / agentic-router model choices / GLM /
+    // Kimi configuration silently drop on the PTY path.
     const appendSystemPrompt = appendParts.length > 0 ? appendParts.join("\n\n") : undefined;
     exec = await runOnPty(sessionKey, prompt, {
       timeoutMs,
       threadId,
       agentName,
-      modelOverride: modelOverride ?? undefined,
+      modelOverride: primaryConfig.model || (modelOverride ?? undefined),
+      api: primaryConfig.api,
       securityArgs,
       appendSystemPrompt,
       onChunk,
