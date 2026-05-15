@@ -368,6 +368,46 @@ describe("PtyProcess — buildClaudeArgs honours modelOverride (Codex Phase D #1
   });
 });
 
+describe("PtyProcess — buildClaudeArgs honours mcpConfigPath (MCP multiplexer, SPEC §4.5)", () => {
+  test("mcpConfigPath produces --mcp-config <path>", () => {
+    const cfg = "/var/cwd/.claudeclaw/mcp-pty-suzy.json";
+    const opts: PtyProcessOptions = {
+      sessionId: "",
+      cwd: "/tmp",
+      security: { level: "moderate", allowedTools: [], disallowedTools: [] },
+      mcpConfigPath: cfg,
+      env: {},
+    };
+    const args = __buildClaudeArgsForTests(opts);
+    const flagIdx = args.indexOf("--mcp-config");
+    expect(flagIdx).toBeGreaterThanOrEqual(0);
+    expect(args[flagIdx + 1]).toBe(cfg);
+  });
+
+  test("empty mcpConfigPath is NOT emitted (avoids `--mcp-config ''`)", () => {
+    const opts: PtyProcessOptions = {
+      sessionId: "",
+      cwd: "/tmp",
+      security: { level: "moderate", allowedTools: [], disallowedTools: [] },
+      mcpConfigPath: "",
+      env: {},
+    };
+    const args = __buildClaudeArgsForTests(opts);
+    expect(args).not.toContain("--mcp-config");
+  });
+
+  test("omitted mcpConfigPath is NOT emitted (backward-compat with settings.mcp.shared=[])", () => {
+    const opts: PtyProcessOptions = {
+      sessionId: "",
+      cwd: "/tmp",
+      security: { level: "moderate", allowedTools: [], disallowedTools: [] },
+      env: {},
+    };
+    const args = __buildClaudeArgsForTests(opts);
+    expect(args).not.toContain("--mcp-config");
+  });
+});
+
 describe("PtyProcess — sessionId", () => {
   test("sessionId from opts.sessionId is exposed verbatim", async () => {
     const sid = "test-session-uuid-1234";

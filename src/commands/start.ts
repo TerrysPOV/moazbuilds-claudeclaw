@@ -574,6 +574,55 @@ export async function start(args: string[] = []) {
     await pluginManager.emit("gateway_start", {}, { workspaceDir: process.cwd() });
   }
 
+  // MCP multiplexer (SPEC §4.5, §6.3): start BEFORE mcp-proxy so the proxy
+  // can read settings.mcp.shared to skip servers the multiplexer owns. Also
+  // wires the multiplexer's issue/revoke functions into the PTY supervisor.
+  //
+  // Activation rule (SPEC §6.3): only attempt to start when shared is
+  // non-empty AND web.enabled is true. Otherwise the plugin would have
+  // nothing to mount routes on.
+  //
+  // TODO(coord): replace the dynamic import with a static import once the
+  // mcp-multiplexer module from W1 lands on master. Today it's dynamic so
+  // this worktree compiles standalone while W1's worktree owns the file.
+  if (settings.mcp.shared.length > 0 && settings.web.enabled) {
+    try {
+      // @ts-expect-error TODO(coord): W1 module not yet present in this worktree.
+      // Replace with static import once src/plugins/mcp-multiplexer/index.ts
+      // lands on master.
+      const mod = (await import("../plugins/mcp-multiplexer/index.js")) as {
+        getMcpMultiplexerPlugin?: () => {
+          start: () => Promise<void>;
+          issueIdentity: (ptyId: string) => unknown;
+          revokeIdentity: (ptyId: string) => void | Promise<void>;
+        };
+      };
+      if (mod.getMcpMultiplexerPlugin) {
+        const plugin = mod.getMcpMultiplexerPlugin();
+        await plugin.start();
+        // Wire the supervisor seam so PTY spawns synthesize per-PTY configs.
+        const sup = await import("../runner/pty-supervisor.js");
+        sup.injectMcpIdentityIssuer({
+          issue: plugin.issueIdentity as (ptyId: string) => never,
+          revoke: plugin.revokeIdentity,
+        });
+        console.log("[mcp-multiplexer] started");
+      } else {
+        console.warn(
+          "[mcp-multiplexer] settings.mcp.shared is non-empty but the multiplexer plugin module has no getMcpMultiplexerPlugin export",
+        );
+      }
+    } catch (err) {
+      // Module not found = W1 hasn't merged yet OR operator hasn't pulled it.
+      // Don't crash the daemon — log clearly and fall back to per-PTY MCP
+      // discovery (settings.mcp.shared becomes effectively dormant).
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `[mcp-multiplexer] startup failed (non-fatal, falling back to per-PTY MCP discovery): ${msg}`,
+      );
+    }
+  }
+
   // Start mcp-proxy plugin only when a config file is present — avoids opening
   // an HTTP gateway on deployments that don't use external MCP plugins.
   const mcpProxyConfigPath = join(homedir(), ".config", "claudeclaw", "mcp-proxy.json");
