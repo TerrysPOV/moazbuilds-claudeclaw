@@ -232,7 +232,7 @@ describe("McpMultiplexerPlugin — active path", () => {
 
       await plugin.releaseIdentity("suzy");
       const b = plugin.issueIdentity("suzy");
-      expect(b.bearer).not.toBe(a.bearer);
+      expect(b.headers.Authorization).not.toBe(a.headers.Authorization);
     } finally {
       await plugin.stop();
     }

@@ -48,10 +48,11 @@ export interface PtyIdentity {
    *  lifetime; rotates on revoke→re-issue. Carried in the
    *  `X-Claudeclaw-Ts` header for audit observability. */
   issuedAt: number;
-  /** Header value for `Authorization`. Already in `Bearer <hex>` form. */
-  bearer: string;
   /** Complete headers map ready to splat into the synthesized
-   *  `--mcp-config` JSON's `headers` field. */
+   *  `--mcp-config` JSON's `headers` field. The Authorization header
+   *  carries the bearer literal (`Bearer <hex>`) — never exposed as a
+   *  standalone field on this interface; consumers that need the raw
+   *  bearer for verification go through `verifyBearer(ptyId, header)`. */
   headers: Record<string, string>;
 }
 
@@ -85,7 +86,6 @@ function _toPublic(record: InternalIdentity): PtyIdentity {
   return {
     ptyId: record.ptyId,
     issuedAt: record.issuedAt,
-    bearer,
     headers: {
       [AUTH_HEADER]: bearer,
       [PTY_ID_HEADER]: record.ptyId,

@@ -45,15 +45,16 @@ import {
  *  Must satisfy `PluginMcpBridge._validatePluginId` (lowercase kebab). */
 const PLUGIN_ID = "mcp-multiplexer";
 
-/** Bridge-callback name. The `PluginMcpBridge` prefixes every registered
- *  tool with its pluginId (mcp-bridge.ts L65 `${pluginId}__${tool.name}`),
- *  so the stored FQN ends up `mcp-multiplexer__<server>__<tool>`. Per the
- *  operator's constraint (task spec) the pluginId is fixed at
- *  `"mcp-multiplexer"`, which partitions the FQN namespace cleanly from
- *  mcp-proxy's `mcp-proxy__<server>__<tool>` tools — no possible
- *  collision even before the skip-shared rule (which is a separate
- *  structural guarantee anyway). */
-function _toFqn(serverName: string, toolName: string): string {
+/** Builds the `name` argument we pass to `registerPluginTool` for a given
+ *  (server, tool) pair. NOT the stored FQN — the bridge prefixes every
+ *  registered tool with its pluginId (mcp-bridge.ts L65
+ *  `${pluginId}__${tool.name}`), so the stored FQN ends up
+ *  `mcp-multiplexer__<server>__<tool>`. Per the operator's constraint the
+ *  pluginId is fixed at `"mcp-multiplexer"`, which partitions the FQN
+ *  namespace cleanly from mcp-proxy's `mcp-proxy__<server>__<tool>` tools
+ *  — no possible collision even before the skip-shared rule (which is a
+ *  separate structural guarantee anyway). */
+function _toBridgeToolName(serverName: string, toolName: string): string {
   return `${serverName}__${toolName}`;
 }
 
@@ -159,8 +160,10 @@ export class McpMultiplexerPlugin {
   }
 
   async start(): Promise<void> {
+    // Only commit `started = true` once the spawn loop has produced at least
+    // one claimed server. A dormant bail-out leaves `started === false` so a
+    // subsequent operator-driven re-`start()` after settings change can succeed.
     if (this.started) return;
-    this.started = true;
 
     const settings = this.settingsView();
 
@@ -276,6 +279,11 @@ export class McpMultiplexerPlugin {
       this.cachedStatelessNames = [];
       return;
     }
+
+    // Commit started AFTER we've claimed at least one server — a dormant
+    // bail-out above leaves started=false so the operator can re-`start()`
+    // post-settings-change.
+    this.started = true;
 
     // Start the periodic health probe. Closes the silent-degradation gap
     // flagged on #64: when one shared MCP crashes all PTYs lose that tool
@@ -479,7 +487,7 @@ export class McpMultiplexerPlugin {
   private _registerBridgeCallbacks(serverName: string, proc: McpServerProcess): void {
     const bridge = getMcpBridge();
     for (const tool of proc.tools) {
-      const fqn = _toFqn(serverName, tool.name);
+      const fqn = _toBridgeToolName(serverName, tool.name);
       try {
         bridge.registerPluginTool(PLUGIN_ID, {
           name: fqn,

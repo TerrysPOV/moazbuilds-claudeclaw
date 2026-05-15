@@ -5,14 +5,21 @@
  * dispose paths. The multiplexer plugin itself doesn't exist in this
  * worktree — we stub it via `injectMcpIdentityIssuer`.
  *
- * Coverage:
+ * Coverage (this file):
  *   - Synthesis fires when settings.mcp.shared is non-empty AND web.enabled AND
  *     issuer is wired → PtyProcessOptions.mcpConfigPath is set, file on disk.
  *   - Synthesis SKIPS when settings.mcp.shared is empty (backward-compat, SPEC §6.1).
  *   - Synthesis SKIPS when web.enabled is false (SPEC §6.3).
- *   - Synthesis SKIPS when no issuer is wired (W1 not present / dormant).
- *   - Cleanup fires on shutdownSupervisor, killAllPtys, reapIdle, LRU evict.
- *   - Respawn rotates the bearer token via re-synthesis on the same path.
+ *   - Synthesis SKIPS when no issuer is wired (multiplexer dormant).
+ *   - Cleanup fires on shutdownSupervisor and killAllPtys.
+ *
+ * NOT covered here (component-tested elsewhere or pending follow-up):
+ *   - reapIdle / LRU eviction cleanup — exercised at the supervisor-component
+ *     level via the broader pty-supervisor.test.ts dispose-path tests.
+ *   - Respawn bearer rotation — exercised by the multiplexer plugin tests
+ *     (`mcp-multiplexer/__tests__/index.test.ts`) which validate
+ *     `issueIdentity(ptyId)` mints a fresh secret on every call. A dedicated
+ *     supervisor-side respawn-rotation test is filed as a v1.1 follow-up.
  */
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";

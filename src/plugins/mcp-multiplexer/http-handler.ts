@@ -55,9 +55,14 @@ export interface McpHttpHandlerOpts {
   stateless?: boolean;
 }
 
-/** Helper: read raw body bytes once. We don't enforce a hard byte cap
- *  here — the upstream MCP server's `call` already has a 30s timeout
- *  and the in-process bridge enforces `MAX_RESULT_BYTES` on outputs. */
+/** Maximum request body size accepted by the multiplexer. Matches the
+ *  cap on `/api/plugin/*` in the HTTP gateway. Rejects 4 GB POSTs that
+ *  would OOM the daemon. */
+const MAX_BODY_BYTES = 1_048_576; // 1 MiB
+
+/** Helper: read raw body bytes once. Phase D #2 (security): enforce a
+ *  hard byte cap so a malicious or buggy client can't OOM the daemon
+ *  with a multi-GB JSON POST. */
 async function _readBody(req: Request): Promise<unknown> {
   // The SDK transport parses JSON itself from the Request — we just pass
   // the raw Request through. This helper exists so the auth path can
@@ -70,6 +75,48 @@ async function _readBody(req: Request): Promise<unknown> {
   } catch {
     return undefined;
   }
+}
+
+/** Check whether a request's declared/streamed body exceeds the cap.
+ *  Reads `Content-Length` if provided (rejects oversize before the body is
+ *  consumed). For unknown-length requests, materialises into an ArrayBuffer
+ *  and rejects if it exceeds the cap. Returns the safe-to-replay Request
+ *  on success, or a 413 Response on failure. */
+async function _enforceBodyCap(req: Request): Promise<Request | Response> {
+  const declared = req.headers.get("content-length");
+  if (declared !== null) {
+    const n = Number(declared);
+    if (Number.isFinite(n) && n > MAX_BODY_BYTES) {
+      return _errResponse(
+        413,
+        "body_too_large",
+        `request body ${n}B exceeds ${MAX_BODY_BYTES}B limit`,
+      );
+    }
+    // Content-Length present and within cap → safe to forward.
+    return req;
+  }
+  // No Content-Length (chunked transfer or HTTP/2). Materialise once so we
+  // can both enforce the cap and replay to the SDK transport.
+  let buf: ArrayBuffer;
+  try {
+    buf = await req.arrayBuffer();
+  } catch {
+    return _errResponse(400, "body_read_failed", "could not read request body");
+  }
+  if (buf.byteLength > MAX_BODY_BYTES) {
+    return _errResponse(
+      413,
+      "body_too_large",
+      `request body ${buf.byteLength}B exceeds ${MAX_BODY_BYTES}B limit`,
+    );
+  }
+  // Rebuild a Request the SDK transport can consume. Headers preserved.
+  return new Request(req.url, {
+    method: req.method,
+    headers: req.headers,
+    body: buf,
+  });
 }
 
 /**
@@ -102,9 +149,17 @@ export class McpHttpHandler {
       });
     }
 
+    // ── Body cap (Phase D security #2) ────────────────────────────────
+    // Enforce before auth so we don't read multi-GB bodies on unauth'd
+    // requests. `_enforceBodyCap` returns either a safe-to-forward Request
+    // (possibly rebuilt) or a 413 Response.
+    const guarded = await _enforceBodyCap(req);
+    if (guarded instanceof Response) return guarded;
+    const safeReq = guarded;
+
     // ── Authentication ────────────────────────────────────────────────
-    const ptyId = req.headers.get(PTY_ID_HEADER);
-    const bearer = req.headers.get(AUTH_HEADER);
+    const ptyId = safeReq.headers.get(PTY_ID_HEADER);
+    const bearer = safeReq.headers.get(AUTH_HEADER);
     if (!ptyId) {
       return _errResponse(401, "missing_pty_id", `missing ${PTY_ID_HEADER} header`);
     }
@@ -149,7 +204,7 @@ export class McpHttpHandler {
 
     // Peek at the body for audit observability without consuming the
     // request stream (the transport needs to re-read it).
-    const peek = await _readBody(req);
+    const peek = await _readBody(safeReq);
 
     try {
       getMcpBridge().audit("multiplexer_invoke", {
@@ -164,7 +219,7 @@ export class McpHttpHandler {
     // to the registered handlers on the SDK Server, and return a
     // Web-Standard Response with framing.
     try {
-      return await bucket.transport.handleRequest(req);
+      return await bucket.transport.handleRequest(safeReq);
     } catch (err) {
       // Ensure the bucket is torn down if the transport itself errored;
       // future calls will lazily reinitialise.
@@ -242,9 +297,34 @@ export class McpHttpHandler {
       })),
     }));
 
-    // tools/call — proxy straight through to the upstream child.
+    // Defense-in-depth (Phase D #6): build the allowed-tool set from the
+    // already-filtered `proc.tools`. tools/list returns only this set, and
+    // tools/call rejects anything not in it — so a caller forging a non-
+    // allowed name fails inside the multiplexer instead of relying on the
+    // upstream child's own rejection.
+    const allowedNames = new Set(this.proc.tools.map((t) => t.name));
+
+    // tools/call — proxy through to the upstream child after gating.
     sdkServer.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { name, arguments: args } = request.params;
+      if (!allowedNames.has(name)) {
+        try {
+          getMcpBridge().audit("multiplexer_tool_rejected", {
+            server: this.serverName,
+            tool: name,
+            reason: "not_in_allowed_set",
+          });
+        } catch {}
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error: tool '${name}' is not exposed by server '${this.serverName}'`,
+            },
+          ],
+          isError: true,
+        };
+      }
       try {
         const result = await this.proc.call(name, args ?? {});
         return {

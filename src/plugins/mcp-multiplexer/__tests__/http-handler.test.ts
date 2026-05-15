@@ -100,7 +100,7 @@ describe("McpHttpHandler — auth", () => {
         { jsonrpc: "2.0", id: 1, method: "ping" },
         {
           [PTY_ID_HEADER]: "reg",
-          [AUTH_HEADER]: id.bearer,
+          [AUTH_HEADER]: id.headers[AUTH_HEADER],
         },
       ),
     );
@@ -144,7 +144,7 @@ describe("McpHttpHandler — successful auth + RPC dispatch", () => {
     const resp = await handler!.handle(
       rpcRequest(
         { jsonrpc: "2.0", id: 1, method: "tools/list" },
-        { [PTY_ID_HEADER]: "suzy", [AUTH_HEADER]: id.bearer },
+        { [PTY_ID_HEADER]: "suzy", [AUTH_HEADER]: id.headers[AUTH_HEADER] },
       ),
     );
     expect(resp.status).toBe(503);
@@ -172,7 +172,7 @@ describe("McpHttpHandler — successful auth + RPC dispatch", () => {
             clientInfo: { name: "test", version: "1.0" },
           },
         },
-        { [PTY_ID_HEADER]: "suzy", [AUTH_HEADER]: a.bearer },
+        { [PTY_ID_HEADER]: "suzy", [AUTH_HEADER]: a.headers[AUTH_HEADER] },
       ),
     );
     await handler!.handle(
@@ -187,7 +187,7 @@ describe("McpHttpHandler — successful auth + RPC dispatch", () => {
             clientInfo: { name: "test", version: "1.0" },
           },
         },
-        { [PTY_ID_HEADER]: "reg", [AUTH_HEADER]: b.bearer },
+        { [PTY_ID_HEADER]: "reg", [AUTH_HEADER]: b.headers[AUTH_HEADER] },
       ),
     );
 
@@ -220,7 +220,7 @@ describe("McpHttpHandler — closed state", () => {
     const resp = await handler.handle(
       rpcRequest(
         { jsonrpc: "2.0", id: 1, method: "ping" },
-        { [PTY_ID_HEADER]: "suzy", [AUTH_HEADER]: id.bearer },
+        { [PTY_ID_HEADER]: "suzy", [AUTH_HEADER]: id.headers[AUTH_HEADER] },
       ),
     );
     expect(resp.status).toBe(503);

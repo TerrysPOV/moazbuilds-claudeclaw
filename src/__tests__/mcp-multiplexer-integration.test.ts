@@ -218,7 +218,7 @@ describe("mcp-multiplexer integration — happy path", () => {
         origin: gateway.origin,
         server: "alpha",
         ptyId: "pty-happy",
-        bearer: ident.bearer,
+        bearer: ident.headers.Authorization,
       });
 
       try {
@@ -262,19 +262,19 @@ describe("mcp-multiplexer integration — per-PTY auth", () => {
 
       const a = plugin.issueIdentity("pty-A");
       const b = plugin.issueIdentity("pty-B");
-      expect(a.bearer).not.toBe(b.bearer);
+      expect(a.headers.Authorization).not.toBe(b.headers.Authorization);
 
       const ca = await connectClient({
         origin: gateway.origin,
         server: "alpha",
         ptyId: "pty-A",
-        bearer: a.bearer,
+        bearer: a.headers.Authorization,
       });
       const cb = await connectClient({
         origin: gateway.origin,
         server: "alpha",
         ptyId: "pty-B",
-        bearer: b.bearer,
+        bearer: b.headers.Authorization,
       });
 
       try {
@@ -442,13 +442,13 @@ describe("mcp-multiplexer integration — stateful vs stateless demux", () => {
         origin: gateway.origin,
         server: "alpha",
         ptyId: "pty-1",
-        bearer: a.bearer,
+        bearer: a.headers.Authorization,
       });
       const a2 = await connectClient({
         origin: gateway.origin,
         server: "alpha",
         ptyId: "pty-2",
-        bearer: b.bearer,
+        bearer: b.headers.Authorization,
       });
       await a1.client.listTools();
       await a2.client.listTools();
@@ -463,7 +463,7 @@ describe("mcp-multiplexer integration — stateful vs stateless demux", () => {
         origin: gateway.origin,
         server: "beta",
         ptyId: "pty-1",
-        bearer: a.bearer,
+        bearer: a.headers.Authorization,
       });
       await b1.client.listTools();
 
@@ -479,7 +479,7 @@ describe("mcp-multiplexer integration — stateful vs stateless demux", () => {
         headers: {
           "Content-Type": "application/json",
           Accept: "application/json, text/event-stream",
-          Authorization: b.bearer,
+          Authorization: b.headers.Authorization,
           "X-Claudeclaw-Pty-Id": "pty-2",
         },
         body: JSON.stringify({
@@ -593,7 +593,7 @@ describe("mcp-multiplexer integration — crash + health probe transition", () =
           origin: gateway.origin,
           server: "alpha",
           ptyId: "pty-pre-crash",
-          bearer: ident.bearer,
+          bearer: ident.headers.Authorization,
         });
         await c.client.listTools();
         await c.close();

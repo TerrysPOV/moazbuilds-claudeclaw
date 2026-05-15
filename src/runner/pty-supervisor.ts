@@ -104,20 +104,27 @@ export type McpIdentityIssuer = (ptyId: string) => PtyIdentity;
  *  session state. Called from the supervisor's dispose paths. Safe to call
  *  for an unknown ptyId (idempotent). */
 export type McpIdentityRevoker = (ptyId: string) => void | Promise<void>;
+/** Returns the multiplexer's HTTP listener base URL. Single source of truth —
+ *  the supervisor uses this when synthesising `--mcp-config` so the URL never
+ *  drifts from what the multiplexer plugin actually bound. */
+export type McpBridgeBaseUrlGetter = () => string;
 
 let _mcpIssueIdentity: McpIdentityIssuer | null = null;
 let _mcpRevokeIdentity: McpIdentityRevoker | null = null;
+let _mcpBridgeBaseUrl: McpBridgeBaseUrlGetter | null = null;
 
 /** Wire the multiplexer plugin's identity functions. Called once at daemon
  *  startup (after the plugin's `.start()` returns) and by tests via the
- *  injectMcpIdentityIssuer test seam. Passing `null` for either function
- *  disables the synthesis path entirely. */
+ *  injectMcpIdentityIssuer test seam. Passing `null` for any function
+ *  disables the corresponding synthesis path. */
 export function injectMcpIdentityIssuer(opts: {
   issue?: McpIdentityIssuer | null;
   revoke?: McpIdentityRevoker | null;
+  bridgeBaseUrl?: McpBridgeBaseUrlGetter | null;
 }): void {
   if (opts.issue !== undefined) _mcpIssueIdentity = opts.issue;
   if (opts.revoke !== undefined) _mcpRevokeIdentity = opts.revoke;
+  if (opts.bridgeBaseUrl !== undefined) _mcpBridgeBaseUrl = opts.bridgeBaseUrl;
 }
 
 // Lazy imports of the canonical env-sanitiser + security-args builder +
@@ -313,6 +320,7 @@ export function __resetSupervisorForTests(): void {
   _newSessionId = () => crypto.randomUUID();
   _mcpIssueIdentity = null;
   _mcpRevokeIdentity = null;
+  _mcpBridgeBaseUrl = null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -840,8 +848,13 @@ function synthesizeMcpConfigIfActive(
   // wiring lands here.
   const perPtyServers: PerPtyServerEntry[] = [];
 
-  const bridgePort = settings.web?.port ?? 4632;
-  const bridgeBaseUrl = `http://127.0.0.1:${bridgePort}`;
+  // Single source of truth: read the URL the multiplexer actually bound to,
+  // not a recomputation from settings. Fallback only if the seam is null
+  // (e.g. unit tests skip the issuer wiring); falls back to the conservative
+  // loopback default so a test misconfiguration fails closed.
+  const bridgeBaseUrl = _mcpBridgeBaseUrl
+    ? _mcpBridgeBaseUrl()
+    : `http://127.0.0.1:${settings.web?.port ?? 4632}`;
 
   const { path } = writeConfigForPty({
     ptyId,

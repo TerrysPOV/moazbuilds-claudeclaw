@@ -24,32 +24,31 @@ describe("pty-identity", () => {
     expect(id.ptyId).toBe("suzy");
     expect(typeof id.issuedAt).toBe("number");
     expect(id.issuedAt).toBeGreaterThan(0);
-    expect(id.bearer).toMatch(/^Bearer [0-9a-f]{64}$/);
-    expect(id.headers[AUTH_HEADER]).toBe(id.bearer);
+    expect(id.headers[AUTH_HEADER]).toMatch(/^Bearer [0-9a-f]{64}$/);
     expect(id.headers[PTY_ID_HEADER]).toBe("suzy");
     expect(id.headers[PTY_TS_HEADER]).toBe(String(id.issuedAt));
   });
 
   it("issueIdentity hex length matches PTY_SECRET_BYTES", () => {
     const id = issueIdentity("test");
-    const hex = id.bearer.slice("Bearer ".length);
+    const hex = id.headers[AUTH_HEADER].slice("Bearer ".length);
     expect(hex.length).toBe(PTY_SECRET_BYTES * 2);
   });
 
   it("issueIdentity produces a distinct secret on each call", () => {
     const a = issueIdentity("a");
     const b = issueIdentity("b");
-    expect(a.bearer).not.toBe(b.bearer);
+    expect(a.headers[AUTH_HEADER]).not.toBe(b.headers[AUTH_HEADER]);
   });
 
   it("issueIdentity for the same ptyId replaces the previous identity", () => {
     const a = issueIdentity("same");
     const b = issueIdentity("same");
-    expect(a.bearer).not.toBe(b.bearer);
+    expect(a.headers[AUTH_HEADER]).not.toBe(b.headers[AUTH_HEADER]);
     expect(_listIssuedPtyIds()).toEqual(["same"]);
     // old bearer no longer verifies against new identity
-    expect(verifyBearer("same", a.bearer)).toBe(false);
-    expect(verifyBearer("same", b.bearer)).toBe(true);
+    expect(verifyBearer("same", a.headers[AUTH_HEADER])).toBe(false);
+    expect(verifyBearer("same", b.headers[AUTH_HEADER])).toBe(true);
   });
 
   it("rejects invalid ptyIds at issue time", () => {
@@ -72,24 +71,24 @@ describe("pty-identity", () => {
 
   it("verifyBearer accepts the issued bearer header verbatim", () => {
     const id = issueIdentity("suzy");
-    expect(verifyBearer("suzy", id.bearer)).toBe(true);
+    expect(verifyBearer("suzy", id.headers[AUTH_HEADER])).toBe(true);
   });
 
   it("verifyBearer is case-insensitive on the 'Bearer' scheme prefix", () => {
     const id = issueIdentity("suzy");
-    const hex = id.bearer.slice("Bearer ".length);
+    const hex = id.headers[AUTH_HEADER].slice("Bearer ".length);
     expect(verifyBearer("suzy", `bearer ${hex}`)).toBe(true);
     expect(verifyBearer("suzy", `BEARER ${hex}`)).toBe(true);
   });
 
   it("verifyBearer rejects an unknown ptyId", () => {
     const id = issueIdentity("suzy");
-    expect(verifyBearer("reg", id.bearer)).toBe(false);
+    expect(verifyBearer("reg", id.headers[AUTH_HEADER])).toBe(false);
   });
 
   it("verifyBearer rejects a tampered secret", () => {
     const id = issueIdentity("suzy");
-    const hex = id.bearer.slice("Bearer ".length);
+    const hex = id.headers[AUTH_HEADER].slice("Bearer ".length);
     const flipped = "0" + hex.slice(1);
     expect(verifyBearer("suzy", `Bearer ${flipped}`)).toBe(false);
   });
@@ -121,7 +120,7 @@ describe("pty-identity", () => {
   it("revokeIdentity drops the secret and returns true", () => {
     const id = issueIdentity("suzy");
     expect(revokeIdentity("suzy")).toBe(true);
-    expect(verifyBearer("suzy", id.bearer)).toBe(false);
+    expect(verifyBearer("suzy", id.headers[AUTH_HEADER])).toBe(false);
     expect(getIdentity("suzy")).toBeUndefined();
   });
 
@@ -136,8 +135,8 @@ describe("pty-identity", () => {
     const a = issueIdentity("a");
     const b = issueIdentity("b");
     expect(revokeIdentity("a")).toBe(true);
-    expect(verifyBearer("a", a.bearer)).toBe(false);
-    expect(verifyBearer("b", b.bearer)).toBe(true);
+    expect(verifyBearer("a", a.headers[AUTH_HEADER])).toBe(false);
+    expect(verifyBearer("b", b.headers[AUTH_HEADER])).toBe(true);
   });
 
   it("_listIssuedPtyIds reflects current store contents", () => {
@@ -155,7 +154,7 @@ describe("pty-identity", () => {
     const issued = issueIdentity("suzy");
     const fetched = getIdentity("suzy");
     expect(fetched).toBeDefined();
-    expect(fetched!.bearer).toBe(issued.bearer);
+    expect(fetched!.headers[AUTH_HEADER]).toBe(issued.headers[AUTH_HEADER]);
     expect(fetched!.ptyId).toBe("suzy");
   });
 

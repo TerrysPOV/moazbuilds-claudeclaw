@@ -588,9 +588,12 @@ export async function start(args: string[] = []) {
       const plugin = getMcpMultiplexerPlugin();
       await plugin.start();
       // Wire the supervisor seam so PTY spawns synthesize per-PTY configs.
+      // bridgeBaseUrl reads from the plugin so supervisor and plugin can't
+      // drift on the URL the multiplexer actually bound to.
       injectMcpIdentityIssuer({
         issue: (ptyId) => plugin.issueIdentity(ptyId),
         revoke: (ptyId) => plugin.releaseIdentity(ptyId),
+        bridgeBaseUrl: () => plugin.bridgeBaseUrl(),
       });
       console.log("[mcp-multiplexer] started");
     } catch (err) {
