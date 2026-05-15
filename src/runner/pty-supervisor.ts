@@ -197,6 +197,13 @@ export async function __reapNowForTests(clock?: () => number): Promise<void> {
   await reapIdle(opts);
 }
 
+/** For tests only. Inspect the lazy-init flag.
+ *  Returns true iff `initSupervisor()` has run (and `shutdownSupervisor` /
+ *  `__resetSupervisorForTests` haven't cleared it since). */
+export function __isSupervisorInitialisedForTests(): boolean {
+  return state.initialised;
+}
+
 /** For tests only. Wipe all internal state. */
 export function __resetSupervisorForTests(): void {
   for (const entry of state.ptys.values()) {
@@ -212,6 +219,7 @@ export function __resetSupervisorForTests(): void {
     state.reapTimer = null;
   }
   state.initialised = false;
+  _initPromise = null;
   _spawnPty = null;
   _ensureAgentDir = null;
   _cleanSpawnEnv = null;
@@ -254,12 +262,45 @@ const state: SupervisorState = {
   initialised: false,
 };
 
+/**
+ * Phase D fix #3 (Codex review HIGH #3): cache the in-flight init promise so
+ * concurrent first-callers don't double-init the reaper. Cleared by
+ * `__resetSupervisorForTests` and by `shutdownSupervisor`.
+ */
+let _initPromise: Promise<void> | null = null;
+
+/**
+ * Idempotently start the supervisor (reaper interval). Called lazily from
+ * `runOnPty` so the daemon runtime — which goes directly through `runOnPty`,
+ * never through `initSupervisor` — picks up `settings.pty.idleReapMinutes`.
+ *
+ * Race-safe: concurrent first-callers await the same in-flight promise. The
+ * underlying `initSupervisor` is itself idempotent (it clears + rebuilds the
+ * reap timer), so a fresh call after `__resetSupervisorForTests` re-installs
+ * the timer cleanly.
+ */
+async function ensureSupervisorInitialised(): Promise<void> {
+  if (state.initialised) return;
+  if (_initPromise) {
+    await _initPromise;
+    return;
+  }
+  _initPromise = initSupervisor().finally(() => {
+    _initPromise = null;
+  });
+  await _initPromise;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Public API.
 
 /**
  * Initialise the supervisor at daemon startup. Idempotent.
  * Lazy-spawn strategy: named-agent PTYs spawn on first event, not here.
+ *
+ * In practice the daemon runtime never calls this directly — it's invoked
+ * lazily by `runOnPty` via `ensureSupervisorInitialised()` so the reap
+ * interval reliably starts on first PTY use. See Phase D fix #3.
  */
 export async function initSupervisor(): Promise<void> {
   const settings = getSettings();
@@ -310,6 +351,7 @@ export async function shutdownSupervisor(): Promise<void> {
   await Promise.allSettled(disposals);
   state.ptys.clear();
   state.initialised = false;
+  _initPromise = null;
 }
 
 /**
@@ -407,6 +449,12 @@ export async function runOnPty(
     onToolEvent?: (line: string) => void;
   },
 ): Promise<RunOnPtyResult> {
+  // Phase D fix #3 (Codex HIGH #3): lazily start the reaper interval. The
+  // daemon runtime enters PTY mode through `runOnPty` directly and never
+  // calls `initSupervisor`, so without this `settings.pty.idleReapMinutes`
+  // would be ignored in production.
+  await ensureSupervisorInitialised();
+
   const supervisorOpts = readSupervisorOptions();
 
   // Phase D fix #5: enforce maxConcurrent cap with LRU eviction BEFORE

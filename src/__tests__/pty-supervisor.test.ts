@@ -26,6 +26,7 @@ import {
   injectMaxRetriesForTests,
   killAllPtys,
   __resetSupervisorForTests,
+  __isSupervisorInitialisedForTests,
 } from "../runner/pty-supervisor";
 import {
   PtyClosedError,
@@ -200,6 +201,65 @@ afterEach(async () => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests.
+
+describe("pty-supervisor lazy init (Codex Phase D #3)", () => {
+  it("first runOnPty triggers initSupervisor automatically", async () => {
+    const { spawn } = makeSpawnTracker(() => makeFakePty("agent:alice", {}));
+    injectSpawnPty(spawn);
+
+    expect(__isSupervisorInitialisedForTests()).toBe(false);
+
+    await runOnPty("agent:alice", "hello", {
+      timeoutMs: 60_000,
+      agentName: "alice",
+    });
+
+    expect(__isSupervisorInitialisedForTests()).toBe(true);
+  });
+
+  it("after __resetSupervisorForTests, next runOnPty re-initialises", async () => {
+    const { spawn } = makeSpawnTracker(() => makeFakePty("agent:alice", {}));
+    injectSpawnPty(spawn);
+
+    await runOnPty("agent:alice", "first", {
+      timeoutMs: 60_000,
+      agentName: "alice",
+    });
+    expect(__isSupervisorInitialisedForTests()).toBe(true);
+
+    __resetSupervisorForTests();
+    injectEnsureAgentDir(async (name: string) => `/tmp/agents/${name}`);
+    injectSpawnPty(spawn);
+    expect(__isSupervisorInitialisedForTests()).toBe(false);
+
+    await runOnPty("agent:alice", "second", {
+      timeoutMs: 60_000,
+      agentName: "alice",
+    });
+    expect(__isSupervisorInitialisedForTests()).toBe(true);
+  });
+
+  it("concurrent first callers do not double-init", async () => {
+    const { spawn } = makeSpawnTracker(() => makeFakePty("test", {}));
+    injectSpawnPty(spawn);
+
+    expect(__isSupervisorInitialisedForTests()).toBe(false);
+
+    // Three concurrent calls — each calls ensureSupervisorInitialised() under
+    // the hood. The cached _initPromise should serialise them onto a single
+    // initSupervisor execution.
+    await Promise.all([
+      runOnPty("thread:t1", "p1", { timeoutMs: 60_000, threadId: "t1" }),
+      runOnPty("thread:t2", "p2", { timeoutMs: 60_000, threadId: "t2" }),
+      runOnPty("thread:t3", "p3", { timeoutMs: 60_000, threadId: "t3" }),
+    ]);
+
+    expect(__isSupervisorInitialisedForTests()).toBe(true);
+    // Three distinct keys → three spawns. (Sanity check that the test is
+    // genuinely concurrent and not collapsed into a single spawn.)
+    expect(snapshotSupervisor().ptys.length).toBe(3);
+  });
+});
 
 describe("pty-supervisor lifecycle", () => {
   it("initSupervisor is idempotent — no duplicate PTYs", async () => {
