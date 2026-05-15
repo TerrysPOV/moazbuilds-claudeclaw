@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { z } from "zod";
 import { getMcpBridge } from "../mcp-bridge.js";
 import { getHttpGateway } from "../http-gateway.js";
+import { getSettings } from "../../config.js";
 import { McpServerProcess, type McpServerConfig } from "./server-process.js";
 
 const MAX_RESULT_BYTES = Number(process.env.MCP_PROXY_MAX_RESULT_BYTES ?? 1_048_576);
@@ -61,7 +62,30 @@ export class McpProxyPlugin {
       return;
     }
 
-    const enabledServers = Object.entries(config.servers).filter(([, s]) => s.enabled);
+    // SPEC §4.1 step 4 / §6.2: when a server is claimed by the multiplexer
+    // via `settings.mcp.shared`, mcp-proxy must NOT spawn its own copy of
+    // that upstream child — otherwise both plugins would each spawn the
+    // same MCP server (double-process, defeats the whole point). The
+    // multiplexer mirrors the FQN into the bridge so legacy `claude -p`
+    // callsites still resolve `<server>__<tool>` against the shared child.
+    const sharedClaimedByMultiplexer = _sharedFromSettings();
+    const skipped: string[] = [];
+    const enabledServers = Object.entries(config.servers).filter(([name, s]) => {
+      if (!s.enabled) return false;
+      if (sharedClaimedByMultiplexer.has(name)) {
+        skipped.push(name);
+        return false;
+      }
+      return true;
+    });
+    if (skipped.length > 0) {
+      console.error(
+        `[mcp-proxy] skipping ${skipped.length} server(s) claimed by multiplexer: ${skipped.join(", ")}`,
+      );
+      try {
+        getMcpBridge().audit("mcp_proxy_skip_shared", { servers: skipped });
+      } catch {}
+    }
     const allTools: { name: string; description: string; schema: Record<string, unknown> }[] = [];
 
     await Promise.allSettled(enabledServers.map(async ([name, cfg]) => {
@@ -181,6 +205,24 @@ export class McpProxyPlugin {
       throw new Error(`reasoned mode not configured for ${fqn}`);
     }
     return this.reasonedInvokeFn(fqn, args);
+  }
+}
+
+// ── Settings helpers ──────────────────────────────────────────────────────────
+
+/** Read `settings.mcp.shared` defensively. The `mcp` block on `Settings`
+ *  is added by the PTY-wiring worktree (W2); until then it is absent at
+ *  runtime, which is treated identically to "multiplexer dormant". */
+function _sharedFromSettings(): Set<string> {
+  try {
+    const s = getSettings();
+    const mcpRaw = (s as unknown as { mcp?: unknown }).mcp;
+    if (!mcpRaw || typeof mcpRaw !== "object") return new Set();
+    const shared = (mcpRaw as Record<string, unknown>).shared;
+    if (!Array.isArray(shared)) return new Set();
+    return new Set(shared.filter((n): n is string => typeof n === "string" && n.length > 0));
+  } catch {
+    return new Set();
   }
 }
 
