@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { z } from "zod";
 import { getMcpBridge } from "../mcp-bridge.js";
 import { getHttpGateway } from "../http-gateway.js";
-import { getSettings } from "../../config.js";
 import { McpServerProcess, type McpServerConfig } from "./server-process.js";
 
 const MAX_RESULT_BYTES = Number(process.env.MCP_PROXY_MAX_RESULT_BYTES ?? 1_048_576);
