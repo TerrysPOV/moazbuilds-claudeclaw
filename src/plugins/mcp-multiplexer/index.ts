@@ -212,6 +212,11 @@ export class McpMultiplexerPlugin {
       try {
         getMcpBridge().audit("multiplexer_no_config", { path: this.configPath });
       } catch {}
+      // Clear the cache we set above so isActive() + bridgeBaseUrl() are
+      // consistent ("plugin is not running" → "URL is default placeholder").
+      this.cachedSharedNames = [];
+      this.cachedStatelessNames = [];
+      this.cachedBridgeBaseUrl = "http://127.0.0.1:4632";
       return;
     }
 
@@ -277,6 +282,7 @@ export class McpMultiplexerPlugin {
       );
       this.cachedSharedNames = [];
       this.cachedStatelessNames = [];
+      this.cachedBridgeBaseUrl = "http://127.0.0.1:4632";
       return;
     }
 
@@ -312,6 +318,7 @@ export class McpMultiplexerPlugin {
     this.servers.clear();
     this.cachedSharedNames = [];
     this.cachedStatelessNames = [];
+    this.cachedBridgeBaseUrl = "http://127.0.0.1:4632";
   }
 
   // ── Health probe ────────────────────────────────────────────────────

@@ -69,9 +69,14 @@ export interface PtyIdentity {
   ptyId: string;
   /** Issuance timestamp in epoch milliseconds. */
   issuedAt: number;
-  /** Header literal for the synthesized --mcp-config JSON. */
-  bearer: string;            // `Bearer <hex>` — value, not just <hex>
-  /** Headers map for the synthesized --mcp-config JSON. */
+  /** Headers map for the synthesized --mcp-config JSON. The bearer
+   *  literal (`Bearer <hex>`) is at `headers["Authorization"]`. The
+   *  bearer is NEVER exposed as a standalone field on the public
+   *  interface — Phase D security finding #1 removed it as a
+   *  future-leak surface (a stray `console.log(identity)` would have
+   *  exposed the secret). Consumers needing verification go through
+   *  `verifyBearer(ptyId, header)` rather than reading the bearer
+   *  directly. */
   headers: Record<string, string>;
 }
 
