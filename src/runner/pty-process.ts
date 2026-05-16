@@ -32,6 +32,7 @@
  */
 import { spawn as ptySpawn, type IPty } from "bun-pty";
 import type { SecurityConfig } from "../config";
+import { withCleanProcessEnv } from "../runner";
 import {
   createParser,
   decodeTurn,
@@ -776,13 +777,24 @@ export function spawnPty(opts: PtyProcessOptions): Promise<PtyProcess> {
 
     let pty: IPty;
     try {
-      pty = ptySpawn(cmd, args, {
-        name: "xterm-256color",
-        cols,
-        rows,
-        cwd: opts.cwd,
-        env: opts.env,
-      });
+      // bun-pty's Rust wrapper does NOT call CommandBuilder::env_clear()
+      // before adding env vars — portable_pty MERGES the caller-supplied
+      // env with the parent process env at fork() time. So passing a
+      // sanitised `opts.env` is not enough: the child claude still inherits
+      // ANTHROPIC_API_KEY (and the other Claude-Code internals) from this
+      // daemon's process.env, hits claude 2.1.89's "Detected a custom API
+      // key" interactive gate, and leaks the prompt + a truncated key into
+      // the PTY (visible on Discord/Telegram). withCleanProcessEnv strips
+      // those keys from process.env around the synchronous FFI call.
+      pty = withCleanProcessEnv(() =>
+        ptySpawn(cmd, args, {
+          name: "xterm-256color",
+          cols,
+          rows,
+          cwd: opts.cwd,
+          env: opts.env,
+        }),
+      );
     } catch (err) {
       reject(
         new Error(

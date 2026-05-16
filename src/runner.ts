@@ -195,19 +195,141 @@ const COMPACT_TIMEOUT_ENABLED = true;
  * or `ANTHROPIC_API_KEY` will silently leak into PTY-mode spawns and bill
  * against raw API credits instead of the operator's subscription.
  */
+/**
+ * Canonical strip list shared by `cleanSpawnEnv` and `withCleanProcessEnv`.
+ * Keep these in sync — both helpers MUST agree, or one will reintroduce a
+ * leak the other prevents.
+ */
+const SPAWN_ENV_STRIP_KEYS = [
+  "CLAUDECODE",
+  "CLAUDE_CODE_OAUTH_TOKEN",
+  "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
+  "ANTHROPIC_API_KEY", // see comment above — prevents accidental API-key billing
+] as const;
+
 export function cleanSpawnEnv(): Record<string, string> {
-  const stripped = new Set([
-    "CLAUDECODE",
-    "CLAUDE_CODE_OAUTH_TOKEN",
-    "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
-    "ANTHROPIC_API_KEY", // see comment above — prevents accidental API-key billing
-  ]);
+  const stripped = new Set<string>(SPAWN_ENV_STRIP_KEYS);
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (stripped.has(key)) continue;
     if (typeof value === "string") out[key] = value;
   }
   return out;
+}
+
+/**
+ * Run `fn` with `SPAWN_ENV_STRIP_KEYS` temporarily deleted from `process.env`,
+ * then restore the originals. Required because `bun-pty`'s Rust wrapper does
+ * NOT call `CommandBuilder::env_clear()` — `portable_pty` MERGES the
+ * caller-supplied env with the parent process env at fork() time, so just
+ * passing a sanitised env Record (`cleanSpawnEnv()`) is not enough. The
+ * spawned `claude` still sees `ANTHROPIC_API_KEY` from the daemon's
+ * `process.env` (typically loaded from `/etc/claudeclaw/.claudeclaw-env`),
+ * triggers the "Detected a custom API key" interactive gate in claude 2.1.89,
+ * and dumps the prompt — with a truncated key — into the PTY. That output
+ * then leaks to the user-visible surface (Discord, Telegram, etc.).
+ *
+ * Safety: This mutates global state. It is ONLY race-free because:
+ *   1. Bun is single-threaded JS — no preemption between sync statements.
+ *   2. `bun-pty.spawn` is a synchronous FFI call: it does fork+exec inside
+ *      the Rust shared library and returns the handle BEFORE the JS event
+ *      loop resumes. The child inherits the parent's env at fork() time,
+ *      which is during the FFI call, AFTER our delete and BEFORE our restore.
+ *   3. `fn` MUST be synchronous (or at least, the work that depends on
+ *      `process.env` being stripped must finish before any `await`). Do NOT
+ *      pass an async function that awaits between delete and the actual
+ *      spawn — the event loop could schedule other JS that observes the
+ *      stripped env.
+ *
+ * If you find yourself wanting to wrap async work, refactor that work to
+ * have the spawn as the only call inside `withCleanProcessEnv` and do the
+ * rest outside.
+ */
+/**
+ * Lazy-loaded `libc.unsetenv` / `libc.setenv` bindings.
+ *
+ * Bun (and Node) implement `delete process.env.X` and `process.env.X = "..."`
+ * by mutating an in-process hash — they do NOT call libc `unsetenv()` /
+ * `setenv()`. That means the underlying `environ` array still has the
+ * original value, and any native code (or child process spawned via fork+exec
+ * without explicit `env_clear()`) sees the un-stripped env.
+ *
+ * `bun-pty`'s Rust wrapper relies on `portable_pty::CommandBuilder`, which
+ * inherits parent env via `std::env::vars_os()` → reads `environ` → sees the
+ * un-stripped value. So `withCleanProcessEnv` MUST also call libc `unsetenv`
+ * to actually remove the var before spawn.
+ */
+let _libcUnsetEnv: ((name: Buffer) => number) | null = null;
+let _libcSetEnv: ((name: Buffer, value: Buffer, overwrite: number) => number) | null = null;
+let _libcLoadAttempted = false;
+
+function loadLibc(): void {
+  if (_libcLoadAttempted) return;
+  _libcLoadAttempted = true;
+  try {
+    // bun:ffi is only available under Bun — import lazily to avoid blowing
+    // up under tsc / non-Bun tooling.
+    // biome-ignore lint/suspicious/noExplicitAny: dynamic Bun runtime import
+    const { dlopen, FFIType } = require("bun:ffi") as any;
+    const candidates =
+      process.platform === "darwin"
+        ? ["libSystem.B.dylib", "/usr/lib/libSystem.B.dylib"]
+        : ["libc.so.6", "libc.so"];
+    for (const candidate of candidates) {
+      try {
+        const lib = dlopen(candidate, {
+          unsetenv: { args: [FFIType.cstring], returns: FFIType.i32 },
+          setenv: {
+            args: [FFIType.cstring, FFIType.cstring, FFIType.i32],
+            returns: FFIType.i32,
+          },
+        });
+        _libcUnsetEnv = lib.symbols.unsetenv;
+        _libcSetEnv = lib.symbols.setenv;
+        return;
+      } catch {
+        // try next candidate
+      }
+    }
+  } catch {
+    // bun:ffi unavailable (e.g. test env). withCleanProcessEnv will fall back
+    // to JS-only delete; that's correct for tests against /bin/cat etc. but
+    // would re-leak under real bun-pty + native fork. Surface this loudly
+    // in production via logging.
+  }
+}
+
+export function withCleanProcessEnv<T>(fn: () => T): T {
+  loadLibc();
+  const restore: Record<string, string | undefined> = {};
+  for (const k of SPAWN_ENV_STRIP_KEYS) {
+    restore[k] = process.env[k];
+    // 1. JS-side delete so anything checking process.env directly sees it gone.
+    delete process.env[k];
+    // 2. libc unsetenv so anything reading via `environ` (bun-pty's Rust
+    //    `std::env::vars_os()`) ALSO sees it gone. Without this, the child
+    //    inherits the original value via fork+exec.
+    if (_libcUnsetEnv) {
+      _libcUnsetEnv(Buffer.from(`${k}\0`, "utf8"));
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    for (const k of SPAWN_ENV_STRIP_KEYS) {
+      const v = restore[k];
+      if (v !== undefined) {
+        // Restore on BOTH sides: JS hash (so process.env.X reads work) and
+        // libc environ (so subsequent fork+exec children see it). Bun does
+        // not keep these in sync for assignment any more than it does for
+        // delete, so we touch both explicitly.
+        process.env[k] = v;
+        if (_libcSetEnv) {
+          _libcSetEnv(Buffer.from(`${k}\0`, "utf8"), Buffer.from(`${v}\0`, "utf8"), 1);
+        }
+      }
+    }
+  }
 }
 
 export type CompactEvent =

@@ -124,3 +124,170 @@ describe("Phase 18: runner modelOverride wiring", () => {
   // options.modelOverride. Documented here rather than asserted because the
   // runClaudeOnce spy only captures the primary model arg, not fallback.
 });
+
+// ─── withCleanProcessEnv (issue: bun-pty env leak) ───────────────────────────
+//
+// Regression cover for the production failure where `claude` 2.1.89's
+// "Detected a custom API key" interactive gate leaked into Discord. Root
+// cause: bun-pty's Rust wrapper does NOT call CommandBuilder::env_clear()
+// before adding env pairs, so portable_pty MERGES the caller-supplied env
+// with the parent process env at fork(). Sanitising the opts.env Record via
+// cleanSpawnEnv() was not sufficient because the daemon's process.env still
+// had ANTHROPIC_API_KEY (loaded from /etc/claudeclaw/.claudeclaw-env), which
+// claude inherited at fork() time. withCleanProcessEnv strips the keys from
+// process.env around the synchronous FFI call.
+describe("withCleanProcessEnv", () => {
+  const STRIP_KEYS = [
+    "ANTHROPIC_API_KEY",
+    "CLAUDECODE",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
+  ] as const;
+
+  function snapshot(): Record<string, string | undefined> {
+    const out: Record<string, string | undefined> = {};
+    for (const k of STRIP_KEYS) out[k] = process.env[k];
+    return out;
+  }
+
+  function restore(snap: Record<string, string | undefined>): void {
+    for (const [k, v] of Object.entries(snap)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+
+  it("removes strip-list keys from process.env while fn is running", () => {
+    const original = snapshot();
+    try {
+      process.env.ANTHROPIC_API_KEY = "sk-ant-must-not-leak-to-child";
+      process.env.CLAUDECODE = "1";
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = "oauth-test";
+      process.env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST = "true";
+
+      const seen = runnerMod.withCleanProcessEnv(() => ({
+        ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+        CLAUDECODE: process.env.CLAUDECODE,
+        CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN,
+        CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: process.env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST,
+      }));
+
+      expect(seen.ANTHROPIC_API_KEY).toBeUndefined();
+      expect(seen.CLAUDECODE).toBeUndefined();
+      expect(seen.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+      expect(seen.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBeUndefined();
+    } finally {
+      restore(original);
+    }
+  });
+
+  it("restores originals after fn returns", () => {
+    const original = snapshot();
+    try {
+      process.env.ANTHROPIC_API_KEY = "sk-ant-restore-me";
+      process.env.CLAUDECODE = "1";
+
+      runnerMod.withCleanProcessEnv(() => {
+        expect(process.env.ANTHROPIC_API_KEY).toBeUndefined();
+      });
+
+      expect(process.env.ANTHROPIC_API_KEY).toBe("sk-ant-restore-me");
+      expect(process.env.CLAUDECODE).toBe("1");
+    } finally {
+      restore(original);
+    }
+  });
+
+  it("restores originals even when fn throws", () => {
+    const original = snapshot();
+    try {
+      process.env.ANTHROPIC_API_KEY = "sk-ant-restore-on-throw";
+
+      expect(() => {
+        runnerMod.withCleanProcessEnv(() => {
+          throw new Error("boom");
+        });
+      }).toThrow("boom");
+
+      expect(process.env.ANTHROPIC_API_KEY).toBe("sk-ant-restore-on-throw");
+    } finally {
+      restore(original);
+    }
+  });
+
+  it("leaves keys absent that were absent originally", () => {
+    const original = snapshot();
+    try {
+      for (const k of STRIP_KEYS) delete process.env[k];
+
+      runnerMod.withCleanProcessEnv(() => {
+        for (const k of STRIP_KEYS) {
+          expect(process.env[k]).toBeUndefined();
+        }
+      });
+
+      for (const k of STRIP_KEYS) {
+        expect(process.env[k]).toBeUndefined();
+      }
+    } finally {
+      restore(original);
+    }
+  });
+
+  it("returns fn's return value", () => {
+    expect(runnerMod.withCleanProcessEnv(() => 42)).toBe(42);
+    expect(runnerMod.withCleanProcessEnv(() => "hello")).toBe("hello");
+  });
+
+  // Hetzner-discovered regression: Bun's `delete process.env.X` only updates
+  // the JS hash — libc `environ` retains the value. bun-pty's Rust wrapper
+  // reads `environ` via `std::env::vars_os()` so its spawned child still
+  // inherits the un-stripped value. withCleanProcessEnv MUST also call libc
+  // unsetenv so the child fork sees a clean env.
+  //
+  // This test spawns a real bun-pty child running `/bin/sh -c env` and
+  // verifies the strip-list keys do not appear in the child's environment
+  // dump — proving the libc-level strip works end-to-end against the same
+  // codepath that production uses.
+  it("strips keys at the libc level so bun-pty children do not inherit them via fork+exec", async () => {
+    const SECRET = "sk-ant-libc-regression-do-not-leak";
+    const original = snapshot();
+    try {
+      // Set ANTHROPIC_API_KEY via libc so it actually lives in environ
+      // (mirrors how the daemon's launcher sources /home/claw/.claudeclaw-env
+      // and exec's bun — by the time bun starts, the var is in libc environ).
+      process.env.ANTHROPIC_API_KEY = SECRET;
+
+      const { spawn } = await import("bun-pty");
+
+      const out = runnerMod.withCleanProcessEnv(() => {
+        const p = spawn("/bin/sh", ["-c", "env"], {
+          name: "xterm-256color",
+          cols: 80,
+          rows: 24,
+          cwd: "/tmp",
+          // Explicit env intentionally minimal — the leak would come via
+          // bun-pty's parent-env merge, NOT this explicit map.
+          env: { PATH: "/usr/bin:/bin" },
+        });
+        let buf = "";
+        p.onData((d: string) => {
+          buf += d;
+        });
+        return new Promise<string>((resolve) => {
+          // The child exits after `env` prints; give it time to flush.
+          setTimeout(() => {
+            resolve(buf);
+          }, 400);
+        });
+      });
+
+      const dump = await out;
+      // The child must not have seen ANTHROPIC_API_KEY at all.
+      expect(dump).not.toContain(SECRET);
+      expect(dump).not.toMatch(/(^|\n)ANTHROPIC_API_KEY=/);
+    } finally {
+      restore(original);
+    }
+  }, 5000);
+});
