@@ -69,6 +69,12 @@ function makeSettingsView(partial: Partial<MuxSettingsView>): () => MuxSettingsV
     shared: [],
     stateless: [],
     healthProbeIntervalMs: 0,
+    // Phase B added these fields to MuxSettingsView. Tests pre-dating
+    // Phase B set defaults that disable persistence so behaviour is
+    // identical to PR #71.
+    sessionPersistenceEnabled: false,
+    sessionMaxAgeSeconds: 3600,
+    sessionPersistencePath: "",
     ...partial,
   };
   return () => view;
