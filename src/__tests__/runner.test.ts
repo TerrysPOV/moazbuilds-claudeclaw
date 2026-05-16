@@ -286,11 +286,7 @@ describe("withCleanProcessEnv", () => {
         "libc dlopen failed in test setup — cannot seed environ via setenv to exercise the libc-unset codepath",
       );
     }
-    libc.setenv(
-      Buffer.from("ANTHROPIC_API_KEY\0", "utf8"),
-      Buffer.from(`${SECRET}\0`, "utf8"),
-      1,
-    );
+    libc.setenv(Buffer.from("ANTHROPIC_API_KEY\0", "utf8"), Buffer.from(`${SECRET}\0`, "utf8"), 1);
     // Also reflect into JS hash so snapshot/restore see consistent state.
     process.env.ANTHROPIC_API_KEY = SECRET;
 

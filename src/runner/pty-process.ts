@@ -201,7 +201,6 @@ export class PtyClosedError extends Error {
 
 // ─── Internal helpers ───────────────────────────────────────────────────────
 
-const DEFAULT_TURN_IDLE_TIMEOUT_MS = 30_000;
 const DEFAULT_QUIET_WINDOW_MS = 500;
 const DEFAULT_SENTINEL_MAX_WAIT_MS = 30_000;
 const DEFAULT_QUIET_TICK_MS = 50;
@@ -276,7 +275,6 @@ class PtyProcessImpl implements PtyProcess {
   private _alive: boolean = true;
   private _lastTurnEndedAt: number = 0;
   private _pty: IPty;
-  private readonly _idleTimeoutMs: number;
   private readonly _quietWindowMs: number;
   private readonly _sentinelMaxWaitMs: number;
   private readonly _now: () => number;
@@ -324,7 +322,6 @@ class PtyProcessImpl implements PtyProcess {
       opts.sessionId && opts.sessionId.length > 0 ? opts.sessionId : (opts.newSessionId ?? "");
     this.cwd = opts.cwd;
     this.label = `${opts.agentName ?? "pty"}:${pty.pid}`;
-    this._idleTimeoutMs = opts.turnIdleTimeoutMs ?? DEFAULT_TURN_IDLE_TIMEOUT_MS;
     this._quietWindowMs = opts.quietWindowMs ?? DEFAULT_QUIET_WINDOW_MS;
     this._sentinelMaxWaitMs = opts.sentinelMaxWaitMs ?? DEFAULT_SENTINEL_MAX_WAIT_MS;
     this._now = opts._now ?? (() => Date.now());
