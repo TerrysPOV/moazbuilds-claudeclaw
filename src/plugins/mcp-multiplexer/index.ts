@@ -735,6 +735,10 @@ export class McpMultiplexerPlugin {
           status,
         });
       } catch {}
+      // #72 item 6: align the health-probe view with what we just
+      // audited so the next `_sampleHealth` tick doesn't re-fire
+      // `mcp_health_degraded` for the same incident.
+      this.lastObservedStatus.set(name, status);
       return;
     }
     console.error(`[mcp-multiplexer] server '${name}' crashed: ${reason} — status: ${status}`);
@@ -745,6 +749,11 @@ export class McpMultiplexerPlugin {
         status,
       });
     } catch {}
+    // #72 item 6: same dedup gate as the permanently-failed branch
+    // above — sync `lastObservedStatus` so the next probe tick treats
+    // this incident as already-audited and only fires on a subsequent
+    // status transition (e.g. crashed → restarting → up).
+    this.lastObservedStatus.set(name, status);
   }
 
   private _registerBridgeCallbacks(serverName: string, proc: McpServerProcess): void {

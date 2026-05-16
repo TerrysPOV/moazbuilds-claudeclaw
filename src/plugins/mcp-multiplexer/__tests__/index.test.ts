@@ -418,6 +418,120 @@ describe("McpMultiplexerPlugin — active path", () => {
       await plugin.stop();
     });
 
+    // #72 item 6: when `_onServerCrash` fires `multiplexer_server_crashed`
+    // immediately for an incident, the next `_sampleHealth` tick must
+    // NOT re-audit the same incident with `mcp_health_degraded`. Pre-fix
+    // both events fired for one crash and operators had to dedup. Post-
+    // fix `_onServerCrash` syncs `lastObservedStatus` so the next probe
+    // observes "no transition".
+    it("does NOT re-audit via _sampleHealth after _onServerCrash already fired (#72 item 6)", async () => {
+      const cfgPath = writeProxyConfig(tmpDir, ["alpha"]);
+      const plugin = new McpMultiplexerPlugin({
+        configPath: cfgPath,
+        settingsView: makeSettingsView({
+          webEnabled: true,
+          shared: ["alpha"],
+          healthProbeIntervalMs: 0,
+        }),
+      });
+      await plugin.start();
+
+      // Seed the baseline so a status flip would otherwise register as a
+      // transition under the health probe.
+      const proc = (
+        plugin as unknown as {
+          servers: Map<string, { status: string }>;
+          lastObservedStatus: Map<string, string>;
+        }
+      ).servers.get("alpha")!;
+      (plugin as unknown as { lastObservedStatus: Map<string, string> }).lastObservedStatus.set(
+        "alpha",
+        proc.status,
+      );
+
+      // Simulate the upstream subprocess crashing — what
+      // McpServerProcess does when its child closes unexpectedly.
+      (proc as { status: string }).status = "crashed";
+
+      const audited: string[] = [];
+      const origAudit = getMcpBridge().audit.bind(getMcpBridge());
+      getMcpBridge().audit = (event: string, payload: Record<string, unknown>) => {
+        audited.push(event);
+        origAudit(event, payload);
+      };
+
+      try {
+        // Step 1: McpServerProcess fires the crash hook → multiplexer
+        // audits `multiplexer_server_crashed` immediately.
+        (plugin as unknown as { _onServerCrash: (n: string, r: string) => void })._onServerCrash(
+          "alpha",
+          "subprocess closed",
+        );
+        // Step 2: the periodic probe runs. With the dedup gate, it must
+        // observe "no transition" (lastObservedStatus already == "crashed")
+        // and NOT re-audit `mcp_health_degraded`.
+        (plugin as unknown as { _sampleHealthForTests: () => void })._sampleHealthForTests();
+      } finally {
+        getMcpBridge().audit = origAudit;
+      }
+
+      // The crash incident MUST surface exactly ONE event, not two.
+      expect(audited.filter((e) => e === "multiplexer_server_crashed")).toHaveLength(1);
+      expect(audited.filter((e) => e === "mcp_health_degraded")).toHaveLength(0);
+
+      await plugin.stop();
+    });
+
+    // Same gate for the permanently-failed branch added in #93 (#72 item 4).
+    it("does NOT re-audit via _sampleHealth after _onServerCrash fired permanently_failed", async () => {
+      const cfgPath = writeProxyConfig(tmpDir, ["alpha"]);
+      const plugin = new McpMultiplexerPlugin({
+        configPath: cfgPath,
+        settingsView: makeSettingsView({
+          webEnabled: true,
+          shared: ["alpha"],
+          healthProbeIntervalMs: 0,
+        }),
+      });
+      await plugin.start();
+
+      const proc = (
+        plugin as unknown as {
+          servers: Map<string, { status: string }>;
+          lastObservedStatus: Map<string, string>;
+        }
+      ).servers.get("alpha")!;
+      (plugin as unknown as { lastObservedStatus: Map<string, string> }).lastObservedStatus.set(
+        "alpha",
+        proc.status,
+      );
+      (proc as { status: string }).status = "failed";
+
+      const audited: string[] = [];
+      const origAudit = getMcpBridge().audit.bind(getMcpBridge());
+      getMcpBridge().audit = (event: string, payload: Record<string, unknown>) => {
+        audited.push(event);
+        origAudit(event, payload);
+      };
+
+      try {
+        (plugin as unknown as { _onServerCrash: (n: string, r: string) => void })._onServerCrash(
+          "alpha",
+          "exceeded max crashes",
+        );
+        (plugin as unknown as { _sampleHealthForTests: () => void })._sampleHealthForTests();
+      } finally {
+        getMcpBridge().audit = origAudit;
+      }
+
+      expect(audited.filter((e) => e === "multiplexer_server_permanently_failed")).toHaveLength(1);
+      expect(audited.filter((e) => e === "mcp_health_degraded")).toHaveLength(0);
+      // And the broader crash event is mutually exclusive (#72 item 4) — so it should NOT fire either.
+      expect(audited.filter((e) => e === "multiplexer_server_crashed")).toHaveLength(0);
+
+      await plugin.stop();
+    });
+
     it("does not emit duplicate events when status is stable across samples", async () => {
       const cfgPath = writeProxyConfig(tmpDir, ["alpha"]);
       const plugin = new McpMultiplexerPlugin({
