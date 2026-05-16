@@ -342,18 +342,46 @@ export function normaliseNewlines(text: string): string {
  *   3. Trim whitespace; if empty, fall back to the whole stripped buffer.
  */
 export function extractResponseText(strippedNormalised: string): string {
-  const marker = "⏺";
+  // Claude 2.1.89 emits `●` (U+25CF BLACK CIRCLE) before the assistant
+  // message. Older versions used `⏺` (U+23FA RECORD button). Accept both.
+  //
+  // The marker MUST be anchored at the start of a line. claude's TUI
+  // uses `●` in plenty of other places too — the ClaudeClaw+ status box
+  // (`│ ● live │ 🎮 │`) renders the same glyph inside a box-drawn row,
+  // and the status box paints AFTER the model response in the stream. A
+  // naive `lastIndexOf("●")` would pick the box marker and return only
+  // the TUI footer as the "response". The space after the marker is
+  // optional: claude 2.1.89 ANSI-strips down to `●Pong` (no space) for
+  // short responses; longer responses (or ones with leading punctuation)
+  // come through as `● Body...`.
+  const markerRe = /(?:^|\n)([●⏺]) ?/gu;
   // Spinner glyphs and `⎿` tool-result indent are the natural terminators
-  // that follow the assistant message in the TUI. We intentionally do NOT
-  // include `❯` alone — it can legitimately appear inside response text
-  // (e.g. a shell-prompt example).
-  const terminatorRe = /[✻✶✳✢✽✺✷·◉]| {2,}⎿/u;
-  const idx = strippedNormalised.lastIndexOf(marker);
-  if (idx < 0) return strippedNormalised.trim();
+  // that follow the assistant message in the TUI. We also terminate on a
+  // line of 4+ horizontal box-drawing chars (`─` U+2500 or `━` U+2501) —
+  // claude's TUI prints that as the divider above the next input prompt
+  // after a response completes. We intentionally do NOT include `❯` alone
+  // — it can legitimately appear inside response text (e.g. a shell-prompt
+  // example).
+  const terminatorRe = /[✻✶✳✢✽✺✷·◉]| {2,}⎿|\n[─━]{4,}/u;
 
-  let after = strippedNormalised.slice(idx + marker.length);
-  if (after.startsWith(" ")) after = after.slice(1);
+  // Find the LAST line-anchored marker. Take whichever appears latest in
+  // the stream (handles streams that contain multiple turns or a turn
+  // whose response includes nested assistant markers).
+  let lastMarkerStart = -1;
+  let lastMarkerEnd = -1;
+  for (const m of strippedNormalised.matchAll(markerRe)) {
+    // m.index points at the `\n` (or position 0). The marker character
+    // itself begins at index + (newline ? 1 : 0). Easiest: m[0] is either
+    // "\n● " or "● " (at string start); the marker char is the
+    // penultimate char of the match. After-text begins right after.
+    const matchStart = m.index ?? 0;
+    const afterStart = matchStart + m[0].length;
+    lastMarkerStart = matchStart;
+    lastMarkerEnd = afterStart;
+  }
+  if (lastMarkerStart < 0) return strippedNormalised.trim();
 
+  const after = strippedNormalised.slice(lastMarkerEnd);
   const termMatch = after.match(terminatorRe);
   const body = termMatch ? after.slice(0, termMatch.index) : after;
   const trimmed = body.trim();

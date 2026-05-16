@@ -396,18 +396,37 @@ describe("normaliseNewlines", () => {
 });
 
 describe("extractResponseText", () => {
-  test("extracts text after ⏺ and before terminator sigil", () => {
-    const text = "garbage\n⏺hello world✻ Worked for 2s\n more";
+  test("extracts text after a line-anchored `⏺ ` and before terminator sigil", () => {
+    const text = "garbage\n⏺ hello world✻ Worked for 2s\n more";
     expect(extractResponseText(text)).toBe("hello world");
   });
 
-  test("handles ⏺ with leading space", () => {
-    const text = "garbage\n⏺ hello world✻ Worked for 2s";
-    expect(extractResponseText(text)).toBe("hello world");
+  // The marker must be at line-start and followed by a space — this is
+  // exactly how claude's TUI prints the assistant message. A bare `⏺` or
+  // `●` embedded inside a TUI element (e.g. the ClaudeClaw+ status box
+  // row `│ ● live │ 🎮 │`) MUST NOT be picked up; pre-fix that bug
+  // caused the captured "response" to be the TUI footer (everything from
+  // the status-box marker onwards) instead of the model output.
+  test("ignores `●` not at line-start (e.g. inside the ClaudeClaw+ status-box row)", () => {
+    // Realistic shape: response marker, then the `─` separator the TUI
+    // prints before re-rendering the input area, then the status box
+    // which contains another `●` we MUST NOT pick up.
+    const text = [
+      "● Pong 🏓",
+      "",
+      "─".repeat(50),
+      "❯ Try \"how do I log an error?\"",
+      "─".repeat(50),
+      "⏵⏵ bypass permissions on (shift+tab to cycle)",
+      "╭────── 🦞 ClaudeClaw+ 🦞 ──────╮",
+      "│ 📋 7 jobs │ ● live │ 🎮 │",
+      "╰───────────────────────────────╯",
+    ].join("\n");
+    expect(extractResponseText(text)).toBe("Pong 🏓");
   });
 
-  test("uses the LAST ⏺ (response area, not echoed prompt)", () => {
-    const text = "⏺nope ✻done\n⏺yes✻";
+  test("uses the LAST line-anchored marker (response area, not echoed prompt)", () => {
+    const text = "⏺ nope ✻done\n⏺ yes✻";
     expect(extractResponseText(text)).toBe("yes");
   });
 
@@ -431,6 +450,104 @@ describe("extractResponseText", () => {
     expect(extractResponseText(text)).toBe(
       "The prompt looked like `user@host ❯` when I tested it.",
     );
+  });
+
+  // Issue #87 follow-up: claude 2.1.89 emits `●` (U+25CF BLACK CIRCLE)
+  // rather than `⏺` (U+23FA RECORD). Pre-fix, lastIndexOf("⏺") returned
+  // -1 and we fell back to the WHOLE stripped buffer — captures leaked
+  // TUI splash, prompt-echo, and footer into the response shown to the
+  // user (Discord/Telegram).
+  test("recognises `●` (U+25CF) as the assistant marker (claude 2.1.89)", () => {
+    const text = "garbage\n● Pong 🏓\n────────────\n❯ Try \"...\"";
+    expect(extractResponseText(text)).toBe("Pong 🏓");
+  });
+
+  test("real-world claude 2.1.89 turn: banner + prompt-echo + response + footer", () => {
+    // Verbatim shape captured from Hetzner (ANSI stripped). The marker
+    // before the model response is `●`, and the divider that follows is
+    // 100 horizontal-line chars before the next TUI input prompt.
+    const text = [
+      "▐▛███▜▌ Claude Code v2.1.89",
+      "▝▜█████▛▘ Sonnet 4.6 · Claude Max",
+      "▘▘ ▝▝   ~/project",
+      "",
+      "❯ [2026-05-16 18:33:59 UTC+1]",
+      "[Discord Channel: 1488536365477138602]",
+      "Message: Ping",
+      "",
+      "● Pong 🏓",
+      "",
+      "─".repeat(100),
+      "❯ Try \"how do I log an error?\"",
+      "─".repeat(100),
+      "⏵⏵ bypass permissions on (shift+tab to cycle)",
+    ].join("\n");
+    expect(extractResponseText(text)).toBe("Pong 🏓");
+  });
+
+  test("uses the LAST marker even when both `●` and `⏺` appear", () => {
+    // Defensive: if a future claude version mixes both, the most recent
+    // marker is the one that introduces the assistant response.
+    const text = "⏺ earlier\n● later✻";
+    expect(extractResponseText(text)).toBe("later");
+  });
+
+  test("multi-line response is preserved until divider", () => {
+    const text = `● Line one\nLine two\nLine three\n${"─".repeat(50)}\n❯ Try "next"`;
+    expect(extractResponseText(text)).toBe("Line one\nLine two\nLine three");
+  });
+
+  test("a short horizontal-line run (<4) is NOT a terminator", () => {
+    // 3 chars of ─ inside response (e.g. a markdown table) must not split.
+    const text = "● A row: ─ ─ ─ that crosses cells.";
+    expect(extractResponseText(text)).toBe("A row: ─ ─ ─ that crosses cells.");
+  });
+
+  // Hetzner-discovered shape: claude's TUI re-renders the entire screen
+  // for every turn, so a turn-2 capture contains the FULL conversation
+  // history (banner, turn-1 prompt + response, turn-2 prompt + response)
+  // followed by the input area re-render and the ClaudeClaw+ status box.
+  // The extractor must find the LATEST line-anchored marker (turn 2's
+  // response) and stop at the next divider — ignoring both turn 1's
+  // marker AND the status-box `●`.
+  //
+  // Note: claude 2.1.89 emits `●Pong` (no space) for short single-token
+  // responses after ANSI strip. The marker regex accepts an optional
+  // space after the marker glyph.
+  test("multi-turn TUI re-render: picks the LATEST `●` response, not turn-1's or the status-box `●`", () => {
+    const banner = [
+      "▐▛███▜▌ Claude Code v2.1.89",
+      "▝▜█████▛▘ Sonnet 4.6 · Claude Max",
+      "▘▘ ▝▝   ~/project",
+    ].join("\n");
+    const turn1 = [
+      "❯ [2026-05-16 18:33:59 UTC+1]",
+      "[Discord Channel: 1488536365477138602]",
+      "Message: Ping",
+      "",
+      "●Pong 🏓",
+    ].join("\n");
+    const turn2 = [
+      "❯ [2026-05-16 19:51:02 UTC+1]",
+      "[Discord Channel: 1488536365477138602]",
+      "Message: Ping",
+      "",
+      "●Pong",
+    ].join("\n");
+    const footer = [
+      "",
+      "─".repeat(100),
+      "❯ Try \"write a test for reprocess-clippings.py\"",
+      "─".repeat(100),
+      "⏵⏵ bypass permissions on (shift+tab to cycle) /buddy",
+      "╭────── 🦞 ClaudeClaw+ 🦞 ──────╮",
+      "│ 📋 7 jobs │ ● live │ 🎮 │",
+      "╰───────────────────────────────╯",
+      "⏵⏵ bypass permissions on (shift+tab to cycle)",
+    ].join("\n");
+    const fullScreen = [banner, "", turn1, "", turn2, footer].join("\n");
+
+    expect(extractResponseText(fullScreen)).toBe("Pong");
   });
 });
 
