@@ -252,12 +252,49 @@ describe("withCleanProcessEnv", () => {
   it("strips keys at the libc level so bun-pty children do not inherit them via fork+exec", async () => {
     const SECRET = "sk-ant-libc-regression-do-not-leak";
     const original = snapshot();
-    try {
-      // Set ANTHROPIC_API_KEY via libc so it actually lives in environ
-      // (mirrors how the daemon's launcher sources /home/claw/.claudeclaw-env
-      // and exec's bun — by the time bun starts, the var is in libc environ).
-      process.env.ANTHROPIC_API_KEY = SECRET;
+    // Codex P2 from PR #83 (issue #85): Bun's `process.env.X = "..."` does
+    // NOT update libc `environ` (mirroring the documented `delete` behaviour
+    // on `withCleanProcessEnv`). If we seeded via process.env, the var
+    // would never be in environ to begin with — and the bun-pty child would
+    // pass the assertion whether or not `libc.unsetenv` actually runs.
+    //
+    // Seed via libc `setenv` directly so the var genuinely lives in
+    // environ, matching the production daemon's startup state (launcher
+    // sources /home/claw/.claudeclaw-env via `set -a; source …; set +a`
+    // before exec'ing bun — by the time bun starts, the var is in environ).
+    // biome-ignore lint/suspicious/noExplicitAny: dynamic Bun runtime import
+    const { dlopen, FFIType } = (await import("bun:ffi")) as any;
+    const libcCandidates =
+      process.platform === "darwin"
+        ? ["libSystem.B.dylib", "/usr/lib/libSystem.B.dylib"]
+        : ["libc.so.6", "libc.so"];
+    let libc: { setenv: (n: Buffer, v: Buffer, o: number) => number } | null = null;
+    for (const candidate of libcCandidates) {
+      try {
+        const lib = dlopen(candidate, {
+          setenv: {
+            args: [FFIType.cstring, FFIType.cstring, FFIType.i32],
+            returns: FFIType.i32,
+          },
+        });
+        libc = { setenv: lib.symbols.setenv };
+        break;
+      } catch {}
+    }
+    if (!libc) {
+      throw new Error(
+        "libc dlopen failed in test setup — cannot seed environ via setenv to exercise the libc-unset codepath",
+      );
+    }
+    libc.setenv(
+      Buffer.from("ANTHROPIC_API_KEY\0", "utf8"),
+      Buffer.from(`${SECRET}\0`, "utf8"),
+      1,
+    );
+    // Also reflect into JS hash so snapshot/restore see consistent state.
+    process.env.ANTHROPIC_API_KEY = SECRET;
 
+    try {
       const { spawn } = await import("bun-pty");
 
       const out = runnerMod.withCleanProcessEnv(() => {

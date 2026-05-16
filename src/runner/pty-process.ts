@@ -702,36 +702,68 @@ class PtyProcessImpl implements PtyProcess {
   // ─── internal: used only by spawnPty to await TUI settle ─────────────
 
   /**
-   * Resolve once the TUI shows signs of life — either the first chunk of
-   * data has arrived OR `timeoutMs` has elapsed. Without OSC 9;4 markers
-   * we can't distinguish "TUI fully painted" from "TUI starting paint", so
-   * we use first-byte arrival as a lightweight readiness proxy.
+   * Resolve once the TUI has both painted (first data chunk arrived) AND
+   * gone quiet for `quietWindowMs` (no new data for that long, meaning the
+   * paint is done and the TUI is awaiting input). Falls back to resolve on
+   * `timeoutMs` regardless, so a stalled/silent claude doesn't deadlock
+   * spawn.
+   *
+   * Issue #84: pre-fix, this resolved on the FIRST BYTE — but claude
+   * 2.1.89's TUI takes ~1–2 seconds to fully paint after the first byte.
+   * `spawnPty` would return early, the supervisor's first `runTurn` wrote
+   * the user prompt into a half-painted TUI, and claude either ate those
+   * bytes or interpreted them as navigation keys. The sentinel-echo path
+   * then captured only the splash banner and returned it as the "model
+   * response" (visible to Discord/Telegram users).
+   *
+   * Two-phase model:
+   *   1. Wait for first data byte (TUI started painting).
+   *   2. Wait for `quietWindowMs` of NO new data (TUI finished painting
+   *      and is silent at the input prompt).
+   * On every incoming chunk after phase 1, reset the quiet timer.
    */
   _waitForReadySettle(timeoutMs: number): Promise<void> {
     return new Promise<void>((resolve) => {
       let resolved = false;
+      let quietTimer: ReturnType<typeof setTimeout> | null = null;
+      const originalHandler = this._handleData.bind(this);
+
       const done = () => {
         if (resolved) return;
         resolved = true;
+        if (quietTimer) this._clearTimeout(quietTimer);
+        this._clearTimeout(hardTimer);
+        // Restore the original handler so subsequent runTurn calls don't
+        // pay the patched-handler overhead and don't leak the closure.
+        this._handleData = originalHandler;
         resolve();
       };
 
-      if (this._firstDataAt > 0) {
-        // Data already arrived before this was called.
-        done();
-        return;
-      }
+      const scheduleQuiet = () => {
+        if (quietTimer) this._clearTimeout(quietTimer);
+        quietTimer = this._setTimeout(done, this._quietWindowMs);
+      };
 
-      const timer = this._setTimeout(done, timeoutMs);
-      // Patch _handleData to resolve on first byte.
-      const originalHandler = this._handleData.bind(this);
+      // Hard timeout: if the TUI never paints AT ALL within timeoutMs,
+      // resolve anyway and let the caller proceed. This also guards
+      // against a TUI that paints forever without ever going quiet.
+      const hardTimer = this._setTimeout(done, timeoutMs);
+
+      // Patch _handleData to reset the quiet timer on every incoming
+      // chunk. The quiet timer only starts firing after the first chunk
+      // (paint started) and only resolves once a full quietWindowMs has
+      // elapsed with no further chunks (paint finished).
       this._handleData = (data: string) => {
         originalHandler(data);
-        if (this._firstDataAt > 0) {
-          this._clearTimeout(timer);
-          done();
-        }
+        scheduleQuiet();
       };
+
+      // If data already arrived before this was called, kick off the
+      // quiet timer immediately — we may never see another byte and don't
+      // want to wait the full hard timeout.
+      if (this._firstDataAt > 0) {
+        scheduleQuiet();
+      }
     });
   }
 }

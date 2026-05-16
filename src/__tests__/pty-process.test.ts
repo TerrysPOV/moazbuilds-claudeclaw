@@ -95,6 +95,93 @@ describe("PtyProcess — lifecycle", () => {
   });
 });
 
+// ─── _waitForReadySettle: two-phase (paint + quiet) (issue #84) ─────────────
+//
+// Regression for the production failure where claude 2.1.89's TUI startup
+// banner leaked to Discord as the "model response". Pre-fix, readySettle
+// resolved on the first byte from claude — but the TUI takes ~1–2s to fully
+// paint. spawnPty would return early, the supervisor's first runTurn wrote
+// the prompt into a half-painted TUI, and the sentinel-echo path captured
+// only the splash bytes.
+//
+// Post-fix: resolve only after a quietWindowMs gap of NO data following the
+// first byte. The tests below simulate a slow paint with /bin/sh and assert
+// spawnPty doesn't resolve until the paint goes quiet.
+
+describe("PtyProcess — _waitForReadySettle two-phase (issue #84)", () => {
+  test("does NOT resolve on first byte — waits for quiet window after paint", async () => {
+    // Script: emit bytes immediately, again at 200ms, again at 400ms, then
+    // stay silent. With quietWindowMs=300, the quiet timer should reset on
+    // each chunk and only fire ~300ms after the last (400ms) chunk — so
+    // spawnPty should resolve at ~700ms, NOT at first-byte (~0ms).
+    const t0 = Date.now();
+    const proc = await spawnPty(
+      baseOpts({
+        _commandOverride: "/bin/sh",
+        _argsOverride: [
+          "-c",
+          // Trailing `sleep 5` keeps the process alive past the quiet
+          // window — spawnPty rejects if the child exits before settle.
+          "printf paint1; sleep 0.2; printf paint2; sleep 0.2; printf paint3; sleep 5",
+        ],
+        _skipReadySettle: false,
+        quietWindowMs: 300,
+      }),
+    );
+    const elapsed = Date.now() - t0;
+
+    // Quiet timer fires 300ms after the last chunk (paint3 at ~400ms) →
+    // expect ≥ ~600ms total. Pre-fix this resolved at ~0ms.
+    // Loose bound to avoid flakiness across CI environments.
+    expect(elapsed).toBeGreaterThanOrEqual(500);
+    // And not absurdly long either — the hard timeout is 3s.
+    expect(elapsed).toBeLessThan(3000);
+
+    await proc.dispose();
+  });
+
+  test("hard timeout fires when the TUI never paints", async () => {
+    // Script: silent for 2s then exit. With _waitForReadySettle's 3s hard
+    // timeout, spawn should still resolve at ~2s (when the process exits
+    // and onExit fires nothing through _handleData) — actually the hard
+    // timer's the only path that fires. To prove the hard timeout works
+    // in isolation, use a longer-silent process and trust the 3s cap.
+    const t0 = Date.now();
+    const proc = await spawnPty(
+      baseOpts({
+        _commandOverride: "/bin/sh",
+        _argsOverride: ["-c", "sleep 5"],
+        _skipReadySettle: false,
+        quietWindowMs: 100,
+      }),
+    );
+    const elapsed = Date.now() - t0;
+    // Hard timeout in spawnPty is 3000ms; allow some slack.
+    expect(elapsed).toBeGreaterThanOrEqual(2800);
+    expect(elapsed).toBeLessThan(3500);
+    await proc.dispose();
+  }, 7000);
+
+  test("resolves quickly when first byte is followed by long silence", async () => {
+    // Script: emit one chunk immediately, then 5s silence. With
+    // quietWindowMs=200, expect resolve at ~200ms — much faster than the
+    // 3s hard timeout.
+    const t0 = Date.now();
+    const proc = await spawnPty(
+      baseOpts({
+        _commandOverride: "/bin/sh",
+        _argsOverride: ["-c", "printf banner; sleep 5"],
+        _skipReadySettle: false,
+        quietWindowMs: 200,
+      }),
+    );
+    const elapsed = Date.now() - t0;
+    expect(elapsed).toBeGreaterThanOrEqual(150);
+    expect(elapsed).toBeLessThan(1500);
+    await proc.dispose();
+  });
+});
+
 // ─── runTurn: sentinel-echo round-trip against /bin/cat ─────────────────────
 //
 // /bin/cat is the simplest live test for the sentinel flow: it echoes
