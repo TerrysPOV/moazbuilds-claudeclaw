@@ -47,10 +47,7 @@ import {
   type PtyTurnResult,
   type SpawnPty,
 } from "../runner/pty-process";
-import {
-  configPathFor,
-  type PtyIdentity,
-} from "../runner/pty-mcp-config-writer";
+import { configPathFor, type PtyIdentity } from "../runner/pty-mcp-config-writer";
 import { initConfig, loadSettings, reloadSettings } from "../config";
 
 // ─── Settings management ────────────────────────────────────────────────────

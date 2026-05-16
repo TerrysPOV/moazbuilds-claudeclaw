@@ -25,10 +25,7 @@ function makeServerConfig() {
 
 /** Wrap a JSON-RPC message in a Web-standard Request shaped the way the
  *  Streamable HTTP transport expects (POST + content-type json + Accept). */
-function rpcRequest(
-  body: unknown,
-  headers: Record<string, string> = {},
-): Request {
+function rpcRequest(body: unknown, headers: Record<string, string> = {}): Request {
   return new Request("http://127.0.0.1:4632/mcp/test", {
     method: "POST",
     headers: {
@@ -69,10 +66,7 @@ describe("McpHttpHandler — auth", () => {
   it("rejects requests missing Authorization header with 401", async () => {
     issueIdentity("suzy");
     const resp = await handler!.handle(
-      rpcRequest(
-        { jsonrpc: "2.0", id: 1, method: "ping" },
-        { [PTY_ID_HEADER]: "suzy" },
-      ),
+      rpcRequest({ jsonrpc: "2.0", id: 1, method: "ping" }, { [PTY_ID_HEADER]: "suzy" }),
     );
     expect(resp.status).toBe(401);
     const body = (await resp.json()) as { error: { code: string } };
@@ -109,9 +103,7 @@ describe("McpHttpHandler — auth", () => {
 
   it("auth-rejected requests do not reach the upstream MCP process", async () => {
     const beforeCallCount = proc!.lastInvocationAt;
-    const resp = await handler!.handle(
-      rpcRequest({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
-    );
+    const resp = await handler!.handle(rpcRequest({ jsonrpc: "2.0", id: 1, method: "tools/list" }));
     expect(resp.status).toBe(401);
     // upstream `lastInvocationAt` must not have been touched
     expect(proc!.lastInvocationAt).toBe(beforeCallCount);

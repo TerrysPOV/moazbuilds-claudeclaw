@@ -73,9 +73,7 @@ describe("PluginHttpGateway — /mcp/<server> route delegation", () => {
   });
 
   it("does not interfere with /api/plugin/* routing", async () => {
-    gw.registerMcpHandler("alpha", async () =>
-      new Response("from-mcp", { status: 200 }),
-    );
+    gw.registerMcpHandler("alpha", async () => new Response("from-mcp", { status: 200 }));
     const r = await gw.handleRequest(req("GET", "/api/plugin/list"), url("/api/plugin/list"));
     expect(r?.status).toBe(200);
     const body = (await r!.json()) as { plugins: unknown[] };
@@ -83,9 +81,7 @@ describe("PluginHttpGateway — /mcp/<server> route delegation", () => {
   });
 
   it("unregisterMcpHandler removes the handler", async () => {
-    gw.registerMcpHandler("alpha", async () =>
-      new Response("ok", { status: 200 }),
-    );
+    gw.registerMcpHandler("alpha", async () => new Response("ok", { status: 200 }));
     expect(gw.hasMcpHandler("alpha")).toBe(true);
     gw.unregisterMcpHandler("alpha");
     expect(gw.hasMcpHandler("alpha")).toBe(false);
@@ -95,12 +91,8 @@ describe("PluginHttpGateway — /mcp/<server> route delegation", () => {
   });
 
   it("re-registering replaces the previous handler", async () => {
-    gw.registerMcpHandler("alpha", async () =>
-      new Response("v1", { status: 200 }),
-    );
-    gw.registerMcpHandler("alpha", async () =>
-      new Response("v2", { status: 200 }),
-    );
+    gw.registerMcpHandler("alpha", async () => new Response("v1", { status: 200 }));
+    gw.registerMcpHandler("alpha", async () => new Response("v2", { status: 200 }));
     const r = await gw.handleRequest(req("POST", "/mcp/alpha"), url("/mcp/alpha"));
     expect(await r!.text()).toBe("v2");
   });

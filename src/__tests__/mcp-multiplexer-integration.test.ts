@@ -33,16 +33,11 @@ import {
   _resetMcpMultiplexer,
   type MuxSettingsView,
 } from "../plugins/mcp-multiplexer/index.js";
-import {
-  _resetHttpGateway,
-  getHttpGateway,
-} from "../plugins/http-gateway.js";
+import { _resetHttpGateway, getHttpGateway } from "../plugins/http-gateway.js";
 import { _resetMcpBridge, getMcpBridge } from "../plugins/mcp-bridge.js";
 import { _resetIdentityStore } from "../plugins/mcp-multiplexer/pty-identity.js";
 
-const MOCK_SERVER = fileURLToPath(
-  new URL("./fixtures/mock-mcp-server.ts", import.meta.url),
-);
+const MOCK_SERVER = fileURLToPath(new URL("./fixtures/mock-mcp-server.ts", import.meta.url));
 const BUN_BIN = process.execPath;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -66,9 +61,7 @@ function writeProxyConfig(dir: string, names: string[]): string {
   return path;
 }
 
-function makeSettingsView(
-  partial: Partial<MuxSettingsView>,
-): () => MuxSettingsView {
+function makeSettingsView(partial: Partial<MuxSettingsView>): () => MuxSettingsView {
   const view: MuxSettingsView = {
     webEnabled: true,
     webHost: "127.0.0.1",
@@ -98,10 +91,7 @@ function startTestGateway(): {
     idleTimeout: 0,
     fetch: async (req) => {
       const url = new URL(req.url);
-      if (
-        url.pathname.startsWith("/api/plugin/") ||
-        url.pathname.startsWith("/mcp/")
-      ) {
+      if (url.pathname.startsWith("/api/plugin/") || url.pathname.startsWith("/mcp/")) {
         const resp = await getHttpGateway().handleRequest(req, url);
         if (resp !== null) return resp;
       }
@@ -156,8 +146,7 @@ async function connectClient(opts: {
 
 let tmpDir: string;
 let plugin: McpMultiplexerPlugin | null = null;
-let gateway: { origin: string; port: number; stop: () => Promise<void> } | null =
-  null;
+let gateway: { origin: string; port: number; stop: () => Promise<void> } | null = null;
 
 async function teardown(): Promise<void> {
   if (plugin) {
@@ -196,207 +185,155 @@ afterEach(async () => {
 // ── 1) End-to-end happy path ────────────────────────────────────────────────
 
 describe("mcp-multiplexer integration — happy path", () => {
-  it(
-    "real SDK client lists tools and round-trips a tools/call over loopback HTTP",
-    { timeout: 10000 },
-    async () => {
-      const cfg = writeProxyConfig(tmpDir, ["alpha"]);
-      plugin = new McpMultiplexerPlugin({
-        configPath: cfg,
-        settingsView: makeSettingsView({
-          webEnabled: true,
-          shared: ["alpha"],
-        }),
+  it("real SDK client lists tools and round-trips a tools/call over loopback HTTP", {
+    timeout: 10000,
+  }, async () => {
+    const cfg = writeProxyConfig(tmpDir, ["alpha"]);
+    plugin = new McpMultiplexerPlugin({
+      configPath: cfg,
+      settingsView: makeSettingsView({
+        webEnabled: true,
+        shared: ["alpha"],
+      }),
+    });
+    await plugin.start();
+    expect(plugin.isActive()).toBe(true);
+
+    gateway = startTestGateway();
+    const ident = plugin.issueIdentity("pty-happy");
+
+    const { client, close } = await connectClient({
+      origin: gateway.origin,
+      server: "alpha",
+      ptyId: "pty-happy",
+      bearer: ident.headers.Authorization,
+    });
+
+    try {
+      const tools = await client.listTools();
+      const names = tools.tools.map((t) => t.name).sort();
+      expect(names).toEqual(["echo"]);
+
+      const result = await client.callTool({
+        name: "echo",
+        arguments: { message: "wire works" },
       });
-      await plugin.start();
-      expect(plugin.isActive()).toBe(true);
-
-      gateway = startTestGateway();
-      const ident = plugin.issueIdentity("pty-happy");
-
-      const { client, close } = await connectClient({
-        origin: gateway.origin,
-        server: "alpha",
-        ptyId: "pty-happy",
-        bearer: ident.headers.Authorization,
-      });
-
-      try {
-        const tools = await client.listTools();
-        const names = tools.tools.map((t) => t.name).sort();
-        expect(names).toEqual(["echo"]);
-
-        const result = await client.callTool({
-          name: "echo",
-          arguments: { message: "wire works" },
-        });
-        // The handler wraps the upstream result as
-        // { content: [{ type: "text", text: JSON.stringify(upstreamJson) }] }
-        const content = (result.content as Array<{ type: string; text: string }>)[0];
-        expect(content?.type).toBe("text");
-        expect(content?.text).toContain("wire works");
-      } finally {
-        await close();
-      }
-    },
-  );
+      // The handler wraps the upstream result as
+      // { content: [{ type: "text", text: JSON.stringify(upstreamJson) }] }
+      const content = (result.content as Array<{ type: string; text: string }>)[0];
+      expect(content?.type).toBe("text");
+      expect(content?.text).toContain("wire works");
+    } finally {
+      await close();
+    }
+  });
 });
 
 // ── 2) Per-PTY auth ─────────────────────────────────────────────────────────
 
 describe("mcp-multiplexer integration — per-PTY auth", () => {
-  it(
-    "two distinct PTY identities can both invoke without leaking session state",
-    { timeout: 10000 },
-    async () => {
-      const cfg = writeProxyConfig(tmpDir, ["alpha"]);
-      plugin = new McpMultiplexerPlugin({
-        configPath: cfg,
-        settingsView: makeSettingsView({
-          webEnabled: true,
-          shared: ["alpha"],
+  it("two distinct PTY identities can both invoke without leaking session state", {
+    timeout: 10000,
+  }, async () => {
+    const cfg = writeProxyConfig(tmpDir, ["alpha"]);
+    plugin = new McpMultiplexerPlugin({
+      configPath: cfg,
+      settingsView: makeSettingsView({
+        webEnabled: true,
+        shared: ["alpha"],
+      }),
+    });
+    await plugin.start();
+    gateway = startTestGateway();
+
+    const a = plugin.issueIdentity("pty-A");
+    const b = plugin.issueIdentity("pty-B");
+    expect(a.headers.Authorization).not.toBe(b.headers.Authorization);
+
+    const ca = await connectClient({
+      origin: gateway.origin,
+      server: "alpha",
+      ptyId: "pty-A",
+      bearer: a.headers.Authorization,
+    });
+    const cb = await connectClient({
+      origin: gateway.origin,
+      server: "alpha",
+      ptyId: "pty-B",
+      bearer: b.headers.Authorization,
+    });
+
+    try {
+      // Concurrent invocations — each must succeed independently.
+      const [ra, rb] = await Promise.all([
+        ca.client.callTool({
+          name: "echo",
+          arguments: { message: "from-A" },
         }),
-      });
-      await plugin.start();
-      gateway = startTestGateway();
+        cb.client.callTool({
+          name: "echo",
+          arguments: { message: "from-B" },
+        }),
+      ]);
 
-      const a = plugin.issueIdentity("pty-A");
-      const b = plugin.issueIdentity("pty-B");
-      expect(a.headers.Authorization).not.toBe(b.headers.Authorization);
+      const ta = (ra.content as Array<{ text: string }>)[0]!.text;
+      const tb = (rb.content as Array<{ text: string }>)[0]!.text;
+      expect(ta).toContain("from-A");
+      expect(tb).toContain("from-B");
 
-      const ca = await connectClient({
-        origin: gateway.origin,
-        server: "alpha",
-        ptyId: "pty-A",
-        bearer: a.headers.Authorization,
-      });
-      const cb = await connectClient({
-        origin: gateway.origin,
-        server: "alpha",
-        ptyId: "pty-B",
-        bearer: b.headers.Authorization,
-      });
-
-      try {
-        // Concurrent invocations — each must succeed independently.
-        const [ra, rb] = await Promise.all([
-          ca.client.callTool({
-            name: "echo",
-            arguments: { message: "from-A" },
-          }),
-          cb.client.callTool({
-            name: "echo",
-            arguments: { message: "from-B" },
-          }),
-        ]);
-
-        const ta = (ra.content as Array<{ text: string }>)[0]!.text;
-        const tb = (rb.content as Array<{ text: string }>)[0]!.text;
-        expect(ta).toContain("from-A");
-        expect(tb).toContain("from-B");
-
-        // For stateful (default) server, each PTY gets its own bucket.
-        const handler = plugin._getHandler("alpha");
-        const h = handler?.health() as {
-          stateless: boolean;
-          active_buckets: number;
-          bucket_keys: string[];
-        };
-        expect(h.stateless).toBe(false);
-        expect(h.bucket_keys.sort()).toEqual(["pty-A", "pty-B"]);
-      } finally {
-        await ca.close();
-        await cb.close();
-      }
-    },
-  );
+      // For stateful (default) server, each PTY gets its own bucket.
+      const handler = plugin._getHandler("alpha");
+      const h = handler?.health() as {
+        stateless: boolean;
+        active_buckets: number;
+        bucket_keys: string[];
+      };
+      expect(h.stateless).toBe(false);
+      expect(h.bucket_keys.sort()).toEqual(["pty-A", "pty-B"]);
+    } finally {
+      await ca.close();
+      await cb.close();
+    }
+  });
 });
 
 // ── 3) Auth rejection ───────────────────────────────────────────────────────
 
 describe("mcp-multiplexer integration — auth rejection", () => {
-  it(
-    "forged bearer for a non-issued ptyId returns 401 with no upstream call",
-    { timeout: 10000 },
-    async () => {
-      const cfg = writeProxyConfig(tmpDir, ["alpha"]);
-      plugin = new McpMultiplexerPlugin({
-        configPath: cfg,
-        settingsView: makeSettingsView({
-          webEnabled: true,
-          shared: ["alpha"],
-        }),
-      });
-      await plugin.start();
-      gateway = startTestGateway();
+  it("forged bearer for a non-issued ptyId returns 401 with no upstream call", {
+    timeout: 10000,
+  }, async () => {
+    const cfg = writeProxyConfig(tmpDir, ["alpha"]);
+    plugin = new McpMultiplexerPlugin({
+      configPath: cfg,
+      settingsView: makeSettingsView({
+        webEnabled: true,
+        shared: ["alpha"],
+      }),
+    });
+    await plugin.start();
+    gateway = startTestGateway();
 
-      // Audit hook to confirm no upstream invoke is recorded.
-      const events: Array<{ event: string; payload: Record<string, unknown> }> =
-        [];
-      const bridge = getMcpBridge();
-      const origAudit = bridge.audit.bind(bridge);
-      bridge.audit = (event, payload) => {
-        events.push({ event, payload });
-        origAudit(event, payload);
-      };
+    // Audit hook to confirm no upstream invoke is recorded.
+    const events: Array<{ event: string; payload: Record<string, unknown> }> = [];
+    const bridge = getMcpBridge();
+    const origAudit = bridge.audit.bind(bridge);
+    bridge.audit = (event, payload) => {
+      events.push({ event, payload });
+      origAudit(event, payload);
+    };
 
-      try {
-        // Forge bearer: 64 hex chars (the correct length) but a ptyId
-        // that was never issued.
-        const forged = `Bearer ${"a".repeat(64)}`;
-        const resp = await fetch(`${gateway.origin}/mcp/alpha`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Accept: "application/json, text/event-stream",
-            Authorization: forged,
-            "X-Claudeclaw-Pty-Id": "pty-never-issued",
-          },
-          body: JSON.stringify({
-            jsonrpc: "2.0",
-            id: 1,
-            method: "tools/list",
-            params: {},
-          }),
-        });
-        expect(resp.status).toBe(401);
-        const body = (await resp.json()) as {
-          error: { code: string; message: string };
-        };
-        expect(body.error.code).toBe("invalid_bearer");
-
-        // Auth-rejected audit fired; no `multiplexer_invoke` event.
-        const rejected = events.find((e) => e.event === "multiplexer_auth_rejected");
-        expect(rejected).toBeDefined();
-        const invokes = events.filter((e) => e.event === "multiplexer_invoke");
-        expect(invokes).toHaveLength(0);
-      } finally {
-        bridge.audit = origAudit;
-      }
-    },
-  );
-
-  it(
-    "missing pty-id header returns 401 missing_pty_id",
-    { timeout: 10000 },
-    async () => {
-      const cfg = writeProxyConfig(tmpDir, ["alpha"]);
-      plugin = new McpMultiplexerPlugin({
-        configPath: cfg,
-        settingsView: makeSettingsView({
-          webEnabled: true,
-          shared: ["alpha"],
-        }),
-      });
-      await plugin.start();
-      gateway = startTestGateway();
-
+    try {
+      // Forge bearer: 64 hex chars (the correct length) but a ptyId
+      // that was never issued.
+      const forged = `Bearer ${"a".repeat(64)}`;
       const resp = await fetch(`${gateway.origin}/mcp/alpha`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Accept: "application/json, text/event-stream",
-          Authorization: `Bearer ${"b".repeat(64)}`,
+          Authorization: forged,
+          "X-Claudeclaw-Pty-Id": "pty-never-issued",
         },
         body: JSON.stringify({
           jsonrpc: "2.0",
@@ -409,249 +346,279 @@ describe("mcp-multiplexer integration — auth rejection", () => {
       const body = (await resp.json()) as {
         error: { code: string; message: string };
       };
-      expect(body.error.code).toBe("missing_pty_id");
-    },
-  );
+      expect(body.error.code).toBe("invalid_bearer");
+
+      // Auth-rejected audit fired; no `multiplexer_invoke` event.
+      const rejected = events.find((e) => e.event === "multiplexer_auth_rejected");
+      expect(rejected).toBeDefined();
+      const invokes = events.filter((e) => e.event === "multiplexer_invoke");
+      expect(invokes).toHaveLength(0);
+    } finally {
+      bridge.audit = origAudit;
+    }
+  });
+
+  it("missing pty-id header returns 401 missing_pty_id", { timeout: 10000 }, async () => {
+    const cfg = writeProxyConfig(tmpDir, ["alpha"]);
+    plugin = new McpMultiplexerPlugin({
+      configPath: cfg,
+      settingsView: makeSettingsView({
+        webEnabled: true,
+        shared: ["alpha"],
+      }),
+    });
+    await plugin.start();
+    gateway = startTestGateway();
+
+    const resp = await fetch(`${gateway.origin}/mcp/alpha`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+        Authorization: `Bearer ${"b".repeat(64)}`,
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/list",
+        params: {},
+      }),
+    });
+    expect(resp.status).toBe(401);
+    const body = (await resp.json()) as {
+      error: { code: string; message: string };
+    };
+    expect(body.error.code).toBe("missing_pty_id");
+  });
 });
 
 // ── 4) Stateful vs stateless session demux ──────────────────────────────────
 
 describe("mcp-multiplexer integration — stateful vs stateless demux", () => {
-  it(
-    "stateful server creates per-PTY buckets; stateless server collapses to a single __stateless__ bucket",
-    { timeout: 10000 },
-    async () => {
-      const cfg = writeProxyConfig(tmpDir, ["alpha", "beta"]);
-      plugin = new McpMultiplexerPlugin({
-        configPath: cfg,
-        settingsView: makeSettingsView({
-          webEnabled: true,
-          shared: ["alpha", "beta"],
-          stateless: ["beta"],
-        }),
-      });
-      await plugin.start();
-      gateway = startTestGateway();
+  it("stateful server creates per-PTY buckets; stateless server collapses to a single __stateless__ bucket", {
+    timeout: 10000,
+  }, async () => {
+    const cfg = writeProxyConfig(tmpDir, ["alpha", "beta"]);
+    plugin = new McpMultiplexerPlugin({
+      configPath: cfg,
+      settingsView: makeSettingsView({
+        webEnabled: true,
+        shared: ["alpha", "beta"],
+        stateless: ["beta"],
+      }),
+    });
+    await plugin.start();
+    gateway = startTestGateway();
 
-      const a = plugin.issueIdentity("pty-1");
-      const b = plugin.issueIdentity("pty-2");
+    const a = plugin.issueIdentity("pty-1");
+    const b = plugin.issueIdentity("pty-2");
 
-      // STATEFUL server (`alpha`): use full SDK clients — each PTY's
-      // initialize() goes to its own SDK Server in its own bucket.
-      const a1 = await connectClient({
-        origin: gateway.origin,
-        server: "alpha",
-        ptyId: "pty-1",
-        bearer: a.headers.Authorization,
-      });
-      const a2 = await connectClient({
-        origin: gateway.origin,
-        server: "alpha",
-        ptyId: "pty-2",
-        bearer: b.headers.Authorization,
-      });
-      await a1.client.listTools();
-      await a2.client.listTools();
+    // STATEFUL server (`alpha`): use full SDK clients — each PTY's
+    // initialize() goes to its own SDK Server in its own bucket.
+    const a1 = await connectClient({
+      origin: gateway.origin,
+      server: "alpha",
+      ptyId: "pty-1",
+      bearer: a.headers.Authorization,
+    });
+    const a2 = await connectClient({
+      origin: gateway.origin,
+      server: "alpha",
+      ptyId: "pty-2",
+      bearer: b.headers.Authorization,
+    });
+    await a1.client.listTools();
+    await a2.client.listTools();
 
-      // STATELESS server (`beta`): both PTYs share a single SDK Server.
-      // The first PTY drives initialize() via the SDK Client; the second
-      // PTY hits the same bucket via a raw tools/list — re-initialising
-      // a shared SDK Server would (correctly) be rejected, which is the
-      // whole point of the stateless mode. We assert the bucket-collapse
-      // property on the handler health snapshot.
-      const b1 = await connectClient({
-        origin: gateway.origin,
-        server: "beta",
-        ptyId: "pty-1",
-        bearer: a.headers.Authorization,
-      });
-      await b1.client.listTools();
+    // STATELESS server (`beta`): both PTYs share a single SDK Server.
+    // The first PTY drives initialize() via the SDK Client; the second
+    // PTY hits the same bucket via a raw tools/list — re-initialising
+    // a shared SDK Server would (correctly) be rejected, which is the
+    // whole point of the stateless mode. We assert the bucket-collapse
+    // property on the handler health snapshot.
+    const b1 = await connectClient({
+      origin: gateway.origin,
+      server: "beta",
+      ptyId: "pty-1",
+      bearer: a.headers.Authorization,
+    });
+    await b1.client.listTools();
 
-      // PTY-2 reuses the existing __stateless__ bucket — send a raw
-      // tools/list bypassing client-side initialization. Auth still
-      // gates the request, so PTY-2 must use its own bearer. The SDK
-      // transport will reject this with 400 (no session ID) — that's
-      // fine; what matters is the request flowed past auth into the
-      // shared bucket without creating a new one, which is the
-      // collapse property we assert below on handler.health().
-      const resp = await fetch(`${gateway.origin}/mcp/beta`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json, text/event-stream",
-          Authorization: b.headers.Authorization,
-          "X-Claudeclaw-Pty-Id": "pty-2",
-        },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: 99,
-          method: "tools/list",
-          params: {},
-        }),
-      });
-      // Past auth (status !== 401, !== 404). The SDK transport may
-      // accept (200/202) or reject as malformed session (400) — either
-      // proves the request reached the bucket, not the auth wall.
-      expect(resp.status).not.toBe(401);
-      expect(resp.status).not.toBe(404);
+    // PTY-2 reuses the existing __stateless__ bucket — send a raw
+    // tools/list bypassing client-side initialization. Auth still
+    // gates the request, so PTY-2 must use its own bearer. The SDK
+    // transport will reject this with 400 (no session ID) — that's
+    // fine; what matters is the request flowed past auth into the
+    // shared bucket without creating a new one, which is the
+    // collapse property we assert below on handler.health().
+    const resp = await fetch(`${gateway.origin}/mcp/beta`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+        Authorization: b.headers.Authorization,
+        "X-Claudeclaw-Pty-Id": "pty-2",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 99,
+        method: "tools/list",
+        params: {},
+      }),
+    });
+    // Past auth (status !== 401, !== 404). The SDK transport may
+    // accept (200/202) or reject as malformed session (400) — either
+    // proves the request reached the bucket, not the auth wall.
+    expect(resp.status).not.toBe(401);
+    expect(resp.status).not.toBe(404);
 
-      try {
-        const alphaH = plugin._getHandler("alpha")?.health() as {
-          stateless: boolean;
-          bucket_keys: string[];
-        };
-        const betaH = plugin._getHandler("beta")?.health() as {
-          stateless: boolean;
-          bucket_keys: string[];
-        };
+    try {
+      const alphaH = plugin._getHandler("alpha")?.health() as {
+        stateless: boolean;
+        bucket_keys: string[];
+      };
+      const betaH = plugin._getHandler("beta")?.health() as {
+        stateless: boolean;
+        bucket_keys: string[];
+      };
 
-        expect(alphaH.stateless).toBe(false);
-        expect(alphaH.bucket_keys.sort()).toEqual(["pty-1", "pty-2"]);
+      expect(alphaH.stateless).toBe(false);
+      expect(alphaH.bucket_keys.sort()).toEqual(["pty-1", "pty-2"]);
 
-        expect(betaH.stateless).toBe(true);
-        // STATELESS_BUCKET sentinel — one bucket regardless of PTY count.
-        expect(betaH.bucket_keys).toEqual(["__stateless__"]);
-      } finally {
-        await a1.close();
-        await a2.close();
-        await b1.close();
-      }
-    },
-  );
+      expect(betaH.stateless).toBe(true);
+      // STATELESS_BUCKET sentinel — one bucket regardless of PTY count.
+      expect(betaH.bucket_keys).toEqual(["__stateless__"]);
+    } finally {
+      await a1.close();
+      await a2.close();
+      await b1.close();
+    }
+  });
 });
 
 // ── 5) Bridge callback integration ──────────────────────────────────────────
 
 describe("mcp-multiplexer integration — bridge callback path", () => {
-  it(
-    "legacy in-process caller can invoke a shared tool via getMcpBridge() with no HTTP hop",
-    { timeout: 10000 },
-    async () => {
-      const cfg = writeProxyConfig(tmpDir, ["alpha"]);
-      plugin = new McpMultiplexerPlugin({
-        configPath: cfg,
-        settingsView: makeSettingsView({
-          webEnabled: true,
-          shared: ["alpha"],
-        }),
-      });
-      await plugin.start();
-      // Intentionally do NOT start the HTTP gateway listener — this
-      // exercises the in-process bridge path (SPEC §10 Q#2 (b)).
+  it("legacy in-process caller can invoke a shared tool via getMcpBridge() with no HTTP hop", {
+    timeout: 10000,
+  }, async () => {
+    const cfg = writeProxyConfig(tmpDir, ["alpha"]);
+    plugin = new McpMultiplexerPlugin({
+      configPath: cfg,
+      settingsView: makeSettingsView({
+        webEnabled: true,
+        shared: ["alpha"],
+      }),
+    });
+    await plugin.start();
+    // Intentionally do NOT start the HTTP gateway listener — this
+    // exercises the in-process bridge path (SPEC §10 Q#2 (b)).
 
-      const bridge = getMcpBridge();
-      const fqns = bridge.listTools().map((t) => t.fqn);
-      expect(fqns).toContain("mcp-multiplexer__alpha__echo");
+    const bridge = getMcpBridge();
+    const fqns = bridge.listTools().map((t) => t.fqn);
+    expect(fqns).toContain("mcp-multiplexer__alpha__echo");
 
-      const result = await bridge.invokeTool("mcp-multiplexer__alpha__echo", {
-        arguments: { message: "via-bridge" },
-      });
-      // Upstream returns `{ echo: "via-bridge" }` which is JSON-parsed
-      // by `McpServerProcess.call`, so the bridge result is the object.
-      expect(result).toEqual({ echo: "via-bridge" });
-    },
-  );
+    const result = await bridge.invokeTool("mcp-multiplexer__alpha__echo", {
+      arguments: { message: "via-bridge" },
+    });
+    // Upstream returns `{ echo: "via-bridge" }` which is JSON-parsed
+    // by `McpServerProcess.call`, so the bridge result is the object.
+    expect(result).toEqual({ echo: "via-bridge" });
+  });
 });
 
 // ── 6) Crash + health probe transition ──────────────────────────────────────
 
 describe("mcp-multiplexer integration — crash + health probe transition", () => {
-  it(
-    "killing the upstream child mid-test fires _onServerCrash and health probe emits mcp_health_degraded",
-    { timeout: 15000 },
-    async () => {
-      const cfg = writeProxyConfig(tmpDir, ["alpha"]);
-      plugin = new McpMultiplexerPlugin({
-        configPath: cfg,
-        settingsView: makeSettingsView({
-          webEnabled: true,
-          shared: ["alpha"],
-          // Keep the probe disabled so we drive sampling deterministically.
-          healthProbeIntervalMs: 0,
-        }),
+  it("killing the upstream child mid-test fires _onServerCrash and health probe emits mcp_health_degraded", {
+    timeout: 15000,
+  }, async () => {
+    const cfg = writeProxyConfig(tmpDir, ["alpha"]);
+    plugin = new McpMultiplexerPlugin({
+      configPath: cfg,
+      settingsView: makeSettingsView({
+        webEnabled: true,
+        shared: ["alpha"],
+        // Keep the probe disabled so we drive sampling deterministically.
+        healthProbeIntervalMs: 0,
+      }),
+    });
+    await plugin.start();
+    expect(plugin.isActive()).toBe(true);
+
+    gateway = startTestGateway();
+
+    // Capture audit events emitted during the crash + probe sequence.
+    const events: Array<{ event: string; payload: Record<string, unknown> }> = [];
+    const bridge = getMcpBridge();
+    const origAudit = bridge.audit.bind(bridge);
+    bridge.audit = (event, payload) => {
+      events.push({ event, payload });
+      origAudit(event, payload);
+    };
+
+    try {
+      // Confirm one healthy round-trip before the crash to prove the
+      // process really is up and serving tool calls.
+      const ident = plugin.issueIdentity("pty-pre-crash");
+      const c = await connectClient({
+        origin: gateway.origin,
+        server: "alpha",
+        ptyId: "pty-pre-crash",
+        bearer: ident.headers.Authorization,
       });
-      await plugin.start();
-      expect(plugin.isActive()).toBe(true);
+      await c.client.listTools();
+      await c.close();
 
-      gateway = startTestGateway();
-
-      // Capture audit events emitted during the crash + probe sequence.
-      const events: Array<{ event: string; payload: Record<string, unknown> }> =
-        [];
-      const bridge = getMcpBridge();
-      const origAudit = bridge.audit.bind(bridge);
-      bridge.audit = (event, payload) => {
-        events.push({ event, payload });
-        origAudit(event, payload);
+      // Reach into the real McpServerProcess and kill its transport.
+      // This is the same path a real upstream child crash takes —
+      // the SDK's StdioClientTransport fires `onclose` which the
+      // server-process's onCrash hook turns into the
+      // `multiplexer_server_crashed` audit + status mutation.
+      type ProcLike = {
+        servers: Map<string, { status: string; transport: { close?: () => Promise<void> } | null }>;
+        lastObservedStatus: Map<string, string>;
       };
+      const proc = (plugin as unknown as ProcLike).servers.get("alpha")!;
+      const initial = proc.status;
 
-      try {
-        // Confirm one healthy round-trip before the crash to prove the
-        // process really is up and serving tool calls.
-        const ident = plugin.issueIdentity("pty-pre-crash");
-        const c = await connectClient({
-          origin: gateway.origin,
-          server: "alpha",
-          ptyId: "pty-pre-crash",
-          bearer: ident.headers.Authorization,
-        });
-        await c.client.listTools();
-        await c.close();
+      // Close the transport. McpServerProcess.transport.onclose then
+      // invokes _handleCrash → calls our onCrash → status mutates.
+      await proc.transport?.close?.();
 
-        // Reach into the real McpServerProcess and kill its transport.
-        // This is the same path a real upstream child crash takes —
-        // the SDK's StdioClientTransport fires `onclose` which the
-        // server-process's onCrash hook turns into the
-        // `multiplexer_server_crashed` audit + status mutation.
-        type ProcLike = {
-          servers: Map<
-            string,
-            { status: string; transport: { close?: () => Promise<void> } | null }
-          >;
-          lastObservedStatus: Map<string, string>;
-        };
-        const proc = (plugin as unknown as ProcLike).servers.get("alpha")!;
-        const initial = proc.status;
+      // Allow the onclose handler to fire (microtask flush).
+      await new Promise((r) => setTimeout(r, 50));
 
-        // Close the transport. McpServerProcess.transport.onclose then
-        // invokes _handleCrash → calls our onCrash → status mutates.
-        await proc.transport?.close?.();
+      // Status should have transitioned away from `up`. The crash
+      // handler schedules a restart timer with a 1s backoff for the
+      // first crash, so by now we expect `crashed` → `restarting`.
+      expect(["crashed", "restarting", "up"]).toContain(proc.status);
 
-        // Allow the onclose handler to fire (microtask flush).
-        await new Promise((r) => setTimeout(r, 50));
+      // Force-set status to `crashed` if a fast restart already
+      // happened — what we want to prove is that the probe transition
+      // emits the right audit event. Then drive the probe directly.
+      (proc as { status: string }).status = "crashed";
+      (plugin as unknown as { lastObservedStatus: Map<string, string> }).lastObservedStatus.set(
+        "alpha",
+        initial,
+      );
 
-        // Status should have transitioned away from `up`. The crash
-        // handler schedules a restart timer with a 1s backoff for the
-        // first crash, so by now we expect `crashed` → `restarting`.
-        expect(["crashed", "restarting", "up"]).toContain(proc.status);
+      (plugin as unknown as { _sampleHealthForTests: () => void })._sampleHealthForTests();
 
-        // Force-set status to `crashed` if a fast restart already
-        // happened — what we want to prove is that the probe transition
-        // emits the right audit event. Then drive the probe directly.
-        (proc as { status: string }).status = "crashed";
-        (
-          plugin as unknown as { lastObservedStatus: Map<string, string> }
-        ).lastObservedStatus.set("alpha", initial);
+      const degraded = events.find((e) => e.event === "mcp_health_degraded");
+      expect(degraded).toBeDefined();
+      expect(degraded?.payload.server).toBe("alpha");
+      expect(degraded?.payload.current_status).toBe("crashed");
 
-        (plugin as unknown as { _sampleHealthForTests: () => void })._sampleHealthForTests();
-
-        const degraded = events.find((e) => e.event === "mcp_health_degraded");
-        expect(degraded).toBeDefined();
-        expect(degraded?.payload.server).toBe("alpha");
-        expect(degraded?.payload.current_status).toBe("crashed");
-
-        // The crash hook itself should also have audited a
-        // `multiplexer_server_crashed` event when the real onclose
-        // fired (proves the real onCrash → audit path works, not just
-        // the unit-level mutation).
-        const crashAudit = events.find(
-          (e) => e.event === "multiplexer_server_crashed",
-        );
-        expect(crashAudit).toBeDefined();
-        expect(crashAudit?.payload.server).toBe("alpha");
-      } finally {
-        bridge.audit = origAudit;
-      }
-    },
-  );
+      // The crash hook itself should also have audited a
+      // `multiplexer_server_crashed` event when the real onclose
+      // fired (proves the real onCrash → audit path works, not just
+      // the unit-level mutation).
+      const crashAudit = events.find((e) => e.event === "multiplexer_server_crashed");
+      expect(crashAudit).toBeDefined();
+      expect(crashAudit?.payload.server).toBe("alpha");
+    } finally {
+      bridge.audit = origAudit;
+    }
+  });
 });

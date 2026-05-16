@@ -5,13 +5,7 @@
  * so we can golden-file the synthesized JSON.
  */
 import { describe, it, expect, beforeAll, afterEach, afterAll } from "bun:test";
-import {
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  statSync,
-} from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -69,7 +63,9 @@ function makeCwd(label: string): string {
   return dir;
 }
 
-function baseInput(over: Partial<WriteConfigInput> & { ptyId: string; cwd: string }): WriteConfigInput {
+function baseInput(
+  over: Partial<WriteConfigInput> & { ptyId: string; cwd: string },
+): WriteConfigInput {
   return {
     sharedServers: [],
     perPtyServers: [],
@@ -118,24 +114,14 @@ describe("writeConfigForPty — basic shape", () => {
       baseInput({
         ptyId: "reg",
         cwd,
-        sharedServers: [
-          { name: "graphiti" },
-          { name: "context7" },
-          { name: "mempress" },
-        ],
+        sharedServers: [{ name: "graphiti" }, { name: "context7" }, { name: "mempress" }],
         bridgeBaseUrl: "http://127.0.0.1:4632/",
       }),
     );
     const parsed = JSON.parse(readFileSync(result.path, "utf8"));
-    expect(Object.keys(parsed.mcpServers)).toEqual([
-      "graphiti",
-      "context7",
-      "mempress",
-    ]);
+    expect(Object.keys(parsed.mcpServers)).toEqual(["graphiti", "context7", "mempress"]);
     // Trailing slash on bridgeBaseUrl is stripped before composing the URL.
-    expect(parsed.mcpServers.graphiti.url).toBe(
-      "http://127.0.0.1:4632/mcp/graphiti",
-    );
+    expect(parsed.mcpServers.graphiti.url).toBe("http://127.0.0.1:4632/mcp/graphiti");
   });
 
   it("writes mixed shared + per-PTY entries", () => {
@@ -237,9 +223,7 @@ describe("writeConfigForPty — filesystem hygiene", () => {
     });
     expect(r2.path).toBe(r1.path);
     const parsed = JSON.parse(readFileSync(r2.path, "utf8"));
-    expect(parsed.mcpServers.graphiti.headers.Authorization).toBe(
-      `Bearer ${"b".repeat(64)}`,
-    );
+    expect(parsed.mcpServers.graphiti.headers.Authorization).toBe(`Bearer ${"b".repeat(64)}`);
     // mtime advances (or at least stays the same — Bun's underlying FS may
     // skip a write if content matches; we forced a content change above).
     expect(statSync(r2.path).mtimeMs).toBeGreaterThanOrEqual(firstMtime);
@@ -302,9 +286,7 @@ describe("writeConfigForPty — defensive entry hygiene", () => {
 
 describe("configPathFor", () => {
   it("returns the canonical path layout for any (cwd, ptyId)", () => {
-    expect(configPathFor("/var/app", "suzy")).toBe(
-      "/var/app/.claudeclaw/mcp-pty-suzy.json",
-    );
+    expect(configPathFor("/var/app", "suzy")).toBe("/var/app/.claudeclaw/mcp-pty-suzy.json");
   });
 });
 

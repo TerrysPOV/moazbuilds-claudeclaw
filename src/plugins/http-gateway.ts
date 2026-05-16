@@ -70,16 +70,16 @@ export class PluginHttpGateway {
     // multiplexer registered via `registerMcpHandler`. Path may be either
     // bare (`/mcp/<server>`) or sub-pathed (`/mcp/<server>/...`); the SDK
     // transport handles internal routing.
-    if (path.startsWith('/mcp/')) {
-      const segments = path.slice('/mcp/'.length).split('/');
-      const serverName = segments[0] ?? '';
+    if (path.startsWith("/mcp/")) {
+      const segments = path.slice("/mcp/".length).split("/");
+      const serverName = segments[0] ?? "";
       const handler = this.mcpHandlers.get(serverName);
       if (handler) return handler(req);
-      return json({ error: { code: 'mcp_server_not_registered', server: serverName } }, 404);
+      return json({ error: { code: "mcp_server_not_registered", server: serverName } }, 404);
     }
 
-    if (path === '/api/plugin/register' && method === 'POST') return this.handleRegister(req);
-    if (path === '/api/plugin/list' && method === 'GET') return this.handleList(req);
+    if (path === "/api/plugin/register" && method === "POST") return this.handleRegister(req);
+    if (path === "/api/plugin/list" && method === "GET") return this.handleList(req);
 
     // /api/plugin/:name/tools/:tool/invoke
     const invokeM = path.match(/^\/api\/plugin\/([^/]+)\/tools\/([^/]+)\/invoke$/);

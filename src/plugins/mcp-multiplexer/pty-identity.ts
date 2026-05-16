@@ -145,10 +145,7 @@ export function revokeIdentity(ptyId: string): boolean {
  *   - `bearerHeaderValue`: the literal `Authorization` header
  *     (e.g. `"Bearer 7c2d4f...e9"`). May be `null`/missing.
  */
-export function verifyBearer(
-  ptyId: string,
-  bearerHeaderValue: string | null | undefined,
-): boolean {
+export function verifyBearer(ptyId: string, bearerHeaderValue: string | null | undefined): boolean {
   if (!bearerHeaderValue) return false;
   const record = identities.get(ptyId);
   if (!record) return false;

@@ -153,8 +153,7 @@ export class McpMultiplexerPlugin {
   private lastObservedStatus = new Map<string, string>();
 
   constructor(opts: McpMultiplexerPluginOpts = {}) {
-    this.configPath =
-      opts.configPath ?? join(homedir(), ".config", "claudeclaw", "mcp-proxy.json");
+    this.configPath = opts.configPath ?? join(homedir(), ".config", "claudeclaw", "mcp-proxy.json");
     this.bridgeBaseUrlOverride = opts.bridgeBaseUrlOverride;
     this.settingsView = opts.settingsView ?? _readSettings;
   }
@@ -281,9 +280,7 @@ export class McpMultiplexerPlugin {
 
     this.active = claimed.length > 0;
     if (!this.active) {
-      console.error(
-        "[mcp-multiplexer] no shared servers came up successfully — going dormant.",
-      );
+      console.error("[mcp-multiplexer] no shared servers came up successfully — going dormant.");
       this.cachedSharedNames = [];
       this.cachedStatelessNames = [];
       this.cachedBridgeBaseUrl = "http://127.0.0.1:4632";
@@ -298,9 +295,7 @@ export class McpMultiplexerPlugin {
     this.cachedSharedNames = claimed.slice();
     // Stateless names are filtered to the intersection of declared
     // stateless AND actually-claimed.
-    this.cachedStatelessNames = settings.stateless.filter((n) =>
-      claimed.includes(n),
-    );
+    this.cachedStatelessNames = settings.stateless.filter((n) => claimed.includes(n));
 
     // Commit started AFTER we've claimed at least one server — a dormant
     // bail-out above leaves started=false so the operator can re-`start()`
@@ -326,9 +321,7 @@ export class McpMultiplexerPlugin {
     for (const name of this.handlers.keys()) {
       gateway.unregisterMcpHandler?.(name);
     }
-    await Promise.allSettled(
-      [...this.handlers.values()].map((h) => h.stop()),
-    );
+    await Promise.allSettled([...this.handlers.values()].map((h) => h.stop()));
     this.handlers.clear();
     await Promise.allSettled([...this.servers.values()].map((s) => s.stop()));
     this.servers.clear();
@@ -379,15 +372,12 @@ export class McpMultiplexerPlugin {
         ? Math.floor((Date.now() - proc.startedAt.getTime()) / 1000)
         : null;
       try {
-        getMcpBridge().audit(
-          degraded ? "mcp_health_degraded" : "mcp_health_transition",
-          {
-            server: name,
-            previous_status: prev ?? "unknown",
-            current_status: curr,
-            uptime_s: uptimeS,
-          },
-        );
+        getMcpBridge().audit(degraded ? "mcp_health_degraded" : "mcp_health_transition", {
+          server: name,
+          previous_status: prev ?? "unknown",
+          current_status: curr,
+          uptime_s: uptimeS,
+        });
       } catch {}
       const line = `[mcp-multiplexer] HEALTH ${name}: ${prev ?? "unknown"} → ${curr}${degraded ? " (DEGRADED)" : ""}`;
       if (degraded) console.warn(line);
@@ -445,9 +435,7 @@ export class McpMultiplexerPlugin {
 
   async releaseIdentity(ptyId: string): Promise<void> {
     const removed = _revokeIdentity(ptyId);
-    await Promise.allSettled(
-      [...this.handlers.values()].map((h) => h.releasePty(ptyId)),
-    );
+    await Promise.allSettled([...this.handlers.values()].map((h) => h.releasePty(ptyId)));
     if (removed) {
       try {
         getMcpBridge().audit("multiplexer_identity_released", { pty_id: ptyId });

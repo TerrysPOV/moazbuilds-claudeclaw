@@ -20,9 +20,7 @@ import { _resetMcpBridge, getMcpBridge } from "../plugins/mcp-bridge.js";
 import { _resetHttpGateway } from "../plugins/http-gateway.js";
 import { initConfig, loadSettings } from "../config.js";
 
-const MOCK_SERVER = fileURLToPath(
-  new URL("./fixtures/mock-mcp-server.ts", import.meta.url),
-);
+const MOCK_SERVER = fileURLToPath(new URL("./fixtures/mock-mcp-server.ts", import.meta.url));
 const BUN_BIN = process.execPath;
 
 function writeProxyConfig(dir: string, servers: string[]): string {
@@ -100,7 +98,9 @@ describe("McpProxyPlugin — skip rule for shared servers", () => {
     await plugin.start();
 
     try {
-      const fqns = getMcpBridge().listTools().map((t) => t.fqn);
+      const fqns = getMcpBridge()
+        .listTools()
+        .map((t) => t.fqn);
       expect(fqns).not.toContain("mcp-proxy__alpha__echo");
       expect(fqns).not.toContain("mcp-proxy__beta__echo");
       // gamma was not claimed → mcp-proxy still owns it.
@@ -134,7 +134,9 @@ describe("McpProxyPlugin — skip rule for shared servers", () => {
     await plugin.start();
 
     try {
-      const fqns = getMcpBridge().listTools().map((t) => t.fqn);
+      const fqns = getMcpBridge()
+        .listTools()
+        .map((t) => t.fqn);
       // mcp-proxy still serves alpha — legacy callsites keep working.
       expect(fqns).toContain("mcp-proxy__alpha__echo");
     } finally {
@@ -156,7 +158,9 @@ describe("McpProxyPlugin — skip rule for shared servers", () => {
     await plugin.start();
 
     try {
-      const fqns = getMcpBridge().listTools().map((t) => t.fqn);
+      const fqns = getMcpBridge()
+        .listTools()
+        .map((t) => t.fqn);
       expect(fqns).toContain("mcp-proxy__alpha__echo");
     } finally {
       await plugin.stop();

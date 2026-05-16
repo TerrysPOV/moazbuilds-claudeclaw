@@ -21,10 +21,7 @@
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
+import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { randomUUID } from "node:crypto";
 import { getMcpBridge } from "../mcp-bridge.js";
 import type { McpServerProcess } from "../mcp-proxy/server-process.js";
@@ -230,11 +227,7 @@ export class McpHttpHandler {
       try {
         await bucket.sdkServer.close();
       } catch {}
-      return _errResponse(
-        500,
-        "transport_error",
-        err instanceof Error ? err.message : String(err),
-      );
+      return _errResponse(500, "transport_error", err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -260,8 +253,12 @@ export class McpHttpHandler {
     this.buckets.clear();
     await Promise.allSettled(
       buckets.map(async (b) => {
-        try { await b.transport.close(); } catch {}
-        try { await b.sdkServer.close(); } catch {}
+        try {
+          await b.transport.close();
+        } catch {}
+        try {
+          await b.sdkServer.close();
+        } catch {}
       }),
     );
   }
@@ -331,10 +328,7 @@ export class McpHttpHandler {
           content: [
             {
               type: "text",
-              text:
-                typeof result === "string"
-                  ? result
-                  : JSON.stringify(result),
+              text: typeof result === "string" ? result : JSON.stringify(result),
             },
           ],
         };

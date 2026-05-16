@@ -3,11 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import {
-  McpMultiplexerPlugin,
-  _resetMcpMultiplexer,
-  type MuxSettingsView,
-} from "../index.js";
+import { McpMultiplexerPlugin, _resetMcpMultiplexer, type MuxSettingsView } from "../index.js";
 import { _resetHttpGateway, getHttpGateway } from "../../http-gateway.js";
 import { _resetMcpBridge, getMcpBridge } from "../../mcp-bridge.js";
 import { _resetIdentityStore } from "../pty-identity.js";
@@ -36,9 +32,7 @@ function writeProxyConfig(dir: string, servers: string[]): string {
   return path;
 }
 
-function makeSettingsView(
-  partial: Partial<MuxSettingsView>,
-): () => MuxSettingsView {
+function makeSettingsView(partial: Partial<MuxSettingsView>): () => MuxSettingsView {
   const view: MuxSettingsView = {
     webEnabled: true,
     webHost: "127.0.0.1",
@@ -378,13 +372,17 @@ describe("McpMultiplexerPlugin — active path", () => {
 
       // Seed the baseline so the first sample is meaningful even though
       // the probe wasn't started by the plugin (probe disabled in tests).
-      const proc = (plugin as unknown as {
-        servers: Map<string, { status: string }>;
-        lastObservedStatus: Map<string, string>;
-      }).servers.get("alpha")!;
-      (plugin as unknown as {
-        lastObservedStatus: Map<string, string>;
-      }).lastObservedStatus.set("alpha", proc.status);
+      const proc = (
+        plugin as unknown as {
+          servers: Map<string, { status: string }>;
+          lastObservedStatus: Map<string, string>;
+        }
+      ).servers.get("alpha")!;
+      (
+        plugin as unknown as {
+          lastObservedStatus: Map<string, string>;
+        }
+      ).lastObservedStatus.set("alpha", proc.status);
 
       // Force a transition: simulate the upstream child crashing.
       const initial = proc.status;
@@ -425,13 +423,17 @@ describe("McpMultiplexerPlugin — active path", () => {
       });
       await plugin.start();
 
-      const proc = (plugin as unknown as {
-        servers: Map<string, { status: string }>;
-        lastObservedStatus: Map<string, string>;
-      }).servers.get("alpha")!;
-      (plugin as unknown as {
-        lastObservedStatus: Map<string, string>;
-      }).lastObservedStatus.set("alpha", proc.status);
+      const proc = (
+        plugin as unknown as {
+          servers: Map<string, { status: string }>;
+          lastObservedStatus: Map<string, string>;
+        }
+      ).servers.get("alpha")!;
+      (
+        plugin as unknown as {
+          lastObservedStatus: Map<string, string>;
+        }
+      ).lastObservedStatus.set("alpha", proc.status);
 
       const audited: string[] = [];
       const origAudit = getMcpBridge().audit.bind(getMcpBridge());

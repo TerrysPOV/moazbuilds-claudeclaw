@@ -17,12 +17,7 @@
  * the identity; the writer splats `identity.headers` verbatim into the
  * synthesized JSON.
  */
-import {
-  existsSync,
-  mkdirSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import type { PtyIdentity } from "../plugins/mcp-multiplexer/pty-identity";
@@ -104,9 +99,7 @@ export function configPathFor(cwd: string, ptyId: string): string {
  * — there's nothing for claude to consult. This keeps the backward-compat
  * path (settings.mcp.shared=[]) byte-identical to today.
  */
-export function writeConfigForPty(
-  input: WriteConfigInput,
-): WriteConfigResult {
+export function writeConfigForPty(input: WriteConfigInput): WriteConfigResult {
   const { ptyId, cwd, sharedServers, perPtyServers, bridgeBaseUrl, identity } = input;
 
   if (!ptyId || ptyId.length === 0) {
