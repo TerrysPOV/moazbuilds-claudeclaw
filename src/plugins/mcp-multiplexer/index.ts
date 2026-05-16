@@ -40,6 +40,12 @@ import {
   _resetIdentityStore,
   type PtyIdentity,
 } from "./pty-identity.js";
+// TODO(coord): replace with real import after W1 merges
+// `session-persistence.ts`. Until then, the stub re-exports the same
+// interface shape (only types — no runtime). The real class will be
+// constructed via the same `new SessionPersistenceStore({ storageRoot,
+// maxAgeMs })` shape.
+import type { SessionPersistenceStore } from "./session-persistence-stub.js";
 
 /** Same plugin id used for audit + bridge-callback registration.
  *  Must satisfy `PluginMcpBridge._validatePluginId` (lowercase kebab). */
@@ -87,6 +93,17 @@ export interface MuxSettingsView {
   /** Health probe interval in milliseconds. 0 disables the probe. Default
    *  derives from `settings.mcp.healthProbeIntervalMs` (30s). */
   healthProbeIntervalMs: number;
+  /** Master switch for session-map persistence. Default true (always-
+   *  resume per SPEC-DELTA-2026-05-16). When false the multiplexer
+   *  never constructs the persistence store and behaves exactly as
+   *  PR #71. */
+  sessionPersistenceEnabled: boolean;
+  /** Max age (seconds) of a persisted record. Default 3600. */
+  sessionMaxAgeSeconds: number;
+  /** Storage directory. Empty string means "compute from homedir at
+   *  start time" — multiplexer resolves to
+   *  `~/.config/claudeclaw/mcp-sessions/`. */
+  sessionPersistencePath: string;
 }
 
 function _readSettings(): MuxSettingsView {
@@ -104,6 +121,18 @@ function _readSettings(): MuxSettingsView {
     typeof probeRaw === "number" && Number.isFinite(probeRaw) && probeRaw >= 0
       ? Math.floor(probeRaw)
       : 30000;
+  const mcpObj = mcpRaw && typeof mcpRaw === "object" ? (mcpRaw as Record<string, unknown>) : {};
+  // SPEC-DELTA-2026-05-16 always-resume default: true unless explicitly
+  // set to false (kill-switch).
+  const sessionPersistenceEnabled = mcpObj.sessionPersistenceEnabled === false ? false : true;
+  const rawMaxAge = mcpObj.sessionMaxAgeSeconds;
+  const sessionMaxAgeSeconds =
+    typeof rawMaxAge === "number" && Number.isFinite(rawMaxAge) && rawMaxAge > 0
+      ? Math.max(60, Math.floor(rawMaxAge))
+      : 3600;
+  const rawPath = mcpObj.sessionPersistencePath;
+  const sessionPersistencePath =
+    typeof rawPath === "string" && rawPath.length > 0 && rawPath.startsWith("/") ? rawPath : "";
   return {
     webEnabled: s.web?.enabled === true,
     webHost: s.web?.host ?? "127.0.0.1",
@@ -111,6 +140,9 @@ function _readSettings(): MuxSettingsView {
     shared,
     stateless: stateless.filter((n) => shared.includes(n)),
     healthProbeIntervalMs,
+    sessionPersistenceEnabled,
+    sessionMaxAgeSeconds,
+    sessionPersistencePath,
   };
 }
 
@@ -132,12 +164,33 @@ export interface McpMultiplexerPluginOpts {
    *  from the global `getSettings()`. Production wiring leaves this
    *  undefined; tests pass a pre-built view. */
   settingsView?: () => MuxSettingsView;
+  /** Test seam — injects a pre-built persistence store instead of
+   *  letting the plugin construct one at `start()`. When undefined and
+   *  `settings.mcp.sessionPersistenceEnabled === true`, the plugin
+   *  constructs a `SessionPersistenceStore` rooted at the configured
+   *  path. Tests pass an in-memory or tmpdir-rooted fake.
+   *
+   *  TODO(coord): the real `SessionPersistenceStore` constructor comes
+   *  from W1; until that merges, production wiring leaves this
+   *  undefined and persistence stays inert (no store constructed). */
+  persistenceFactory?: (opts: {
+    storageRoot: string;
+    maxAgeMs: number;
+  }) => SessionPersistenceStore | null;
+  /** GC tick interval in milliseconds. Default 1 hour. Tests pin this
+   *  to a smaller value or 0 (disabled — drive via `_runGCTickForTests`). */
+  gcTickMs?: number;
 }
 
 export class McpMultiplexerPlugin {
   private readonly configPath: string;
   private readonly bridgeBaseUrlOverride?: string;
   private readonly settingsView: () => MuxSettingsView;
+  private readonly persistenceFactory?: (opts: {
+    storageRoot: string;
+    maxAgeMs: number;
+  }) => SessionPersistenceStore | null;
+  private readonly gcTickMsOverride?: number;
   private servers = new Map<string, McpServerProcess>();
   private handlers = new Map<string, McpHttpHandler>();
   private started = false;
@@ -151,11 +204,20 @@ export class McpMultiplexerPlugin {
   /** Previous observed status per shared server. Drives the transition
    *  log/audit on each probe tick. */
   private lastObservedStatus = new Map<string, string>();
+  /** Session-map persistence layer. Null when:
+   *   - operator disabled via `sessionPersistenceEnabled: false`, OR
+   *   - no `persistenceFactory` was supplied (W1 not yet merged), OR
+   *   - the factory returned null (degraded — disk/permission errors). */
+  private persistence: SessionPersistenceStore | null = null;
+  /** Periodic GC sweep. Null when persistence is dormant. */
+  private gcTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(opts: McpMultiplexerPluginOpts = {}) {
     this.configPath = opts.configPath ?? join(homedir(), ".config", "claudeclaw", "mcp-proxy.json");
     this.bridgeBaseUrlOverride = opts.bridgeBaseUrlOverride;
     this.settingsView = opts.settingsView ?? _readSettings;
+    this.persistenceFactory = opts.persistenceFactory;
+    this.gcTickMsOverride = opts.gcTickMs;
   }
 
   async start(): Promise<void> {
@@ -223,6 +285,30 @@ export class McpMultiplexerPlugin {
       return;
     }
 
+    // Construct the persistence layer BEFORE the spawn loop so handlers
+    // get the store reference at construction time. The factory comes
+    // from W1 (`session-persistence.ts`); until that lands, production
+    // wiring leaves `persistenceFactory` undefined and the store stays
+    // null. Operator-disabled (`sessionPersistenceEnabled: false`) also
+    // skips construction — that's the kill-switch escape hatch.
+    if (settings.sessionPersistenceEnabled && this.persistenceFactory) {
+      const storageRoot =
+        settings.sessionPersistencePath || join(homedir(), ".config", "claudeclaw", "mcp-sessions");
+      try {
+        this.persistence = this.persistenceFactory({
+          storageRoot,
+          maxAgeMs: settings.sessionMaxAgeSeconds * 1000,
+        });
+      } catch (err) {
+        console.warn(
+          `[mcp-multiplexer] persistence layer init failed (continuing without): ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+        this.persistence = null;
+      }
+    }
+
     // Spawn the shared upstream children. Use `allSettled` so one bad
     // server doesn't take down the others — matches `mcp-proxy`
     // graceful-degradation semantics.
@@ -248,6 +334,11 @@ export class McpMultiplexerPlugin {
             serverName: name,
             proc,
             stateless: settings.stateless.includes(name),
+            // Only stateful handlers receive the store; stateless
+            // declared servers ignore it internally as well.
+            persistence: settings.stateless.includes(name)
+              ? undefined
+              : (this.persistence ?? undefined),
           });
           this.handlers.set(name, handler);
 
@@ -307,6 +398,18 @@ export class McpMultiplexerPlugin {
     // simultaneously, and without an active probe the operator only finds
     // out when something fails to respond.
     this._startHealthProbe(settings.healthProbeIntervalMs);
+
+    // SPEC §4.4: replay persisted session bindings AFTER the spawn loop
+    // succeeds and the health probe is armed, but BEFORE any PTY-side
+    // claude can hit the gateway. The supervisor wakes up after this
+    // method returns, so this ordering is safe.
+    if (this.persistence) {
+      await this._replayPersistedSessions();
+      // Start the GC sweep. Default cadence 1h; tests pin to 0 to drive
+      // synchronously via `_runGCTickForTests`.
+      const gcTickMs = this.gcTickMsOverride ?? 3_600_000;
+      this._startGCTick(gcTickMs);
+    }
   }
 
   async stop(): Promise<void> {
@@ -314,6 +417,7 @@ export class McpMultiplexerPlugin {
     this.started = false;
     this.active = false;
     this._stopHealthProbe();
+    this._stopGCTick();
     try {
       getMcpBridge().unregisterPlugin(PLUGIN_ID);
     } catch {}
@@ -325,6 +429,11 @@ export class McpMultiplexerPlugin {
     this.handlers.clear();
     await Promise.allSettled([...this.servers.values()].map((s) => s.stop()));
     this.servers.clear();
+    // Drop the persistence reference last — handlers may have queued
+    // touch/drop calls that we don't await here (they're fire-and-
+    // forget). Letting GC reclaim the store object is fine; the next
+    // `start()` constructs a new one.
+    this.persistence = null;
     this.cachedSharedNames = [];
     this.cachedStatelessNames = [];
     this.cachedBridgeBaseUrl = "http://127.0.0.1:4632";
@@ -351,6 +460,129 @@ export class McpMultiplexerPlugin {
       this.healthProbeTimer = null;
     }
     this.lastObservedStatus.clear();
+  }
+
+  // ── Session-map persistence ─────────────────────────────────────────
+
+  /**
+   * SPEC §4.4 replay sequence (post SPEC-DELTA-2026-05-16 always-resume).
+   *
+   * For each currently-claimed, non-stateless server, load the persisted
+   * records and re-install a bucket for each ptyId. The persistence
+   * layer (W1) is responsible for TTL/integrity filtering — by the time
+   * `loadAll(serverName)` returns, the only entries are ones we should
+   * actually try to resume.
+   *
+   * Replay is best-effort: any single entry's failure (transport error,
+   * upstream not yet ready, etc.) is logged + audited but does NOT
+   * block other entries or the daemon's overall startup.
+   */
+  private async _replayPersistedSessions(): Promise<void> {
+    if (!this.persistence) return;
+    const bridge = (() => {
+      try {
+        return getMcpBridge();
+      } catch {
+        return null;
+      }
+    })();
+    const resumable = this.cachedSharedNames.filter(
+      (name) => !this.cachedStatelessNames.includes(name),
+    );
+    for (const serverName of resumable) {
+      const handler = this.handlers.get(serverName);
+      if (!handler) continue;
+      let records: Array<{ ptyId: string; sessionId: string }>;
+      try {
+        records = await this.persistence.loadAll(serverName);
+      } catch (err) {
+        console.warn(
+          `[mcp-multiplexer] replay: loadAll('${serverName}') failed (continuing): ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+        continue;
+      }
+      for (const record of records) {
+        try {
+          bridge?.audit("mcp_session_resume_attempted", {
+            server: serverName,
+            pty_id: record.ptyId,
+            session_id: record.sessionId,
+          });
+        } catch {}
+        try {
+          await handler.installResumedBucket(record.ptyId, record.sessionId);
+          try {
+            bridge?.audit("mcp_session_resumed", {
+              server: serverName,
+              pty_id: record.ptyId,
+              session_id: record.sessionId,
+            });
+          } catch {}
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          try {
+            bridge?.audit("mcp_session_lost_on_restart", {
+              server: serverName,
+              pty_id: record.ptyId,
+              session_id: record.sessionId,
+              reason: "replay_failed",
+              error: message,
+            });
+          } catch {}
+          // Drop the persisted record so we don't repeatedly fail on
+          // the same broken binding across daemon restarts.
+          await this.persistence.drop(serverName, record.ptyId).catch(() => {});
+        }
+      }
+    }
+  }
+
+  private _startGCTick(intervalMs: number): void {
+    if (intervalMs <= 0) return;
+    if (!this.persistence) return;
+    this.gcTimer = setInterval(() => {
+      void this._runGCTick();
+    }, intervalMs);
+    if (typeof this.gcTimer.unref === "function") {
+      this.gcTimer.unref();
+    }
+  }
+
+  private _stopGCTick(): void {
+    if (this.gcTimer) {
+      clearInterval(this.gcTimer);
+      this.gcTimer = null;
+    }
+  }
+
+  /** One GC pass. Delegates the TTL sweep to the persistence layer;
+   *  the store emits `mcp_session_gc` per dropped entry internally. */
+  private async _runGCTick(): Promise<void> {
+    if (!this.persistence) return;
+    try {
+      await this.persistence.garbageCollect();
+    } catch (err) {
+      console.warn(
+        `[mcp-multiplexer] persistence GC failed (continuing): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
+  /** Test seam — run one GC tick synchronously without waiting for the
+   *  interval. Mirrors the `_sampleHealthForTests` pattern. */
+  async _runGCTickForTests(): Promise<void> {
+    await this._runGCTick();
+  }
+
+  /** Test seam — drive replay synchronously. Useful for tests that
+   *  inject the persistence factory + pre-populate records, then want
+   *  to assert replay outcomes without re-`start()`ing. */
+  async _replayForTests(): Promise<void> {
+    await this._replayPersistedSessions();
   }
 
   /** Sample `proc.status` for every shared server. On state transition,
