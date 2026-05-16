@@ -17,7 +17,7 @@
  * the identity; the writer splats `identity.headers` verbatim into the
  * synthesized JSON.
  */
-import { existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import type { PtyIdentity } from "../plugins/mcp-multiplexer/pty-identity";
@@ -168,17 +168,26 @@ export function writeConfigForPty(input: WriteConfigInput): WriteConfigResult {
     mkdirSync(dir, { recursive: true, mode: DIR_MODE });
   }
 
-  // Write atomically-ish: writeFileSync with mode 0600. If the file already
-  // exists, the mode flag is ignored on most platforms — we re-write the
-  // bytes but the perms stay as they were. We don't chmod separately
-  // because:
-  //   (a) the file we created in a prior turn already has 0600 from this
-  //       writer, so it's already correct;
-  //   (b) if an operator manually changed the mode we don't fight them.
+  // Write atomically-ish: writeFileSync with mode 0600. The `mode` option
+  // is only honoured on FILE CREATE — on overwrite, perms stay as-is on
+  // most platforms, AND a permissive umask can still widen the bits at
+  // create time depending on libc behaviour. Belt-and-braces (#72 item 2):
+  // explicit chmodSync after the write forces 0600 regardless of umask,
+  // platform quirk, or prior operator manual chmod. This file holds the
+  // synthesized `--mcp-config` including the per-PTY bearer Authorization
+  // header — leaking it to other local users would let any of them
+  // impersonate the PTY against `/mcp/<server>` until the bearer rotates.
   writeFileSync(path, JSON.stringify(payload, null, 2) + "\n", {
     mode: FILE_MODE,
     encoding: "utf8",
   });
+  try {
+    chmodSync(path, FILE_MODE);
+  } catch {
+    // Best-effort. On filesystems without permission semantics
+    // (e.g. some test FUSE mounts) chmod throws; we already wrote the
+    // file with the requested mode, so swallow and move on.
+  }
 
   return { path };
 }

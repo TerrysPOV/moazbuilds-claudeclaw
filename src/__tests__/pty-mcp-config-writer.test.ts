@@ -206,6 +206,39 @@ describe("writeConfigForPty — filesystem hygiene", () => {
     expect(st.mode & 0o400).toBeGreaterThan(0); // at least owner-readable
   });
 
+  // #72 item 2: belt-and-braces — even if a prior turn left the file
+  // group/world-readable (operator manual chmod, permissive umask
+  // interaction with a non-POSIX write path, ...), the next write must
+  // clamp it back to 0600. Pre-fix the writer relied on writeFileSync's
+  // mode param which is IGNORED on overwrite on most platforms, so the
+  // bad perms persisted across re-writes — leaking the bearer to any
+  // local user.
+  it("re-clamps file mode to 0600 even if a prior write was world-readable", async () => {
+    const cwd = makeCwd("file-mode-reclamp");
+    const inp = baseInput({
+      ptyId: "x",
+      cwd,
+      sharedServers: [{ name: "graphiti" }],
+    });
+
+    // First write: 0600 expected.
+    const r1 = writeConfigForPty(inp);
+    expect(statSync(r1.path).mode & 0o077).toBe(0);
+
+    // Simulate an attacker / misbehaving process / operator manual
+    // chmod that widens perms.
+    const { chmodSync } = await import("node:fs");
+    chmodSync(r1.path, 0o644);
+    expect(statSync(r1.path).mode & 0o077).not.toBe(0);
+
+    // Next call to the writer MUST clamp back to 0600. Without the
+    // explicit chmod in the writer, this assertion would fail because
+    // writeFileSync's `mode` option is no-op on overwrite.
+    const r2 = writeConfigForPty(inp);
+    expect(r2.path).toBe(r1.path);
+    expect(statSync(r2.path).mode & 0o077).toBe(0);
+  });
+
   it("is idempotent — second call with same input overwrites the file", () => {
     const cwd = makeCwd("idempotent");
     const inp = baseInput({
