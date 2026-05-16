@@ -888,3 +888,156 @@ describe("McpMultiplexerPlugin — session persistence wiring", () => {
     }
   });
 });
+
+// #72 item 7: claude's `--mcp-config` is ADDITIVE to its own
+// `~/.claude/mcp.json` discovery. If a name appears in BOTH, claude spawns
+// the stdio entry from ~/.claude/mcp.json IN ADDITION to making HTTP calls
+// to our multiplexed copy — one extra subprocess per PTY per colliding
+// server. The startup check warns operators so the misconfiguration
+// surfaces before they blame "the multiplexer leaking memory".
+describe("McpMultiplexerPlugin — operator-config collision (#72 item 7)", () => {
+  function writeUserMcpJson(dir: string, mcpServers: Record<string, unknown>): string {
+    const path = join(dir, ".claude-mcp.json");
+    writeFileSync(path, JSON.stringify({ mcpServers }, null, 2));
+    return path;
+  }
+
+  function makePluginWithUserJson(opts: { sharedNames: string[]; userMcpJsonPath?: string }) {
+    const cfgPath = writeProxyConfig(tmpDir, opts.sharedNames);
+    return new McpMultiplexerPlugin({
+      configPath: cfgPath,
+      settingsView: makeSettingsView({
+        webEnabled: true,
+        shared: opts.sharedNames,
+        healthProbeIntervalMs: 0,
+      }),
+      userMcpJsonPath: opts.userMcpJsonPath,
+    });
+  }
+
+  it("warns when a shared server name also appears in ~/.claude/mcp.json", () => {
+    const userPath = writeUserMcpJson(tmpDir, {
+      // Two collisions + one unrelated server.
+      alpha: { command: "node", args: ["alpha.js"] },
+      unrelated: { command: "node", args: ["unrelated.js"] },
+    });
+    const plugin = makePluginWithUserJson({
+      sharedNames: ["alpha"],
+      userMcpJsonPath: userPath,
+    });
+
+    const warnings: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.map(String).join(" "));
+    };
+
+    try {
+      (
+        plugin as unknown as { _warnOnUserMcpJsonCollision: (c: string[]) => void }
+      )._warnOnUserMcpJsonCollision(["alpha"]);
+    } finally {
+      console.warn = origWarn;
+    }
+
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).toContain("alpha");
+    expect(warnings[0]).toContain("mcp-multiplexer");
+    expect(warnings[0]).not.toContain("unrelated"); // non-colliding server isn't listed
+  });
+
+  it("does NOT warn when there are no name collisions", () => {
+    const userPath = writeUserMcpJson(tmpDir, {
+      "only-in-user-json": { command: "node", args: ["x.js"] },
+    });
+    const plugin = makePluginWithUserJson({
+      sharedNames: ["alpha"],
+      userMcpJsonPath: userPath,
+    });
+
+    const warnings: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.map(String).join(" "));
+    };
+    try {
+      (
+        plugin as unknown as { _warnOnUserMcpJsonCollision: (c: string[]) => void }
+      )._warnOnUserMcpJsonCollision(["alpha"]);
+    } finally {
+      console.warn = origWarn;
+    }
+
+    expect(warnings.length).toBe(0);
+  });
+
+  it("does NOT throw on a missing ~/.claude/mcp.json (legacy operator setup)", () => {
+    const missingPath = join(tmpDir, "definitely-not-here.json");
+    const plugin = makePluginWithUserJson({
+      sharedNames: ["alpha"],
+      userMcpJsonPath: missingPath,
+    });
+
+    const warnings: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.map(String).join(" "));
+    };
+    try {
+      expect(() =>
+        (
+          plugin as unknown as { _warnOnUserMcpJsonCollision: (c: string[]) => void }
+        )._warnOnUserMcpJsonCollision(["alpha"]),
+      ).not.toThrow();
+    } finally {
+      console.warn = origWarn;
+    }
+    expect(warnings.length).toBe(0);
+  });
+
+  it("does NOT throw on a malformed ~/.claude/mcp.json", () => {
+    const malformedPath = join(tmpDir, "malformed.json");
+    writeFileSync(malformedPath, "{ not valid json");
+    const plugin = makePluginWithUserJson({
+      sharedNames: ["alpha"],
+      userMcpJsonPath: malformedPath,
+    });
+
+    expect(() =>
+      (
+        plugin as unknown as { _warnOnUserMcpJsonCollision: (c: string[]) => void }
+      )._warnOnUserMcpJsonCollision(["alpha"]),
+    ).not.toThrow();
+  });
+
+  it("emits audit event `multiplexer_user_mcp_collision` when a collision is detected", async () => {
+    const userPath = writeUserMcpJson(tmpDir, {
+      alpha: { command: "node", args: ["alpha.js"] },
+      beta: { command: "node", args: ["beta.js"] },
+    });
+    const plugin = makePluginWithUserJson({
+      sharedNames: ["alpha", "beta"],
+      userMcpJsonPath: userPath,
+    });
+
+    const audited: Array<{ event: string; payload: Record<string, unknown> }> = [];
+    const origAudit = getMcpBridge().audit.bind(getMcpBridge());
+    getMcpBridge().audit = (event: string, payload: Record<string, unknown>) => {
+      audited.push({ event, payload });
+      origAudit(event, payload);
+    };
+
+    try {
+      (
+        plugin as unknown as { _warnOnUserMcpJsonCollision: (c: string[]) => void }
+      )._warnOnUserMcpJsonCollision(["alpha", "beta"]);
+    } finally {
+      getMcpBridge().audit = origAudit;
+    }
+
+    const collision = audited.find((e) => e.event === "multiplexer_user_mcp_collision");
+    expect(collision).toBeDefined();
+    expect((collision!.payload.collisions as string[]).sort()).toEqual(["alpha", "beta"]);
+    expect(collision!.payload.path).toBe(userPath);
+  });
+});

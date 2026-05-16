@@ -174,6 +174,10 @@ export interface McpMultiplexerPluginOpts {
   /** GC tick interval in milliseconds. Default 1 hour. Tests pin this
    *  to a smaller value or 0 (disabled — drive via `_runGCTickForTests`). */
   gcTickMs?: number;
+  /** Test seam — override the path checked for `~/.claude/mcp.json`
+   *  collisions (#72 item 7). Production defaults to
+   *  `path.join(os.homedir(), ".claude", "mcp.json")`. */
+  userMcpJsonPath?: string;
 }
 
 export class McpMultiplexerPlugin {
@@ -205,6 +209,9 @@ export class McpMultiplexerPlugin {
   private persistence: SessionPersistenceStore | null = null;
   /** Periodic GC sweep. Null when persistence is dormant. */
   private gcTimer: ReturnType<typeof setInterval> | null = null;
+  /** #72 item 7: file to check for shared-name collisions at startup.
+   *  Defaults to `~/.claude/mcp.json`; tests can override. */
+  private readonly userMcpJsonPath: string;
 
   constructor(opts: McpMultiplexerPluginOpts = {}) {
     this.configPath = opts.configPath ?? join(homedir(), ".config", "claudeclaw", "mcp-proxy.json");
@@ -212,6 +219,7 @@ export class McpMultiplexerPlugin {
     this.settingsView = opts.settingsView ?? _readSettings;
     this.persistenceFactory = opts.persistenceFactory;
     this.gcTickMsOverride = opts.gcTickMs;
+    this.userMcpJsonPath = opts.userMcpJsonPath ?? join(homedir(), ".claude", "mcp.json");
   }
 
   async start(): Promise<void> {
@@ -397,6 +405,21 @@ export class McpMultiplexerPlugin {
     // post-settings-change.
     this.started = true;
 
+    // #72 item 7: operator footgun — the synthesized --mcp-config is
+    // ADDITIVE to claude's own `~/.claude/mcp.json` discovery. If a name
+    // appears in BOTH places, claude spawns the stdio version from
+    // ~/.claude/mcp.json IN ADDITION TO making HTTP calls to our shared
+    // multiplexed copy. The operator-visible symptom is an unexplained
+    // child process on every PTY for a server they thought was shared.
+    // Warn at startup so the misconfiguration surfaces immediately.
+    try {
+      this._warnOnUserMcpJsonCollision(claimed);
+    } catch {
+      // Best-effort. The check reads ~/.claude/mcp.json; any FS/JSON
+      // error MUST NOT block multiplexer startup — the warning is
+      // observability, not a gate.
+    }
+
     // Start the periodic health probe. Closes the silent-degradation gap
     // flagged on #64: when one shared MCP crashes all PTYs lose that tool
     // simultaneously, and without an active probe the operator only finds
@@ -464,6 +487,64 @@ export class McpMultiplexerPlugin {
       this.healthProbeTimer = null;
     }
     this.lastObservedStatus.clear();
+  }
+
+  // ── Operator-config-collision warning (#72 item 7) ────────────────────
+
+  /**
+   * The synthesized `--mcp-config` we pass to PTY claudes is ADDITIVE to
+   * claude's own `~/.claude/mcp.json` discovery — they merge by name with
+   * the per-invocation `--mcp-config` winning. If a name appears in BOTH
+   * places, claude spawns the stdio entry from `~/.claude/mcp.json` IN
+   * ADDITION TO making HTTP calls to our shared multiplexed copy. The
+   * operator-visible symptom is one extra child process per PTY for a
+   * server they thought was deduped behind the multiplexer.
+   *
+   * Warn at startup so the misconfiguration surfaces before operators
+   * blame "the multiplexer leaking memory". Best-effort: missing file,
+   * malformed JSON, or read errors all silently skip the check.
+   *
+   * Exposed as a public method (underscore-prefixed by convention) so
+   * unit tests can drive it without spinning up the whole `start()`
+   * pipeline. Production wires it from `start()` after claim.
+   */
+  _warnOnUserMcpJsonCollision(claimed: string[]): void {
+    if (claimed.length === 0) return;
+    // biome-ignore lint/suspicious/noExplicitAny: dynamic node:fs import
+    const { existsSync, readFileSync } = require("node:fs") as {
+      existsSync: (p: string) => boolean;
+      readFileSync: (p: string, enc: string) => string;
+    };
+    if (!existsSync(this.userMcpJsonPath)) return;
+    let parsed: unknown;
+    try {
+      const text = readFileSync(this.userMcpJsonPath, "utf8");
+      parsed = JSON.parse(text);
+    } catch {
+      return;
+    }
+    if (!parsed || typeof parsed !== "object") return;
+    const mcpServers = (parsed as { mcpServers?: unknown }).mcpServers;
+    if (!mcpServers || typeof mcpServers !== "object") return;
+    const userNames = Object.keys(mcpServers as Record<string, unknown>);
+    if (userNames.length === 0) return;
+    const userSet = new Set(userNames);
+    const collisions = claimed.filter((n) => userSet.has(n));
+    if (collisions.length === 0) return;
+    console.warn(
+      `[mcp-multiplexer] WARN: ${collisions.length} shared server name(s) ` +
+        `also appear in ${this.userMcpJsonPath}: ${collisions.join(", ")}. ` +
+        `claude WILL spawn the stdio entries from ${this.userMcpJsonPath} IN ` +
+        `ADDITION to making HTTP calls to the multiplexer. Remove the ` +
+        `colliding entries from ${this.userMcpJsonPath} to avoid duplicate ` +
+        `child processes per PTY.`,
+    );
+    try {
+      getMcpBridge().audit("multiplexer_user_mcp_collision", {
+        path: this.userMcpJsonPath,
+        collisions,
+      });
+    } catch {}
   }
 
   // ── Session-map persistence ─────────────────────────────────────────

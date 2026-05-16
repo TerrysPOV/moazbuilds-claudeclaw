@@ -130,6 +130,54 @@ Hot-reload picks up `settings.json` changes within 30 seconds — no daemon rest
 
 ---
 
+### MCP multiplexer — shared MCP-server processes across PTYs
+
+**Tracking issue: [#72](https://github.com/TerrysPOV/ClaudeClaw-Plus/issues/72) · Lands across [#71](https://github.com/TerrysPOV/ClaudeClaw-Plus/pull/71), [#78](https://github.com/TerrysPOV/ClaudeClaw-Plus/pull/78), and a series of v1.1 hardening PRs (#91–#97)**
+
+The multiplexer hosts each shared MCP server child **once** and demultiplexes per-PTY traffic over a loopback HTTP route (`/mcp/<server>`). Each PTY claude gets a synthesized `--mcp-config` JSON pointing at that route with a per-PTY bearer + identity headers. Without this, every PTY would spawn its own copy of every MCP server — N × M subprocesses for N PTYs × M servers — which OOMs even a modest Hetzner box at moderate concurrency.
+
+#### Operator footgun: `mcp-proxy.json` ↔ `~/.claude/mcp.json` collisions
+
+claude's `--mcp-config` flag is **additive** to its own `~/.claude/mcp.json` discovery. The two configs MERGE by server name. If a server name appears in **both** `~/.config/claudeclaw/mcp-proxy.json` (or whichever path you configured) **and** `~/.claude/mcp.json`, claude will:
+
+1. **Spawn the stdio entry** from `~/.claude/mcp.json` on every PTY — one extra subprocess per PTY per colliding name.
+2. **Also make HTTP calls** to the multiplexer's `/mcp/<server>` for the same name from the synthesized config.
+
+Net effect: you get the per-PTY process explosion the multiplexer was designed to prevent, but for the colliding servers specifically — silently, with no visible error.
+
+**Fix:** for every server name you list in `settings.mcp.shared` (and define in `mcp-proxy.json`), **remove that name from `~/.claude/mcp.json`**. The multiplexer is now the single source of truth for those servers across PTY claudes.
+
+**Detection:** at startup, the multiplexer reads `~/.claude/mcp.json` (best-effort) and logs a `WARN [mcp-multiplexer]` line listing the colliding names. It also emits a `multiplexer_user_mcp_collision` audit event with `{path, collisions: [...]}` so dashboards can alert on it. The warning is observability — the multiplexer still starts, claude still spawns the duplicates, but you know what's happening.
+
+#### Settings block (defaults shown)
+
+```json
+"mcp": {
+  "shared": [],
+  "perPtyOnly": [],
+  "stateless": [],
+  "healthProbeIntervalMs": 30000,
+  "sessionPersistenceEnabled": true,
+  "sessionMaxAgeSeconds": 3600,
+  "sessionPersistencePath": "",
+  "rateLimit": {
+    "maxRequestsPerWindow": 600,
+    "windowMs": 60000
+  }
+}
+```
+
+- `shared` — server names (must also exist in `mcp-proxy.json`) the multiplexer hosts. Empty list = dormant; PTY claudes fall back to per-PTY stdio spawns (no protection from the explosion).
+- `stateless` — subset of `shared` for servers with no per-session state; one upstream session shared across all PTYs.
+- `rateLimit` — per-bearer (= per-PTY) sliding-window cap on `/mcp/<server>` requests. Defense-in-depth for a leaked bearer.
+
+#### References
+
+- Architecture: [`.planning/mcp-multiplexer/SPEC.md`](.planning/mcp-multiplexer/SPEC.md)
+- v1.1 follow-ups: [#72](https://github.com/TerrysPOV/ClaudeClaw-Plus/issues/72)
+
+---
+
 ### Policy Engine — fine-grained tool governance
 
 **[PR #71 — closed upstream — lives here](https://github.com/moazbuilds/claudeclaw/pull/71)**
