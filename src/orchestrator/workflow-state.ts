@@ -1,6 +1,6 @@
 /**
  * Workflow State Store
- * 
+ *
  * Persists canonical workflow state and supports restart-safe loading/reconstruction.
  * State is stored durably under .claude/claudeclaw/workflows/
  */
@@ -8,7 +8,7 @@
 import { join } from "path";
 import { mkdir, readdir, rename, readFile, writeFile, unlink, stat } from "fs/promises";
 import { existsSync } from "fs";
-import { WorkflowState, WorkflowDefinition } from "./types.ts";
+import type { WorkflowState, WorkflowDefinition } from "./types.ts";
 import { initializeWorkflowState } from "./task-graph.ts";
 
 const WORKFLOWS_DIR = join(process.cwd(), ".claude", "claudeclaw", "workflows");
@@ -57,10 +57,10 @@ function getDefinitionsPath(): string {
  */
 export async function saveState(state: WorkflowState): Promise<void> {
   await ensureWorkflowsDir();
-  
+
   const path = getWorkflowPath(state.workflowId);
   const tempPath = `${path}.tmp.${Date.now()}.${Math.random().toString(36).slice(2)}`;
-  
+
   // Write to temp file first, then atomic rename for crash safety.
   // NOTE: writeFile + rename provides atomicity but not full durability.
   // A crash between writeFile and rename could lose the write.
@@ -89,7 +89,7 @@ export async function saveState(state: WorkflowState): Promise<void> {
  */
 export async function loadState(workflowId: string): Promise<WorkflowState | null> {
   const path = getWorkflowPath(workflowId);
-  
+
   try {
     const content = await readFile(path, { encoding: "utf-8" });
     const state = JSON.parse(content) as WorkflowState;
@@ -120,19 +120,19 @@ export async function loadStateSafe(workflowId: string): Promise<WorkflowState |
  */
 export async function listActive(): Promise<string[]> {
   await ensureWorkflowsDir();
-  
+
   const active: string[] = [];
-  
+
   try {
     const entries = await readdir(WORKFLOWS_DIR);
     for (const entry of entries) {
       if (!entry.endsWith(".json") || entry.includes("definitions")) {
         continue;
       }
-      
+
       const workflowId = entry.replace(".json", "");
       const state = await loadStateSafe(workflowId);
-      
+
       if (state && !isTerminalState(state.status)) {
         active.push(workflowId);
       }
@@ -140,7 +140,7 @@ export async function listActive(): Promise<string[]> {
   } catch {
     // Directory might not exist yet
   }
-  
+
   return active;
 }
 
@@ -149,9 +149,9 @@ export async function listActive(): Promise<string[]> {
  */
 export async function listAll(): Promise<string[]> {
   await ensureWorkflowsDir();
-  
+
   const all: string[] = [];
-  
+
   try {
     const entries = await readdir(WORKFLOWS_DIR);
     for (const entry of entries) {
@@ -163,7 +163,7 @@ export async function listAll(): Promise<string[]> {
   } catch {
     // Directory might not exist yet
   }
-  
+
   return all;
 }
 
@@ -211,7 +211,10 @@ export async function saveDefinition(definition: WorkflowDefinition): Promise<vo
     }
 
     const tempPath = `${path}.tmp.${Date.now()}.${Math.random().toString(36).slice(2)}`;
-    await writeFile(tempPath, JSON.stringify(definitions, null, 2), { encoding: "utf-8", flag: "w" });
+    await writeFile(tempPath, JSON.stringify(definitions, null, 2), {
+      encoding: "utf-8",
+      flag: "w",
+    });
 
     try {
       await rename(tempPath, path);
@@ -231,7 +234,7 @@ export async function saveDefinition(definition: WorkflowDefinition): Promise<vo
  */
 export async function loadDefinition(workflowId: string): Promise<WorkflowDefinition | null> {
   const path = getDefinitionsPath();
-  
+
   try {
     const content = await readFile(path, { encoding: "utf-8" });
     const definitions = JSON.parse(content) as Record<string, WorkflowDefinition>;
@@ -247,38 +250,40 @@ export async function loadDefinition(workflowId: string): Promise<WorkflowDefini
  */
 export function rebuildExecutionView(
   state: WorkflowState,
-  definition: WorkflowDefinition
+  definition: WorkflowDefinition,
 ): WorkflowState {
   const now = new Date().toISOString();
-  
+
   // Rebuild completedOrFailed set
   const completedOrFailed = new Set([
     ...state.completedTasks,
     ...state.failedTasks,
-    ...(state.continuedTasks || [])
+    ...(state.continuedTasks || []),
   ]);
-  
+
   // Rebuild task states for tasks not yet in terminal state
   const newTaskStates = { ...state.taskStates };
   let newReadyTasks = [...state.readyTasks];
   let newRunningTasks = [...state.runningTasks];
   let newFailedTasks = [...state.failedTasks];
-  
+
   for (const task of definition.tasks) {
     const existingState = newTaskStates[task.id];
-    
+
     // Skip if already in terminal state
-    if (existingState?.status === "completed" || 
-        existingState?.status === "failed" ||
-        existingState?.status === "cancelled") {
+    if (
+      existingState?.status === "completed" ||
+      existingState?.status === "failed" ||
+      existingState?.status === "cancelled"
+    ) {
       continue;
     }
-    
+
     // For tasks that were running when daemon crashed, reclassify deterministically
     if (existingState?.status === "running") {
       // Check if task was interrupted
       // If task has remaining retries, put back to ready
-      const taskDef = definition.tasks.find(t => t.id === task.id);
+      const taskDef = definition.tasks.find((t) => t.id === task.id);
       if (taskDef) {
         const maxRetries = taskDef.maxRetries ?? 0;
         if (existingState.attemptCount < maxRetries) {
@@ -286,10 +291,10 @@ export function rebuildExecutionView(
           newTaskStates[task.id] = {
             ...existingState,
             status: "pending",
-            lastAttemptAt: now
+            lastAttemptAt: now,
           };
           // Remove from running
-          newRunningTasks = newRunningTasks.filter(id => id !== task.id);
+          newRunningTasks = newRunningTasks.filter((id) => id !== task.id);
           // Add back to ready
           if (!newReadyTasks.includes(task.id)) {
             newReadyTasks = [...newReadyTasks, task.id];
@@ -300,30 +305,30 @@ export function rebuildExecutionView(
             ...existingState,
             status: "failed",
             completedAt: now,
-            error: { message: "Task interrupted by restart" }
+            error: { message: "Task interrupted by restart" },
           };
-          newRunningTasks = newRunningTasks.filter(id => id !== task.id);
+          newRunningTasks = newRunningTasks.filter((id) => id !== task.id);
           newFailedTasks = [...newFailedTasks, task.id];
         }
       }
     }
-    
+
     // For pending tasks, check if their deps are now met
     if (existingState?.status === "pending") {
-      const depsMet = task.deps.every(dep => completedOrFailed.has(dep));
+      const depsMet = task.deps.every((dep) => completedOrFailed.has(dep));
       if (depsMet && !newReadyTasks.includes(task.id)) {
         newReadyTasks = [...newReadyTasks, task.id];
       }
     }
   }
-  
+
   return {
     ...state,
     taskStates: newTaskStates,
     readyTasks: newReadyTasks,
     runningTasks: newRunningTasks,
     failedTasks: newFailedTasks,
-    updatedAt: now
+    updatedAt: now,
   };
 }
 
@@ -332,19 +337,19 @@ export function rebuildExecutionView(
  */
 export async function createWorkflow(
   definition: WorkflowDefinition,
-  options?: { persistDefinition?: boolean }
+  options?: { persistDefinition?: boolean },
 ): Promise<WorkflowState> {
   // Initialize state from definition
   const state = initializeWorkflowState(definition);
-  
+
   // Save state
   await saveState(state);
-  
+
   // Optionally save definition for reconstruction
   if (options?.persistDefinition !== false) {
     await saveDefinition(definition);
   }
-  
+
   return state;
 }
 
@@ -353,7 +358,7 @@ export async function createWorkflow(
  */
 export async function deleteWorkflow(workflowId: string): Promise<void> {
   const path = getWorkflowPath(workflowId);
-  
+
   try {
     await unlink(path);
   } catch (err: unknown) {
@@ -362,7 +367,7 @@ export async function deleteWorkflow(workflowId: string): Promise<void> {
     }
     // Already gone
   }
-  
+
   // Also remove from definitions if present (serialized through write queue)
   await enqueueDefinitionWrite(async () => {
     const defPath = getDefinitionsPath();
@@ -372,7 +377,10 @@ export async function deleteWorkflow(workflowId: string): Promise<void> {
       delete definitions[workflowId];
 
       const tempPath = `${defPath}.tmp.${Date.now()}.${Math.random().toString(36).slice(2)}`;
-      await writeFile(tempPath, JSON.stringify(definitions, null, 2), { encoding: "utf-8", flag: "w" });
+      await writeFile(tempPath, JSON.stringify(definitions, null, 2), {
+        encoding: "utf-8",
+        flag: "w",
+      });
 
       try {
         await rename(tempPath, defPath);
@@ -399,24 +407,24 @@ export async function getWorkflowStats(): Promise<{
   total: number;
 }> {
   await ensureWorkflowsDir();
-  
+
   let active = 0;
   let completed = 0;
   let failed = 0;
   let total = 0;
-  
+
   try {
     const entries = await readdir(WORKFLOWS_DIR);
     for (const entry of entries) {
       if (!entry.endsWith(".json") || entry.includes("definitions")) {
         continue;
       }
-      
+
       total++;
       const state = await loadStateSafe(entry.replace(".json", ""));
-      
+
       if (!state) continue;
-      
+
       if (state.status === "completed") {
         completed++;
       } else if (state.status === "failed") {
@@ -428,6 +436,6 @@ export async function getWorkflowStats(): Promise<{
   } catch {
     // Directory might not exist yet
   }
-  
+
   return { active, completed, failed, total };
 }

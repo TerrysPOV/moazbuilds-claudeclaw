@@ -1,14 +1,14 @@
 /**
  * Durable Usage Tracker
- * 
+ *
  * Persisted per-invocation usage/accounting records with aggregate queries.
- * 
+ *
  * STORAGE MODEL:
  * - Records stored in .claude/claudeclaw/usage/
  * - Per-invocation: usage-{invocationId}.json
  * - Index: usage-index.json (maps invocationId to file)
  * - Usage logs: usage-{YYYYMMDD}.jsonl (daily rotation)
- * 
+ *
  * COST CALCULATION:
  * - Cost is ESTIMATED based on configurable pricing metadata
  * - Cost is NEVER presented as exact provider billing
@@ -99,8 +99,12 @@ function enqueueWrite<T>(operation: () => Promise<T>): Promise<T> {
   writeQueueLength++;
   const promise = writeQueue.then(() => operation());
   writeQueue = promise.then(
-    () => { writeQueueLength--; },
-    () => { writeQueueLength--; }
+    () => {
+      writeQueueLength--;
+    },
+    () => {
+      writeQueueLength--;
+    },
   );
   return promise;
 }
@@ -182,7 +186,10 @@ function getTodayDate(): string {
 /**
  * Record the start of an invocation.
  */
-export async function recordInvocationStart(context: InvocationContext, invocationId?: string): Promise<InvocationUsageRecord> {
+export async function recordInvocationStart(
+  context: InvocationContext,
+  invocationId?: string,
+): Promise<InvocationUsageRecord> {
   await initUsageTracker();
 
   return enqueueWrite(async () => {
@@ -215,12 +222,13 @@ export async function recordInvocationStart(context: InvocationContext, invocati
     // Append to daily log
     const today = getTodayDate();
     const dailyLogPath = getDailyLogFilePath(today);
-    const logEntry = JSON.stringify({
-      invocationId: record.invocationId,
-      timestamp: now,
-      type: "start",
-    }) + "\n";
-    
+    const logEntry =
+      JSON.stringify({
+        invocationId: record.invocationId,
+        timestamp: now,
+        type: "start",
+      }) + "\n";
+
     await appendFile(dailyLogPath, logEntry);
 
     return record;
@@ -233,7 +241,7 @@ export async function recordInvocationStart(context: InvocationContext, invocati
 export async function recordInvocationCompletion(
   invocationId: string,
   usage?: UsageMetrics,
-  estimatedCost?: EstimatedCost
+  estimatedCost?: EstimatedCost,
 ): Promise<InvocationUsageRecord | null> {
   await initUsageTracker();
 
@@ -257,14 +265,15 @@ export async function recordInvocationCompletion(
     // Append to daily log
     const today = getTodayDate();
     const dailyLogPath = getDailyLogFilePath(today);
-    const logEntry = JSON.stringify({
-      invocationId: record.invocationId,
-      timestamp: now,
-      type: "completion",
-      usage,
-      estimatedCost,
-    }) + "\n";
-    
+    const logEntry =
+      JSON.stringify({
+        invocationId: record.invocationId,
+        timestamp: now,
+        type: "completion",
+        usage,
+        estimatedCost,
+      }) + "\n";
+
     await appendFile(dailyLogPath, logEntry);
 
     return record;
@@ -276,7 +285,7 @@ export async function recordInvocationCompletion(
  */
 export async function recordInvocationFailure(
   invocationId: string,
-  error: { type?: string; message: string }
+  error: { type?: string; message: string },
 ): Promise<InvocationUsageRecord | null> {
   await initUsageTracker();
 
@@ -299,13 +308,14 @@ export async function recordInvocationFailure(
     // Append to daily log
     const today = getTodayDate();
     const dailyLogPath = getDailyLogFilePath(today);
-    const logEntry = JSON.stringify({
-      invocationId: record.invocationId,
-      timestamp: now,
-      type: "failure",
-      error,
-    }) + "\n";
-    
+    const logEntry =
+      JSON.stringify({
+        invocationId: record.invocationId,
+        timestamp: now,
+        type: "failure",
+        error,
+      }) + "\n";
+
     await appendFile(dailyLogPath, logEntry);
 
     return record;
@@ -317,7 +327,7 @@ export async function recordInvocationFailure(
  */
 export async function recordInvocationKilled(
   invocationId: string,
-  reason: string
+  reason: string,
 ): Promise<InvocationUsageRecord | null> {
   await initUsageTracker();
 
@@ -340,13 +350,14 @@ export async function recordInvocationKilled(
     // Append to daily log
     const today = getTodayDate();
     const dailyLogPath = getDailyLogFilePath(today);
-    const logEntry = JSON.stringify({
-      invocationId: record.invocationId,
-      timestamp: now,
-      type: "killed",
-      reason,
-    }) + "\n";
-    
+    const logEntry =
+      JSON.stringify({
+        invocationId: record.invocationId,
+        timestamp: now,
+        type: "killed",
+        reason,
+      }) + "\n";
+
     await appendFile(dailyLogPath, logEntry);
 
     return record;
@@ -363,13 +374,13 @@ export async function getInvocation(invocationId: string): Promise<InvocationUsa
 
 async function loadInvocationRecord(invocationId: string): Promise<InvocationUsageRecord | null> {
   const filePath = getInvocationFilePath(invocationId);
-  
+
   if (!existsSync(filePath)) {
     return null;
   }
 
   try {
-    return await Bun.file(filePath).json() as InvocationUsageRecord;
+    return (await Bun.file(filePath).json()) as InvocationUsageRecord;
   } catch {
     return null;
   }
@@ -389,7 +400,7 @@ export async function getSessionUsage(sessionId: string): Promise<InvocationUsag
 
   for (const [invocationId, filePath] of Object.entries(usageIndex.records)) {
     try {
-      const record = await Bun.file(filePath).json() as InvocationUsageRecord;
+      const record = (await Bun.file(filePath).json()) as InvocationUsageRecord;
       if (record.sessionId === sessionId) {
         records.push(record);
       }
@@ -415,7 +426,7 @@ export async function getChannelUsage(channelId: string): Promise<InvocationUsag
 
   for (const [invocationId, filePath] of Object.entries(usageIndex.records)) {
     try {
-      const record = await Bun.file(filePath).json() as InvocationUsageRecord;
+      const record = (await Bun.file(filePath).json()) as InvocationUsageRecord;
       if (record.channelId === channelId) {
         records.push(record);
       }
@@ -480,7 +491,7 @@ export async function getAggregates(filters: UsageFilters = {}): Promise<{
 
   for (const [invocationId, filePath] of Object.entries(usageIndex.records)) {
     try {
-      const record = await Bun.file(filePath).json() as InvocationUsageRecord;
+      const record = (await Bun.file(filePath).json()) as InvocationUsageRecord;
 
       // Apply filters
       if (filters.sessionId && record.sessionId !== filters.sessionId) continue;
@@ -575,7 +586,7 @@ export async function getAllUsageRecords(): Promise<InvocationUsageRecord[]> {
 
   for (const [invocationId, filePath] of Object.entries(usageIndex.records)) {
     try {
-      const record = await Bun.file(filePath).json() as InvocationUsageRecord;
+      const record = (await Bun.file(filePath).json()) as InvocationUsageRecord;
       records.push(record);
     } catch {
       // Skip corrupted records
@@ -611,8 +622,8 @@ export async function getUsageStats(): Promise<{
 
   return {
     totalRecords: usageIndex ? Object.keys(usageIndex.records).length : 0,
-    indexSizeBytes: existsSync(USAGE_INDEX_FILE) 
-      ? new TextEncoder().encode(JSON.stringify(usageIndex)).length 
+    indexSizeBytes: existsSync(USAGE_INDEX_FILE)
+      ? new TextEncoder().encode(JSON.stringify(usageIndex)).length
       : 0,
     directorySizeBytes,
   };

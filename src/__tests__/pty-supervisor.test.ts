@@ -136,7 +136,9 @@ function makeFakePty(label: string, fopts: FakePtyOpts): FakePtyHandle {
 }
 
 /** Tracks every spawn call and returns the fake PTY for inspection. */
-function makeSpawnTracker(makePty: (opts: PtyProcessOptions, spawnIndex: number) => FakePtyHandle): {
+function makeSpawnTracker(
+  makePty: (opts: PtyProcessOptions, spawnIndex: number) => FakePtyHandle,
+): {
   spawn: SpawnPty;
   spawned: FakePtyHandle[];
   spawnOpts: PtyProcessOptions[];
@@ -602,9 +604,9 @@ describe("pty-supervisor idle reap", () => {
 
     // Direct integration: explicitly invoke the reap (via the test-only
     // accessor we add below) and verify the PTY was disposed.
-    await (mod as unknown as { __reapNowForTests: (clock: () => number) => Promise<void> }).__reapNowForTests(
-      () => now,
-    );
+    await (
+      mod as unknown as { __reapNowForTests: (clock: () => number) => Promise<void> }
+    ).__reapNowForTests(() => now);
 
     expect(spawned[0].disposed).toBe(true);
     expect(snapshotSupervisor().ptys.length).toBe(0);
@@ -634,9 +636,9 @@ describe("pty-supervisor idle reap", () => {
     now += 24 * 60 * 60_000;
 
     const mod = await import("../runner/pty-supervisor");
-    await (mod as unknown as { __reapNowForTests: (clock: () => number) => Promise<void> }).__reapNowForTests(
-      () => now,
-    );
+    await (
+      mod as unknown as { __reapNowForTests: (clock: () => number) => Promise<void> }
+    ).__reapNowForTests(() => now);
 
     // Named agent untouched.
     expect(spawned[0].disposed).toBe(false);
@@ -665,9 +667,9 @@ describe("pty-supervisor idle reap", () => {
     now += 60 * 60_000;
 
     const mod = await import("../runner/pty-supervisor");
-    await (mod as unknown as { __reapNowForTests: (clock: () => number) => Promise<void> }).__reapNowForTests(
-      () => now,
-    );
+    await (
+      mod as unknown as { __reapNowForTests: (clock: () => number) => Promise<void> }
+    ).__reapNowForTests(() => now);
 
     expect(spawned[0].disposed).toBe(false);
   });
@@ -684,11 +686,7 @@ describe("pty-supervisor snapshot", () => {
     await runOnPty("global", "z", { timeoutMs: 1000 });
 
     const snap = snapshotSupervisor();
-    expect(snap.ptys.map((p) => p.sessionKey)).toEqual([
-      "agent:alice",
-      "global",
-      "thread:b",
-    ]);
+    expect(snap.ptys.map((p) => p.sessionKey)).toEqual(["agent:alice", "global", "thread:b"]);
   });
 });
 
@@ -719,7 +717,9 @@ describe("pty-supervisor maxConcurrent + LRU eviction (Phase D fix #5)", () => {
     now = 1_000_030;
     await runOnPty("thread:d", "x", { timeoutMs: 1000, threadId: "d" });
 
-    const keys = snapshotSupervisor().ptys.map((p) => p.sessionKey).sort();
+    const keys = snapshotSupervisor()
+      .ptys.map((p) => p.sessionKey)
+      .sort();
     expect(keys).toEqual(["thread:b", "thread:c", "thread:d"]);
     // thread:a's PTY was disposed.
     expect(spawned[0].disposed).toBe(true);
@@ -748,7 +748,9 @@ describe("pty-supervisor maxConcurrent + LRU eviction (Phase D fix #5)", () => {
     now = 1_000_020;
     await runOnPty("thread:burst", "x", { timeoutMs: 1000, threadId: "burst" });
 
-    const keys = snapshotSupervisor().ptys.map((p) => p.sessionKey).sort();
+    const keys = snapshotSupervisor()
+      .ptys.map((p) => p.sessionKey)
+      .sort();
     expect(keys).toContain("agent:alice");
     expect(keys).toContain("agent:suzy");
     expect(keys).toContain("thread:burst");
@@ -905,10 +907,7 @@ describe("pty-supervisor security-args (Phase D fix #3)", () => {
 
     // Simulate the canonical runner.ts:buildSecurityArgs output for
     // permissionMode = "plan" + security.level = "locked".
-    const expectedArgs = [
-      "--permission-mode", "plan",
-      "--tools", "Read,Grep,Glob,Write",
-    ];
+    const expectedArgs = ["--permission-mode", "plan", "--tools", "Read,Grep,Glob,Write"];
 
     await runOnPty("global", "test", {
       timeoutMs: 1000,
@@ -1024,9 +1023,7 @@ describe("pty-supervisor model + provider env threading (Codex Phase D #1)", () 
       api: "z-ai-token",
     });
 
-    expect(capturedEnv!["ANTHROPIC_BASE_URL"]).toBe(
-      "https://api.z.ai/api/anthropic",
-    );
+    expect(capturedEnv!["ANTHROPIC_BASE_URL"]).toBe("https://api.z.ai/api/anthropic");
     expect(capturedEnv!["API_TIMEOUT_MS"]).toBe("3000000");
     expect(capturedEnv!["ANTHROPIC_AUTH_TOKEN"]).toBe("z-ai-token");
   });

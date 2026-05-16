@@ -30,15 +30,7 @@
  * clock + fake sleep seams so they finish in milliseconds.
  */
 
-import {
-  describe,
-  test,
-  expect,
-  beforeAll,
-  beforeEach,
-  afterAll,
-  afterEach,
-} from "bun:test";
+import { describe, test, expect, beforeAll, beforeEach, afterAll, afterEach } from "bun:test";
 import { join } from "path";
 import { mkdir, copyFile, unlink, rm } from "fs/promises";
 import { existsSync } from "fs";
@@ -65,10 +57,7 @@ import {
   type PtyTurnResult,
   type SpawnPty,
 } from "../runner/pty-process";
-import {
-  createThreadSession,
-  removeThreadSession,
-} from "../sessionManager";
+import { createThreadSession, removeThreadSession } from "../sessionManager";
 import { readdir } from "fs/promises";
 import { homedir } from "os";
 
@@ -147,7 +136,9 @@ function makeFakePty(opts: FakePtyOpts = {}): FakePtyHandle {
   const handle: FakePtyHandle = {
     label,
     pid,
-    get sessionId() { return sessionId; },
+    get sessionId() {
+      return sessionId;
+    },
     cwd: "/tmp",
     isAlive: () => !disposed,
     lastTurnEndedAt: () => lastTurnEndedAt,
@@ -197,9 +188,7 @@ beforeEach(async () => {
   resetClock();
   resetSleep();
   // Stub ensureAgentDir so we don't pollute the repo's agents/ directory.
-  injectEnsureAgentDir(async (name: string) =>
-    join(TEST_PROJECT_DIR, "agents", name),
-  );
+  injectEnsureAgentDir(async (name: string) => join(TEST_PROJECT_DIR, "agents", name));
   // Default settings: PTY enabled, fast backoff so retry tests don't wait
   // wall-clock; turnIdleTimeoutMs is the per-turn safety-net (only fires if
   // no OSC progress-end is seen), kept at 30s so real-claude turns aren't
@@ -344,67 +333,62 @@ describe("PTY integration — real Claude happy path", () => {
 // integration env var.
 
 describe("PTY integration — resume after kill (synthetic)", () => {
-  test(
-    "second spawn for an existing threadId uses the stored sessionId as --resume",
-    async () => {
-      const threadId = `synth-resume-${Date.now()}`;
-      const knownSessionId = `pre-existing-${threadId}-uuid`;
+  test("second spawn for an existing threadId uses the stored sessionId as --resume", async () => {
+    const threadId = `synth-resume-${Date.now()}`;
+    const knownSessionId = `pre-existing-${threadId}-uuid`;
 
-      // Pre-seed the thread-session map so the supervisor will pass this
-      // sessionId on first spawn.
-      await createThreadSession(threadId, knownSessionId);
+    // Pre-seed the thread-session map so the supervisor will pass this
+    // sessionId on first spawn.
+    await createThreadSession(threadId, knownSessionId);
 
-      const observedSpawnOpts: PtyProcessOptions[] = [];
-      const spawn: SpawnPty = async (opts) => {
-        observedSpawnOpts.push(opts);
-        return makeFakePty({
-          initialSessionId: opts.sessionId,
-          onTurn: async (prompt) => ({
-            text: `synth-resume:${prompt}`,
-            bytesCaptured: prompt.length,
-            cleanBoundary: true,
-            // Echo back the resumed sessionId, so the supervisor's
-            // persistSessionId is a no-op (already known).
-            sessionId: opts.sessionId,
-          }),
-        });
-      };
+    const observedSpawnOpts: PtyProcessOptions[] = [];
+    const spawn: SpawnPty = async (opts) => {
+      observedSpawnOpts.push(opts);
+      return makeFakePty({
+        initialSessionId: opts.sessionId,
+        onTurn: async (prompt) => ({
+          text: `synth-resume:${prompt}`,
+          bytesCaptured: prompt.length,
+          cleanBoundary: true,
+          // Echo back the resumed sessionId, so the supervisor's
+          // persistSessionId is a no-op (already known).
+          sessionId: opts.sessionId,
+        }),
+      });
+    };
+    injectSpawnPty(spawn);
+
+    try {
+      const r1 = await runOnPty(`thread:${threadId}`, "first prompt", {
+        timeoutMs: 1000,
+        threadId,
+      });
+      expect(r1.exitCode).toBe(0);
+      // The supervisor passed our stored sessionId through.
+      expect(observedSpawnOpts.length).toBe(1);
+      expect(observedSpawnOpts[0]!.sessionId).toBe(knownSessionId);
+      expect(r1.sessionId).toBe(knownSessionId);
+
+      // Simulate a hard kill from outside (the supervisor's view: PTY died).
+      await shutdownSupervisor();
+      __resetSupervisorForTests();
       injectSpawnPty(spawn);
+      injectEnsureAgentDir(async (name: string) => join(TEST_PROJECT_DIR, "agents", name));
 
-      try {
-        const r1 = await runOnPty(`thread:${threadId}`, "first prompt", {
-          timeoutMs: 1000,
-          threadId,
-        });
-        expect(r1.exitCode).toBe(0);
-        // The supervisor passed our stored sessionId through.
-        expect(observedSpawnOpts.length).toBe(1);
-        expect(observedSpawnOpts[0]!.sessionId).toBe(knownSessionId);
-        expect(r1.sessionId).toBe(knownSessionId);
-
-        // Simulate a hard kill from outside (the supervisor's view: PTY died).
-        await shutdownSupervisor();
-        __resetSupervisorForTests();
-        injectSpawnPty(spawn);
-        injectEnsureAgentDir(async (name: string) =>
-          join(TEST_PROJECT_DIR, "agents", name),
-        );
-
-        const r2 = await runOnPty(`thread:${threadId}`, "second prompt", {
-          timeoutMs: 1000,
-          threadId,
-        });
-        expect(r2.exitCode).toBe(0);
-        // Second spawn ALSO received the same stored sessionId — i.e. the
-        // supervisor re-read getThreadSession() and resumed.
-        expect(observedSpawnOpts.length).toBe(2);
-        expect(observedSpawnOpts[1]!.sessionId).toBe(knownSessionId);
-        expect(r2.sessionId).toBe(knownSessionId);
-      } finally {
-        await removeThreadSession(threadId).catch(() => {});
-      }
-    },
-  );
+      const r2 = await runOnPty(`thread:${threadId}`, "second prompt", {
+        timeoutMs: 1000,
+        threadId,
+      });
+      expect(r2.exitCode).toBe(0);
+      // Second spawn ALSO received the same stored sessionId — i.e. the
+      // supervisor re-read getThreadSession() and resumed.
+      expect(observedSpawnOpts.length).toBe(2);
+      expect(observedSpawnOpts[1]!.sessionId).toBe(knownSessionId);
+      expect(r2.sessionId).toBe(knownSessionId);
+    } finally {
+      await removeThreadSession(threadId).catch(() => {});
+    }
+  });
 });
 
 // Real-claude smoke for the resume path. Spawns a real PTY, runs one turn,
@@ -432,17 +416,13 @@ describe("PTY integration — real Claude resume smoke", () => {
         // guaranteed to exist (claude wrote one) and to be valid for --resume.
         const someSessionId = await discoverLatestClaudeSession(cwd);
         if (!someSessionId) {
-          throw new Error(
-            `No JSONL session found under ~/.claude/projects/${cwdSlug(cwd)}/`,
-          );
+          throw new Error(`No JSONL session found under ~/.claude/projects/${cwdSlug(cwd)}/`);
         }
         await createThreadSession(threadId, someSessionId);
 
         await shutdownSupervisor();
         __resetSupervisorForTests();
-        injectEnsureAgentDir(async (name: string) =>
-          join(TEST_PROJECT_DIR, "agents", name),
-        );
+        injectEnsureAgentDir(async (name: string) => join(TEST_PROJECT_DIR, "agents", name));
 
         // Turn 2 — supervisor must spawn with --resume <someSessionId>. We
         // can't assert on Claude's actual response (the session content is
@@ -476,11 +456,10 @@ describe("PTY integration — concurrent isolation", () => {
       ];
       try {
         const promises = threads.map(({ id, secret }) =>
-          runOnPty(
-            `thread:${id}`,
-            `Reply with exactly this token and nothing else: ${secret}`,
-            { timeoutMs: TURN_TIMEOUT_MS, threadId: id },
-          ),
+          runOnPty(`thread:${id}`, `Reply with exactly this token and nothing else: ${secret}`, {
+            timeoutMs: TURN_TIMEOUT_MS,
+            threadId: id,
+          }),
         );
         const results = await Promise.all(promises);
 
@@ -518,160 +497,148 @@ describe("PTY integration — concurrent isolation", () => {
 // killing a real `claude` mid-stream (inherently flaky).
 
 describe("PTY integration — crash + retry (synthetic)", () => {
-  test(
-    "PtyClosedError on first turn triggers respawn; second turn succeeds",
-    async () => {
-      // backoffMs[0]=10, maxRetries=2 — set in beforeEach.
-      let spawnCount = 0;
-      const observedBackoffs: number[] = [];
-      injectSleep(async (ms) => {
-        observedBackoffs.push(ms);
-      });
+  test("PtyClosedError on first turn triggers respawn; second turn succeeds", async () => {
+    // backoffMs[0]=10, maxRetries=2 — set in beforeEach.
+    let spawnCount = 0;
+    const observedBackoffs: number[] = [];
+    injectSleep(async (ms) => {
+      observedBackoffs.push(ms);
+    });
 
-      const spawn: SpawnPty = async (_opts: PtyProcessOptions) => {
-        spawnCount += 1;
-        if (spawnCount === 1) {
-          // First instance: explodes on runTurn.
-          return makeFakePty({
-            onTurn: async (prompt) => {
-              throw new PtyClosedError(`fake:${spawnCount}`, 137, "SIGKILL");
-            },
-          });
-        }
-        // Second instance: succeeds.
+    const spawn: SpawnPty = async (_opts: PtyProcessOptions) => {
+      spawnCount += 1;
+      if (spawnCount === 1) {
+        // First instance: explodes on runTurn.
         return makeFakePty({
-          onTurn: async (prompt) => ({
-            text: `recovered:${prompt}`,
-            bytesCaptured: prompt.length,
-            cleanBoundary: true,
-            sessionId: "recovered-session",
-          }),
-        });
-      };
-      injectSpawnPty(spawn);
-
-      const r = await runOnPty("thread:crash-test", "hello", {
-        timeoutMs: 1000,
-        threadId: "crash-test",
-      });
-
-      expect(r.exitCode).toBe(0);
-      expect(r.rawStdout).toBe("recovered:hello");
-      expect(r.sessionId).toBe("recovered-session");
-      expect(spawnCount).toBe(2); // 1 initial + 1 respawn
-      // Backoff was honoured (backoffMs[0]=10 from beforeEach config).
-      expect(observedBackoffs).toEqual([10]);
-    },
-  );
-
-  test(
-    "PtyTurnTimeoutError is also retryable",
-    async () => {
-      let spawnCount = 0;
-      injectSleep(async () => {});
-      const spawn: SpawnPty = async () => {
-        spawnCount += 1;
-        if (spawnCount === 1) {
-          return makeFakePty({
-            onTurn: async () => {
-              throw new PtyTurnTimeoutError(`fake:${spawnCount}`, 5000);
-            },
-          });
-        }
-        return makeFakePty({
-          onTurn: async () => ({
-            text: "ok",
-            bytesCaptured: 2,
-            cleanBoundary: true,
-            sessionId: "s",
-          }),
-        });
-      };
-      injectSpawnPty(spawn);
-
-      const r = await runOnPty("thread:to", "hello", {
-        timeoutMs: 1000,
-        threadId: "to",
-      });
-      expect(r.exitCode).toBe(0);
-      expect(spawnCount).toBe(2);
-    },
-  );
-
-  test(
-    "max-retries exhaustion returns structured error per spec §3.2",
-    async () => {
-      let spawnCount = 0;
-      injectSleep(async () => {});
-
-      const spawn: SpawnPty = async () => {
-        spawnCount += 1;
-        return makeFakePty({
-          onTurn: async () => {
-            throw new PtyClosedError(`fake:${spawnCount}`, 1, null);
+          onTurn: async (prompt) => {
+            throw new PtyClosedError(`fake:${spawnCount}`, 137, "SIGKILL");
           },
         });
-      };
-      injectSpawnPty(spawn);
-
-      const r = await runOnPty("thread:always-crash", "hello", {
-        timeoutMs: 1000,
-        threadId: "always-crash",
+      }
+      // Second instance: succeeds.
+      return makeFakePty({
+        onTurn: async (prompt) => ({
+          text: `recovered:${prompt}`,
+          bytesCaptured: prompt.length,
+          cleanBoundary: true,
+          sessionId: "recovered-session",
+        }),
       });
+    };
+    injectSpawnPty(spawn);
 
-      // Spec §3.2: after maxRetries, return { rawStdout: "", stderr: <user-facing>,
-      //   exitCode: 1 } with no sessionId.
-      expect(r.exitCode).toBe(1);
-      expect(r.rawStdout).toBe("");
-      expect(r.stderr.length).toBeGreaterThan(0);
-      expect(r.stderr).toContain("max retries");
-      expect(r.sessionId).toBeUndefined();
-      // 1 initial + maxRetries=2 respawns = 3 spawns total.
-      expect(spawnCount).toBe(1 + 2);
-    },
-  );
+    const r = await runOnPty("thread:crash-test", "hello", {
+      timeoutMs: 1000,
+      threadId: "crash-test",
+    });
 
-  test(
-    "exponential backoff sequence is honoured across retries",
-    async () => {
-      // Override settings for this test: longer backoff list, 3 retries.
-      await writeRawSettings({
-        pty: {
-          enabled: true,
-          idleReapMinutes: 30,
-          maxRetries: 3,
-          backoffMs: [10, 20, 40],
-          namedAgentsAlwaysAlive: true,
-          turnIdleTimeoutMs: 2000,
-          cols: 100,
-          rows: 30,
+    expect(r.exitCode).toBe(0);
+    expect(r.rawStdout).toBe("recovered:hello");
+    expect(r.sessionId).toBe("recovered-session");
+    expect(spawnCount).toBe(2); // 1 initial + 1 respawn
+    // Backoff was honoured (backoffMs[0]=10 from beforeEach config).
+    expect(observedBackoffs).toEqual([10]);
+  });
+
+  test("PtyTurnTimeoutError is also retryable", async () => {
+    let spawnCount = 0;
+    injectSleep(async () => {});
+    const spawn: SpawnPty = async () => {
+      spawnCount += 1;
+      if (spawnCount === 1) {
+        return makeFakePty({
+          onTurn: async () => {
+            throw new PtyTurnTimeoutError(`fake:${spawnCount}`, 5000);
+          },
+        });
+      }
+      return makeFakePty({
+        onTurn: async () => ({
+          text: "ok",
+          bytesCaptured: 2,
+          cleanBoundary: true,
+          sessionId: "s",
+        }),
+      });
+    };
+    injectSpawnPty(spawn);
+
+    const r = await runOnPty("thread:to", "hello", {
+      timeoutMs: 1000,
+      threadId: "to",
+    });
+    expect(r.exitCode).toBe(0);
+    expect(spawnCount).toBe(2);
+  });
+
+  test("max-retries exhaustion returns structured error per spec §3.2", async () => {
+    let spawnCount = 0;
+    injectSleep(async () => {});
+
+    const spawn: SpawnPty = async () => {
+      spawnCount += 1;
+      return makeFakePty({
+        onTurn: async () => {
+          throw new PtyClosedError(`fake:${spawnCount}`, 1, null);
         },
       });
-      await reloadSettings();
+    };
+    injectSpawnPty(spawn);
 
-      let spawnCount = 0;
-      const observedBackoffs: number[] = [];
-      injectSleep(async (ms) => {
-        observedBackoffs.push(ms);
-      });
-      const spawn: SpawnPty = async () => {
-        spawnCount += 1;
-        return makeFakePty({
-          onTurn: async () => {
-            throw new PtyClosedError("fake", 1, null);
-          },
-        });
-      };
-      injectSpawnPty(spawn);
+    const r = await runOnPty("thread:always-crash", "hello", {
+      timeoutMs: 1000,
+      threadId: "always-crash",
+    });
 
-      const r = await runOnPty("thread:backoff", "hello", {
-        timeoutMs: 1000,
-        threadId: "backoff",
+    // Spec §3.2: after maxRetries, return { rawStdout: "", stderr: <user-facing>,
+    //   exitCode: 1 } with no sessionId.
+    expect(r.exitCode).toBe(1);
+    expect(r.rawStdout).toBe("");
+    expect(r.stderr.length).toBeGreaterThan(0);
+    expect(r.stderr).toContain("max retries");
+    expect(r.sessionId).toBeUndefined();
+    // 1 initial + maxRetries=2 respawns = 3 spawns total.
+    expect(spawnCount).toBe(1 + 2);
+  });
+
+  test("exponential backoff sequence is honoured across retries", async () => {
+    // Override settings for this test: longer backoff list, 3 retries.
+    await writeRawSettings({
+      pty: {
+        enabled: true,
+        idleReapMinutes: 30,
+        maxRetries: 3,
+        backoffMs: [10, 20, 40],
+        namedAgentsAlwaysAlive: true,
+        turnIdleTimeoutMs: 2000,
+        cols: 100,
+        rows: 30,
+      },
+    });
+    await reloadSettings();
+
+    let spawnCount = 0;
+    const observedBackoffs: number[] = [];
+    injectSleep(async (ms) => {
+      observedBackoffs.push(ms);
+    });
+    const spawn: SpawnPty = async () => {
+      spawnCount += 1;
+      return makeFakePty({
+        onTurn: async () => {
+          throw new PtyClosedError("fake", 1, null);
+        },
       });
-      expect(r.exitCode).toBe(1);
-      expect(observedBackoffs).toEqual([10, 20, 40]);
-    },
-  );
+    };
+    injectSpawnPty(spawn);
+
+    const r = await runOnPty("thread:backoff", "hello", {
+      timeoutMs: 1000,
+      threadId: "backoff",
+    });
+    expect(r.exitCode).toBe(1);
+    expect(observedBackoffs).toEqual([10, 20, 40]);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -681,110 +648,104 @@ describe("PTY integration — crash + retry (synthetic)", () => {
 // PTY, then verifies the next runOnPty call respawns it.
 
 describe("PTY integration — idle reap and respawn", () => {
-  test(
-    "ad-hoc PTY is reaped after idleReapMinutes; next call respawns",
-    async () => {
-      // Shrink idleReapMinutes for this test (0.01 min = 600ms).
-      await writeRawSettings({
-        pty: {
-          enabled: true,
-          idleReapMinutes: 0.01,
-          maxRetries: 2,
-          backoffMs: [10, 20],
-          namedAgentsAlwaysAlive: true,
-          turnIdleTimeoutMs: 2000,
-          cols: 100,
-          rows: 30,
-        },
+  test("ad-hoc PTY is reaped after idleReapMinutes; next call respawns", async () => {
+    // Shrink idleReapMinutes for this test (0.01 min = 600ms).
+    await writeRawSettings({
+      pty: {
+        enabled: true,
+        idleReapMinutes: 0.01,
+        maxRetries: 2,
+        backoffMs: [10, 20],
+        namedAgentsAlwaysAlive: true,
+        turnIdleTimeoutMs: 2000,
+        cols: 100,
+        rows: 30,
+      },
+    });
+    await reloadSettings();
+
+    let spawnCount = 0;
+    // Synthetic clock so we can fast-forward. Both the supervisor and the
+    // fake PTYs read from this same clock so timestamps stay consistent.
+    let now = 1_000_000;
+    const clock = () => now;
+    injectClock(clock);
+
+    const spawn: SpawnPty = async () => {
+      spawnCount += 1;
+      return makeFakePty({
+        pid: 1000 + spawnCount,
+        clock,
+        onTurn: async (prompt) => ({
+          text: `turn${spawnCount}:${prompt}`,
+          bytesCaptured: prompt.length,
+          cleanBoundary: true,
+          sessionId: `sess-adhoc-${spawnCount}`,
+        }),
       });
-      await reloadSettings();
+    };
+    injectSpawnPty(spawn);
 
-      let spawnCount = 0;
-      // Synthetic clock so we can fast-forward. Both the supervisor and the
-      // fake PTYs read from this same clock so timestamps stay consistent.
-      let now = 1_000_000;
-      const clock = () => now;
-      injectClock(clock);
+    // First turn — spawns PTY #1.
+    const r1 = await runOnPty("thread:reap-test", "first", {
+      timeoutMs: 1000,
+      threadId: "reap-test",
+    });
+    expect(r1.exitCode).toBe(0);
+    expect(spawnCount).toBe(1);
+    const snap1 = snapshotSupervisor();
+    const beforeReap = snap1.ptys.find((p) => p.sessionKey === "thread:reap-test");
+    expect(beforeReap).toBeDefined();
+    expect(beforeReap!.isAlive).toBe(true);
+    expect(beforeReap!.kind).toBe("adhoc");
 
-      const spawn: SpawnPty = async () => {
-        spawnCount += 1;
-        return makeFakePty({
-          pid: 1000 + spawnCount,
-          clock,
-          onTurn: async (prompt) => ({
-            text: `turn${spawnCount}:${prompt}`,
-            bytesCaptured: prompt.length,
-            cleanBoundary: true,
-            sessionId: `sess-adhoc-${spawnCount}`,
-          }),
-        });
-      };
-      injectSpawnPty(spawn);
+    // Advance virtual time past idleReapMinutes (0.01 min = 600ms), then
+    // run the reap pass.
+    now += 60 * 1000; // 1 virtual minute, far past 0.01 min
+    await __reapNowForTests(clock);
 
-      // First turn — spawns PTY #1.
-      const r1 = await runOnPty("thread:reap-test", "first", {
-        timeoutMs: 1000,
-        threadId: "reap-test",
-      });
-      expect(r1.exitCode).toBe(0);
-      expect(spawnCount).toBe(1);
-      const snap1 = snapshotSupervisor();
-      const beforeReap = snap1.ptys.find((p) => p.sessionKey === "thread:reap-test");
-      expect(beforeReap).toBeDefined();
-      expect(beforeReap!.isAlive).toBe(true);
-      expect(beforeReap!.kind).toBe("adhoc");
+    // PTY entry should be gone from the supervisor's map.
+    const snap2 = snapshotSupervisor();
+    const afterReap = snap2.ptys.find((p) => p.sessionKey === "thread:reap-test");
+    expect(afterReap).toBeUndefined();
 
-      // Advance virtual time past idleReapMinutes (0.01 min = 600ms), then
-      // run the reap pass.
-      now += 60 * 1000; // 1 virtual minute, far past 0.01 min
-      await __reapNowForTests(clock);
+    // Next turn — supervisor should spawn a fresh PTY #2.
+    const r2 = await runOnPty("thread:reap-test", "second", {
+      timeoutMs: 1000,
+      threadId: "reap-test",
+    });
+    expect(r2.exitCode).toBe(0);
+    expect(r2.rawStdout).toBe("turn2:second");
+    expect(spawnCount).toBe(2);
+  });
 
-      // PTY entry should be gone from the supervisor's map.
-      const snap2 = snapshotSupervisor();
-      const afterReap = snap2.ptys.find((p) => p.sessionKey === "thread:reap-test");
-      expect(afterReap).toBeUndefined();
+  test("named-agent PTYs are NOT reaped when namedAgentsAlwaysAlive=true", async () => {
+    let spawnCount = 0;
+    let now = 1_000_000;
+    const clock = () => now;
+    injectClock(clock);
+    const spawn: SpawnPty = async () => {
+      spawnCount += 1;
+      return makeFakePty({ pid: 2000 + spawnCount, clock });
+    };
+    injectSpawnPty(spawn);
 
-      // Next turn — supervisor should spawn a fresh PTY #2.
-      const r2 = await runOnPty("thread:reap-test", "second", {
-        timeoutMs: 1000,
-        threadId: "reap-test",
-      });
-      expect(r2.exitCode).toBe(0);
-      expect(r2.rawStdout).toBe("turn2:second");
-      expect(spawnCount).toBe(2);
-    },
-  );
+    await runOnPty("agent:suzy", "hi", {
+      timeoutMs: 1000,
+      agentName: "suzy",
+    });
+    expect(spawnCount).toBe(1);
 
-  test(
-    "named-agent PTYs are NOT reaped when namedAgentsAlwaysAlive=true",
-    async () => {
-      let spawnCount = 0;
-      let now = 1_000_000;
-      const clock = () => now;
-      injectClock(clock);
-      const spawn: SpawnPty = async () => {
-        spawnCount += 1;
-        return makeFakePty({ pid: 2000 + spawnCount, clock });
-      };
-      injectSpawnPty(spawn);
+    // Massive virtual-time jump — 24h.
+    now += 24 * 60 * 60 * 1000;
+    await __reapNowForTests(clock);
 
-      await runOnPty("agent:suzy", "hi", {
-        timeoutMs: 1000,
-        agentName: "suzy",
-      });
-      expect(spawnCount).toBe(1);
-
-      // Massive virtual-time jump — 24h.
-      now += 24 * 60 * 60 * 1000;
-      await __reapNowForTests(clock);
-
-      const snap = snapshotSupervisor();
-      const suzy = snap.ptys.find((p) => p.sessionKey === "agent:suzy");
-      expect(suzy).toBeDefined();
-      expect(suzy!.isAlive).toBe(true);
-      expect(suzy!.kind).toBe("named");
-    },
-  );
+    const snap = snapshotSupervisor();
+    const suzy = snap.ptys.find((p) => p.sessionKey === "agent:suzy");
+    expect(suzy).toBeDefined();
+    expect(suzy!.isAlive).toBe(true);
+    expect(suzy!.kind).toBe("named");
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -796,50 +757,47 @@ describe("PTY integration — idle reap and respawn", () => {
 // but its contract must still hold).
 
 describe("PTY integration — backward-compat sanity", () => {
-  test(
-    "runOnPty result shape is identical regardless of pty.enabled flag",
-    async () => {
-      const spawn: SpawnPty = async () =>
-        makeFakePty({
-          onTurn: async (prompt) => ({
-            text: `flag-test:${prompt}`,
-            bytesCaptured: prompt.length,
-            cleanBoundary: true,
-            sessionId: "flag-test-session",
-          }),
-        });
-      injectSpawnPty(spawn);
-
-      // First call with enabled=true (set by beforeEach).
-      const enabled = await runOnPty("thread:flag-on", "x", {
-        timeoutMs: 1000,
-        threadId: "flag-on",
+  test("runOnPty result shape is identical regardless of pty.enabled flag", async () => {
+    const spawn: SpawnPty = async () =>
+      makeFakePty({
+        onTurn: async (prompt) => ({
+          text: `flag-test:${prompt}`,
+          bytesCaptured: prompt.length,
+          cleanBoundary: true,
+          sessionId: "flag-test-session",
+        }),
       });
+    injectSpawnPty(spawn);
 
-      // Flip the flag and confirm the supervisor still works when invoked
-      // directly. (The execClaude routing bypasses runOnPty entirely when
-      // disabled — that's tested in pty-backward-compat.test.ts.)
-      await writeRawSettings({ pty: { enabled: false } });
-      await reloadSettings();
-      __resetSupervisorForTests();
-      injectEnsureAgentDir(async (name: string) =>
-        join(TEST_PROJECT_DIR, "agents", name),
-      );
-      injectSpawnPty(spawn);
+    // First call with enabled=true (set by beforeEach).
+    const enabled = await runOnPty("thread:flag-on", "x", {
+      timeoutMs: 1000,
+      threadId: "flag-on",
+    });
 
-      const disabled = await runOnPty("thread:flag-off", "x", {
-        timeoutMs: 1000,
-        threadId: "flag-off",
-      });
+    // Flip the flag and confirm the supervisor still works when invoked
+    // directly. (The execClaude routing bypasses runOnPty entirely when
+    // disabled — that's tested in pty-backward-compat.test.ts.)
+    await writeRawSettings({ pty: { enabled: false } });
+    await reloadSettings();
+    __resetSupervisorForTests();
+    injectEnsureAgentDir(async (name: string) => join(TEST_PROJECT_DIR, "agents", name));
+    injectSpawnPty(spawn);
 
-      // Both produce the same shape.
-      const keys = (r: typeof enabled) =>
-        Object.keys(r).filter((k) => r[k as keyof typeof r] !== undefined).sort();
-      expect(keys(enabled)).toEqual(keys(disabled));
-      expect(typeof enabled.exitCode).toBe("number");
-      expect(typeof disabled.exitCode).toBe("number");
-      expect(enabled.exitCode).toBe(0);
-      expect(disabled.exitCode).toBe(0);
-    },
-  );
+    const disabled = await runOnPty("thread:flag-off", "x", {
+      timeoutMs: 1000,
+      threadId: "flag-off",
+    });
+
+    // Both produce the same shape.
+    const keys = (r: typeof enabled) =>
+      Object.keys(r)
+        .filter((k) => r[k as keyof typeof r] !== undefined)
+        .sort();
+    expect(keys(enabled)).toEqual(keys(disabled));
+    expect(typeof enabled.exitCode).toBe("number");
+    expect(typeof disabled.exitCode).toBe("number");
+    expect(enabled.exitCode).toBe(0);
+    expect(disabled.exitCode).toBe(0);
+  });
 });

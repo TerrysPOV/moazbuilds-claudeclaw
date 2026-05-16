@@ -1,6 +1,6 @@
 /**
  * Adapter Gateway Wiring Tests
- * 
+ *
  * Tests cover:
  * - Telegram adapter routing through gateway when USE_GATEWAY_TELEGRAM=true
  * - Discord adapter routing through gateway when USE_GATEWAY_DISCORD=true
@@ -23,7 +23,7 @@ vi.mock("../../commands/telegram", () => ({
   sendMessage: mockTelegramSendMessage,
 }));
 
-// Mock sendMessage for discord  
+// Mock sendMessage for discord
 const mockDiscordSendMessage = vi.fn();
 vi.mock("../../commands/discord", () => ({
   sendMessage: mockDiscordSendMessage,
@@ -54,7 +54,7 @@ describe("Adapter Gateway Wiring", () => {
 
     it("should call submitTelegramToGateway when USE_GATEWAY_TELEGRAM=true", async () => {
       process.env.USE_GATEWAY_TELEGRAM = "true";
-      
+
       // Mock successful gateway response
       (submitTelegramToGateway as any).mockResolvedValue({
         success: true,
@@ -72,7 +72,7 @@ describe("Adapter Gateway Wiring", () => {
 
     it("should return clear error when USE_GATEWAY_TELEGRAM=false", async () => {
       // USE_GATEWAY_TELEGRAM is not set (defaults to false)
-      
+
       // Simulate the routing logic - when flag is false, it should NOT call gateway
       // Instead, it returns the "being upgraded" message
       const flag = process.env.USE_GATEWAY_TELEGRAM;
@@ -104,7 +104,7 @@ describe("Adapter Gateway Wiring", () => {
           "token",
           456,
           "Gateway error: Gateway processing failed: test error",
-          undefined
+          undefined,
         );
       }
 
@@ -112,7 +112,7 @@ describe("Adapter Gateway Wiring", () => {
         "token",
         456,
         "Gateway error: Gateway processing failed: test error",
-        undefined
+        undefined,
       );
     });
 
@@ -121,7 +121,7 @@ describe("Adapter Gateway Wiring", () => {
       // returns an error message rather than falling back to legacy
       const flag = process.env.USE_GATEWAY_TELEGRAM;
       const isGatewayEnabled = flag === "true";
-      
+
       // Fail closed - no legacy fallback
       expect(isGatewayEnabled).toBe(false);
     });
@@ -156,7 +156,7 @@ describe("Adapter Gateway Wiring", () => {
 
     it("should return clear error when USE_GATEWAY_DISCORD=false", async () => {
       // USE_GATEWAY_DISCORD is not set (defaults to false)
-      
+
       const flag = process.env.USE_GATEWAY_DISCORD;
       expect(flag).toBeUndefined();
 
@@ -181,18 +181,18 @@ describe("Adapter Gateway Wiring", () => {
         const gatewayResult = await submitDiscordToGateway(mockDiscordMessage as any);
         expect(gatewayResult.success).toBe(false);
         expect(gatewayResult.error).toBe("Gateway processing failed: discord error");
-        
+
         await mockDiscordSendMessage(
           "token",
           "456",
-          "Gateway error: Gateway processing failed: discord error"
+          "Gateway error: Gateway processing failed: discord error",
         );
       }
 
       expect(mockDiscordSendMessage).toHaveBeenCalledWith(
         "token",
         "456",
-        "Gateway error: Gateway processing failed: discord error"
+        "Gateway error: Gateway processing failed: discord error",
       );
     });
 
@@ -201,7 +201,7 @@ describe("Adapter Gateway Wiring", () => {
       // returns an error message rather than falling back to legacy
       const flag = process.env.USE_GATEWAY_DISCORD;
       const isGatewayEnabled = flag === "true";
-      
+
       // Fail closed - no legacy fallback
       expect(isGatewayEnabled).toBe(false);
     });
@@ -261,7 +261,7 @@ describe("Adapter Gateway Wiring", () => {
 
     it("should allow both adapters to be independently disabled", async () => {
       // Both flags not set (default to disabled)
-      
+
       const telegramEnabled = process.env.USE_GATEWAY_TELEGRAM === "true";
       const discordEnabled = process.env.USE_GATEWAY_DISCORD === "true";
 

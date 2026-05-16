@@ -26,26 +26,24 @@ const USAGE_DIR = join(process.cwd(), ".claude", "claudeclaw", "usage");
 describe("BudgetEngine", () => {
   beforeEach(async () => {
     const { rm, readdir } = await import("fs/promises");
-    
+
     // Clean budget policies file for test isolation
     try {
       await rm(BUDGET_POLICIES_FILE, { force: true });
     } catch {
       // File might not exist
     }
-    
+
     // Clean usage directory for test isolation
     try {
       const files = await readdir(USAGE_DIR);
       await Promise.all(
-        files
-          .filter(f => f !== ".gitkeep")
-          .map(f => rm(join(USAGE_DIR, f), { force: true }))
+        files.filter((f) => f !== ".gitkeep").map((f) => rm(join(USAGE_DIR, f), { force: true })),
       );
     } catch {
       // Directory might not exist
     }
-    
+
     resetBudgetEngine();
     resetUsageTracker();
     await initUsageTracker();
@@ -147,7 +145,7 @@ describe("BudgetEngine", () => {
     await recordInvocationCompletion(
       start.invocationId,
       { inputTokens: 100, outputTokens: 100 },
-      { currency: "USD", totalCost: 0.001 }
+      { currency: "USD", totalCost: 0.001 },
     );
 
     const evaluation = await evaluateBudget({ channelId: "test-chan" });
@@ -159,7 +157,7 @@ describe("BudgetEngine", () => {
     const policy = await upsertBudgetPolicy({
       name: "Warn Test",
       scope: { channelId: "warn-chan" },
-      thresholds: { warnAt: 0.05, degradeAt: 0.10 },
+      thresholds: { warnAt: 0.05, degradeAt: 0.1 },
       period: "daily",
       currency: "USD",
       enabled: true,
@@ -174,7 +172,7 @@ describe("BudgetEngine", () => {
     await recordInvocationCompletion(
       start.invocationId,
       { inputTokens: 10000, outputTokens: 5000 },
-      { currency: "USD", totalCost: 0.06 } // Above warnAt
+      { currency: "USD", totalCost: 0.06 }, // Above warnAt
     );
 
     const evaluation = await evaluateBudget({ channelId: "warn-chan" });
@@ -186,7 +184,7 @@ describe("BudgetEngine", () => {
     await upsertBudgetPolicy({
       name: "Degrade Test",
       scope: { channelId: "degrade-chan" },
-      thresholds: { warnAt: 0.01, degradeAt: 0.05, blockAt: 0.10 },
+      thresholds: { warnAt: 0.01, degradeAt: 0.05, blockAt: 0.1 },
       period: "daily",
       currency: "USD",
       enabled: true,
@@ -201,7 +199,7 @@ describe("BudgetEngine", () => {
     await recordInvocationCompletion(
       start.invocationId,
       { inputTokens: 20000, outputTokens: 10000 },
-      { currency: "USD", totalCost: 0.08 } // Above degradeAt
+      { currency: "USD", totalCost: 0.08 }, // Above degradeAt
     );
 
     const evaluation = await evaluateBudget({ channelId: "degrade-chan" });
@@ -212,7 +210,7 @@ describe("BudgetEngine", () => {
     await upsertBudgetPolicy({
       name: "Block Test",
       scope: { channelId: "block-chan" },
-      thresholds: { warnAt: 0.01, degradeAt: 0.05, blockAt: 0.10 },
+      thresholds: { warnAt: 0.01, degradeAt: 0.05, blockAt: 0.1 },
       period: "daily",
       currency: "USD",
       enabled: true,
@@ -227,7 +225,7 @@ describe("BudgetEngine", () => {
     await recordInvocationCompletion(
       start.invocationId,
       { inputTokens: 40000, outputTokens: 20000 },
-      { currency: "USD", totalCost: 0.15 } // Above blockAt
+      { currency: "USD", totalCost: 0.15 }, // Above blockAt
     );
 
     const evaluation = await evaluateBudget({ channelId: "block-chan" });
@@ -244,7 +242,7 @@ describe("BudgetEngine", () => {
         cacheReadInputTokens: 200000,
       },
       "anthropic",
-      "claude-3-5-sonnet"
+      "claude-3-5-sonnet",
     );
 
     expect(cost).not.toBeNull();
@@ -316,7 +314,7 @@ describe("BudgetEngine", () => {
     await recordInvocationCompletion(
       start.invocationId,
       { inputTokens: 1000, outputTokens: 500 },
-      { currency: "USD", totalCost: 0.005 }
+      { currency: "USD", totalCost: 0.005 },
     );
 
     const eval_ = await evaluateBudget({ sessionId: "test-session" });

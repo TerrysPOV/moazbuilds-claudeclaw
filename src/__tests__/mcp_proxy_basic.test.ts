@@ -34,7 +34,9 @@ afterEach(() => {
   _resetMcpBridge();
   _resetHttpGateway();
   _resetMcpProxy();
-  try { rmSync(tmpDir, { recursive: true }); } catch {}
+  try {
+    rmSync(tmpDir, { recursive: true });
+  } catch {}
 });
 
 // ── Test 1 — McpServerProcess starts and lists tools ──────────────────────────
@@ -60,7 +62,7 @@ describe("McpServerProcess", () => {
     const proc = new McpServerProcess("test", makeServerConfig());
     try {
       await proc.start();
-      const result = await proc.call("echo", { message: "hello" }) as { echo: string };
+      const result = (await proc.call("echo", { message: "hello" })) as { echo: string };
       expect(result.echo).toBe("hello");
     } finally {
       await proc.stop();
@@ -73,11 +75,11 @@ describe("McpServerProcess", () => {
     const proc = new McpServerProcess("test", makeServerConfig());
     try {
       await proc.start();
-      const [a, b, c] = await Promise.all([
+      const [a, b, c] = (await Promise.all([
         proc.call("echo", { message: "A" }),
         proc.call("echo", { message: "B" }),
         proc.call("echo", { message: "C" }),
-      ]) as [{ echo: string }, { echo: string }, { echo: string }];
+      ])) as [{ echo: string }, { echo: string }, { echo: string }];
       expect(a.echo).toBe("A");
       expect(b.echo).toBe("B");
       expect(c.echo).toBe("C");
@@ -91,7 +93,9 @@ describe("McpServerProcess", () => {
   it("intentional stop() sets status to stopped and does not trigger crash hook", async () => {
     let crashCalled = false;
     const proc = new McpServerProcess("stop-test", makeServerConfig(), {
-      onCrash: () => { crashCalled = true; },
+      onCrash: () => {
+        crashCalled = true;
+      },
     });
     await proc.start();
     expect(proc.status).toBe("up");
@@ -119,9 +123,13 @@ describe("McpServerProcess", () => {
   it("world-readable config file emits a WARN to stderr but does not fail boot", async () => {
     const configPath = join(tmpDir, "mcp-proxy-warn.json");
     const tokenPath = join(tmpDir, "mcp-proxy-warn.token");
-    writeFileSync(configPath, JSON.stringify({
-      servers: { "test-server": { ...makeServerConfig(), enabled: true } },
-    }), { mode: 0o644 }); // permissive — should trigger WARN
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        servers: { "test-server": { ...makeServerConfig(), enabled: true } },
+      }),
+      { mode: 0o644 },
+    ); // permissive — should trigger WARN
 
     const warnMessages: string[] = [];
     const origError = console.error;
@@ -136,7 +144,9 @@ describe("McpServerProcess", () => {
       await p.start();
       expect(warnMessages.some((m) => m.includes("permissive") || m.includes("WARN"))).toBe(true);
       const health = p.health();
-      expect((health.servers as Record<string, { status: string }>)["test-server"]?.status).toBe("up");
+      expect((health.servers as Record<string, { status: string }>)["test-server"]?.status).toBe(
+        "up",
+      );
     } finally {
       console.error = origError;
       await p.stop();
@@ -148,11 +158,14 @@ describe("McpServerProcess", () => {
   it("McpProxyPlugin.start() registers mcp-proxy tools on the bridge", async () => {
     const configPath = join(tmpDir, "mcp-proxy.json");
     const tokenPath = join(tmpDir, "mcp-proxy.token");
-    writeFileSync(configPath, JSON.stringify({
-      servers: {
-        "test-server": { ...makeServerConfig(), enabled: true },
-      },
-    }));
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        servers: {
+          "test-server": { ...makeServerConfig(), enabled: true },
+        },
+      }),
+    );
 
     const plugin = new McpProxyPlugin({ configPath, tokenPath });
     try {
@@ -175,7 +188,7 @@ describe("McpServerProcess — startup failure cleanup (zombie prevention)", () 
     // Spawn a server that exits immediately so client.connect/listTools will fail
     const proc = new McpServerProcess("crash-test", {
       command: "node",
-      args: ["-e", "process.exit(1)"],  // immediate exit
+      args: ["-e", "process.exit(1)"], // immediate exit
       enabled: true,
     });
 
@@ -190,8 +203,7 @@ describe("McpServerProcess — startup failure cleanup (zombie prevention)", () 
     expect(proc.status).toBe("failed");
     // Transport should be cleared so a subsequent stop() is a no-op
     // (no zombie subprocess waiting for cleanup)
-    await proc.stop();  // must not throw
+    await proc.stop(); // must not throw
     expect(proc.status).toBe("stopped");
   });
 });
-

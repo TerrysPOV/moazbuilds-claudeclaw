@@ -1,15 +1,15 @@
 /**
  * Gateway Orchestrator — single entry point for all inbound normalized events.
- * 
+ *
  * CONTROL FLOW:
  *   Adapter -> Normalizer -> Gateway -> Event Log -> Processor
- * 
+ *
  * CRITICAL DESIGN CONSTRAINTS:
  * - Gateway is the single entry point for all inbound events
  * - Sequence numbers are assigned by the event log, NOT by getLastSeq() + 1 in gateway
  * - Gateway coordinates, it does NOT duplicate processor responsibilities
  * - Channel adapters do NOT call runner.ts directly
- * 
+ *
  * DEPENDENCY INJECTION:
  * - Uses injected dependencies via GatewayDependencies interface
  * - Falls back to module globals for backward compatibility
@@ -131,7 +131,11 @@ export class Gateway {
   /**
    * Evaluate a tool request against policy rules.
    */
-  private evaluatePolicy(event: NormalizedEvent, toolName: string, toolArgs?: Record<string, unknown>): PolicyDecision {
+  private evaluatePolicy(
+    event: NormalizedEvent,
+    toolName: string,
+    toolArgs?: Record<string, unknown>,
+  ): PolicyDecision {
     const gc = getGovernanceClient();
     const request: ToolRequestContext = {
       eventId: event.id || crypto.randomUUID(),
@@ -152,13 +156,13 @@ export class Gateway {
    * Returns true if the request was enqueued for approval.
    */
   private async checkToolApproval(
-    event: NormalizedEvent, 
-    decision: PolicyDecision
+    event: NormalizedEvent,
+    decision: PolicyDecision,
   ): Promise<{ needsApproval: boolean; approvalId?: string }> {
     if (decision.action !== "require_approval") {
       return { needsApproval: false };
     }
-    
+
     const gc = getGovernanceClient();
     const request: ToolRequestContext = {
       eventId: event.id || crypto.randomUUID(),
@@ -169,7 +173,7 @@ export class Gateway {
       toolName: decision.matchedRuleId || "unknown",
       timestamp: new Date(event.timestamp).toISOString(),
     };
-    
+
     const entry = await gc.requestApproval(request, decision);
     if (entry) {
       return { needsApproval: true, approvalId: entry.id };
@@ -179,7 +183,7 @@ export class Gateway {
 
   /**
    * Process an inbound normalized event.
-   * 
+   *
    * Flow:
    * 1. Validate normalized input
    * 2. Resolve or create session mapping
@@ -187,7 +191,7 @@ export class Gateway {
    * 4. Trigger processor on persisted event record
    * 5. Update mapping metadata after success
    * 6. Record real Claude session ID if available
-   * 
+   *
    * @param event - NormalizedEvent from adapter/normalizer
    * @returns Processing result with event record and session info
    */
@@ -215,7 +219,7 @@ export class Gateway {
       // Step 2: Resolve or create session mapping
       const sessionEntry = await this.deps.resume.getOrCreateSessionMapping(
         event.channelId,
-        event.threadId
+        event.threadId,
       );
 
       // Step 2b: Evaluate policy for inbound event
@@ -228,8 +232,8 @@ export class Gateway {
       // Check if approval is required
       const { needsApproval, approvalId } = await this.checkToolApproval(event, policyDecision);
       if (needsApproval) {
-        return { 
-          success: false, 
+        return {
+          success: false,
           error: `Request requires approval (ID: ${approvalId}). Please wait for operator approval.`,
         };
       }
@@ -237,13 +241,18 @@ export class Gateway {
       // If denied, reject the request
       if (policyDecision.action === "deny") {
         // Trigger escalation for policy denial
-        await handlePolicyDenial(event.id, "InboundMessage", policyDecision.reason || "Policy denied request", {
-          severity: "warning",
-          channelId: event.channelId,
-          sessionId: sessionEntry.sessionId,
-        });
-        return { 
-          success: false, 
+        await handlePolicyDenial(
+          event.id,
+          "InboundMessage",
+          policyDecision.reason || "Policy denied request",
+          {
+            severity: "warning",
+            channelId: event.channelId,
+            sessionId: sessionEntry.sessionId,
+          },
+        );
+        return {
+          success: false,
           error: `Request denied: ${policyDecision.reason}`,
         };
       }
@@ -258,8 +267,8 @@ export class Gateway {
           normalizedEvent: event,
           sessionMappingId: sessionEntry.mappingId,
         },
-        dedupeKey: event.sourceEventId 
-          ? `${event.channel}:${event.sourceEventId}` 
+        dedupeKey: event.sourceEventId
+          ? `${event.channel}:${event.sourceEventId}`
           : `${event.channelId}:${event.threadId}:${event.timestamp}`,
         correlationId: undefined,
         causationId: undefined,
@@ -283,7 +292,7 @@ export class Gateway {
           event.channelId,
           event.threadId,
           eventRecord.seq,
-          { turnCountIncrement: 1 }
+          { turnCountIncrement: 1 },
         );
       }
 
@@ -294,7 +303,7 @@ export class Gateway {
           await this.deps.resume.recordClaudeSessionId(
             event.channelId,
             event.threadId,
-            processorResult.claudeSessionId
+            processorResult.claudeSessionId,
           );
         }
       }
@@ -451,18 +460,18 @@ export interface LegacyResult {
 
 /**
  * Process an event with automatic fallback to legacy handler.
- * 
+ *
  * Migration pattern:
  * - When gateway is enabled: routes through gateway orchestrator
  * - When gateway is disabled: calls legacy handler (e.g., runUserMessage)
- * 
+ *
  * @param event - NormalizedEvent to process
  * @param options - Options including legacy handler for fallback
  * @returns Result with source information
  */
 export async function processEventWithFallback(
   event: NormalizedEvent,
-  options: ProcessEventOptions = {}
+  options: ProcessEventOptions = {},
 ): Promise<{
   success: boolean;
   source: "gateway" | "legacy";
@@ -532,18 +541,18 @@ export async function processEventWithFallback(
 
 /**
  * Normalize and process a Telegram message through the gateway.
- * 
+ *
  * Usage in telegram.ts migration:
  *   // Before (legacy):
  *   const result = await runUserMessage("telegram", prompt);
- *   
+ *
  *   // After (with gateway):
  *   const normalized = normalizeTelegramMessage(message);
  *   const result = await submitTelegramToGateway(normalized);
  */
 export async function submitTelegramToGateway(
   message: import("./normalizer").TelegramMessage,
-  promptOverride?: string
+  promptOverride?: string,
 ): Promise<{
   success: boolean;
   source: "gateway" | "legacy";
@@ -573,17 +582,17 @@ export async function submitTelegramToGateway(
 
 /**
  * Normalize and process a Discord message through the gateway.
- * 
+ *
  * Usage in discord.ts migration:
  *   // Before (legacy):
  *   const result = await runUserMessage("discord", prompt);
- *   
+ *
  *   // After (with gateway):
  *   const normalized = normalizeDiscordMessage(message);
  *   const result = await submitDiscordToGateway(normalized);
  */
 export async function submitDiscordToGateway(
-  message: import("./normalizer").DiscordMessage
+  message: import("./normalizer").DiscordMessage,
 ): Promise<{
   success: boolean;
   source: "gateway" | "legacy";

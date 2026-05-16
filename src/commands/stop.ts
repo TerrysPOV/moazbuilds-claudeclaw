@@ -43,14 +43,19 @@ async function preShutdownMemorySave(): Promise<void> {
     }
 
     const proc = Bun.spawn(
-      ["claude", "-p",
+      [
+        "claude",
+        "-p",
         `Session is shutting down. Save your current memory to ${memPath} now. Include: current status, what was accomplished, key context for next session.`,
-        "--output-format", "text",
-        "--resume", session.sessionId,
+        "--output-format",
+        "text",
+        "--resume",
+        session.sessionId,
         ...securityArgs,
-        "--model", settings.model || "haiku",
+        "--model",
+        settings.model || "haiku",
       ],
-      { stdout: "pipe", stderr: "pipe", timeout: 30_000 }
+      { stdout: "pipe", stderr: "pipe", timeout: 30_000 },
     );
     await proc.exited;
     console.log("[shutdown] Memory saved.");
@@ -118,7 +123,9 @@ export async function stopAll() {
     try {
       process.kill(Number(pid), "SIGTERM");
       console.log(`\x1b[33m■ Stopped\x1b[0m PID ${pid} — ${projectPath}`);
-      try { await unlink(pidFile); } catch {}
+      try {
+        await unlink(pidFile);
+      } catch {}
     } catch {
       console.log(`\x1b[31m✗ Failed to stop\x1b[0m PID ${pid} — ${projectPath}`);
     }

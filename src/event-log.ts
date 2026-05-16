@@ -1,21 +1,21 @@
 /**
  * Durable Event Log
- * 
+ *
  * Segmented append-only event storage with monotonic sequence numbers.
- * 
+ *
  * CRASH CONSCIOUSNESS:
  * - All writes use atomic file operations (write to temp, rename)
  * - Segment metadata is written before data to ensure index consistency
  * - Sequence numbers are allocated atomically with the write operation
  * - Partial writes are detected and recovered on next startup
- * 
+ *
  * STORAGE MODEL:
  * - Events stored in .claude/claudeclaw/event-log/
  * - Segments: event-log-YYYYMMDD-HHMMSS-{seq}.jsonl
  * - Index: segments.json (maps seq ranges to segment files)
  * - Current segment tracked in current-segment.json
  * - Max segment size: 10MB or daily rotation
- * 
+ *
  * RECOVERY:
  * - On init, scan segments and rebuild index if corrupted
  * - Verify segment files exist and are readable
@@ -41,16 +41,12 @@ function sanitizeForLog(value: unknown, maxLength = 1000): string {
   if (value === null || value === undefined) return "";
   const str = String(value);
   // Remove control characters except common whitespace
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: intentional sanitisation of control chars before logging.
   const sanitized = str.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
   return sanitized.slice(0, maxLength);
 }
 
-export type EventStatus =
-  | "pending"
-  | "processing"
-  | "done"
-  | "retry_scheduled"
-  | "dead_lettered";
+export type EventStatus = "pending" | "processing" | "done" | "retry_scheduled" | "dead_lettered";
 
 export interface EventRecord {
   id: string;
@@ -124,8 +120,12 @@ function enqueueWrite<T>(operation: () => Promise<T>): Promise<T> {
   writeQueueLength++;
   const promise = writeQueue.then(() => operation());
   writeQueue = promise.then(
-    () => { writeQueueLength--; },
-    () => { writeQueueLength--; }
+    () => {
+      writeQueueLength--;
+    },
+    () => {
+      writeQueueLength--;
+    },
   );
   return promise;
 }
@@ -172,7 +172,7 @@ async function doInit(): Promise<void> {
 
   // Validate and repair if needed
   const needsRebuild = await validateAndRepairState();
-  
+
   if (needsRebuild || !segmentsIndex || !currentSegment) {
     await rebuildStateFromDisk();
   }
@@ -208,7 +208,7 @@ async function validateAndRepairState(): Promise<boolean> {
   if (currentSegment.nextSeq !== expectedNextSeq) {
     console.warn(
       `[event-log] Sequence mismatch: index.lastSeq=${segmentsIndex.lastSeq}, ` +
-      `current.nextSeq=${currentSegment.nextSeq}, expected=${expectedNextSeq}`
+        `current.nextSeq=${currentSegment.nextSeq}, expected=${expectedNextSeq}`,
     );
     return true;
   }
@@ -225,7 +225,7 @@ async function rebuildStateFromDisk(): Promise<void> {
 
   const files = await readdir(EVENT_LOG_DIR);
   const segmentFiles = files
-    .filter(f => f.startsWith("event-log-") && f.endsWith(".jsonl"))
+    .filter((f) => f.startsWith("event-log-") && f.endsWith(".jsonl"))
     .sort();
 
   const segments: SegmentInfo[] = [];
@@ -234,10 +234,10 @@ async function rebuildStateFromDisk(): Promise<void> {
   for (const filename of segmentFiles) {
     const segPath = join(EVENT_LOG_DIR, filename);
     const stats = await stat(segPath);
-    
+
     // Parse sequence range from file content
     const seqRange = await readSegmentSeqRange(segPath);
-    
+
     if (seqRange) {
       segments.push({
         filename,
@@ -263,7 +263,7 @@ async function rebuildStateFromDisk(): Promise<void> {
     const latest = segments[segments.length - 1];
     const latestPath = join(EVENT_LOG_DIR, latest.filename);
     const latestStats = await stat(latestPath);
-    
+
     currentSegment = {
       filename: latest.filename,
       startSeq: latest.startSeq,
@@ -287,11 +287,16 @@ async function rebuildStateFromDisk(): Promise<void> {
  * Read sequence range from a segment file.
  * Returns null if file is empty or corrupted.
  */
-async function readSegmentSeqRange(filepath: string): Promise<{ start: number; end: number } | null> {
+async function readSegmentSeqRange(
+  filepath: string,
+): Promise<{ start: number; end: number } | null> {
   try {
     const content = await Bun.file(filepath).text();
-    const lines = content.trim().split("\n").filter(l => l.trim());
-    
+    const lines = content
+      .trim()
+      .split("\n")
+      .filter((l) => l.trim());
+
     if (lines.length === 0) {
       return null;
     }
@@ -326,7 +331,7 @@ async function loadSegmentsIndex(): Promise<SegmentsIndex | null> {
  */
 async function loadCurrentSegment(): Promise<CurrentSegment | null> {
   try {
-    return await Bun.file(CURRENT_SEGMENT_FILE).json() as CurrentSegment;
+    return (await Bun.file(CURRENT_SEGMENT_FILE).json()) as CurrentSegment;
   } catch {
     return null;
   }
@@ -338,7 +343,7 @@ async function loadCurrentSegment(): Promise<CurrentSegment | null> {
  */
 async function saveSegmentsIndex(): Promise<void> {
   if (!segmentsIndex) return;
-  
+
   segmentsIndex.updatedAt = new Date().toISOString();
   await Bun.write(SEGMENTS_INDEX_FILE, JSON.stringify(segmentsIndex, null, 2) + "\n");
 }
@@ -349,7 +354,7 @@ async function saveSegmentsIndex(): Promise<void> {
  */
 async function saveCurrentSegment(): Promise<void> {
   if (!currentSegment) return;
-  
+
   await Bun.write(CURRENT_SEGMENT_FILE, JSON.stringify(currentSegment, null, 2) + "\n");
 }
 
@@ -359,11 +364,12 @@ async function saveCurrentSegment(): Promise<void> {
 async function createNewSegment(startSeq: number): Promise<void> {
   const now = new Date();
   // Format: YYYYMMDD-HHMMSS (no colons for filesystem compatibility)
-  const timestamp = now.toISOString()
-    .replace(/[:.]/g, "-")  // Replace colons and dots
-    .replace("T", "_");      // Replace T with underscore
+  const timestamp = now
+    .toISOString()
+    .replace(/[:.]/g, "-") // Replace colons and dots
+    .replace("T", "_"); // Replace T with underscore
   const filename = `event-log-${timestamp}-${startSeq}.jsonl`;
-  
+
   currentSegment = {
     filename,
     startSeq,
@@ -375,7 +381,7 @@ async function createNewSegment(startSeq: number): Promise<void> {
   // Create empty segment file
   const segPath = join(EVENT_LOG_DIR, filename);
   await Bun.write(segPath, "");
-  
+
   await saveCurrentSegment();
 }
 
@@ -393,7 +399,7 @@ async function shouldRotateSegment(): Promise<boolean> {
   // Check age (daily rotation)
   const created = new Date(currentSegment.createdAt);
   const now = new Date();
-  const isDifferentDay = 
+  const isDifferentDay =
     created.getUTCFullYear() !== now.getUTCFullYear() ||
     created.getUTCMonth() !== now.getUTCMonth() ||
     created.getUTCDate() !== now.getUTCDate();
@@ -427,7 +433,7 @@ async function rotateSegment(): Promise<void> {
 
   console.log(
     `[event-log] Rotated segment: ${currentSegment.filename} ` +
-    `(seq ${currentSegment.startSeq}-${finalSeq})`
+      `(seq ${currentSegment.startSeq}-${finalSeq})`,
   );
 }
 
@@ -470,7 +476,9 @@ export async function append(entry: EventEntryInput): Promise<EventRecord> {
       nextRetryAt: null,
       correlationId: entry.correlationId ? sanitizeForLog(entry.correlationId) : null,
       causationId: entry.causationId ? sanitizeForLog(entry.causationId) : null,
-      replayedFromEventId: entry.replayedFromEventId ? sanitizeForLog(entry.replayedFromEventId) : null,
+      replayedFromEventId: entry.replayedFromEventId
+        ? sanitizeForLog(entry.replayedFromEventId)
+        : null,
       lastError: null,
     };
 
@@ -531,7 +539,7 @@ export async function* readFrom(startSeq: number): AsyncGenerator<EventRecord> {
 
     const segPath = join(EVENT_LOG_DIR, seg.filename);
     const events = await readSegmentEvents(segPath, startSeq);
-    
+
     for (const event of events) {
       yield event;
       started = true;
@@ -542,7 +550,7 @@ export async function* readFrom(startSeq: number): AsyncGenerator<EventRecord> {
   if (currentSegment && currentSegment.startSeq <= startSeq) {
     const segPath = join(EVENT_LOG_DIR, currentSegment.filename);
     const events = await readSegmentEvents(segPath, startSeq);
-    
+
     for (const event of events) {
       yield event;
     }
@@ -552,10 +560,7 @@ export async function* readFrom(startSeq: number): AsyncGenerator<EventRecord> {
 /**
  * Read events in a sequence range.
  */
-export async function* readRange(
-  startSeq: number,
-  endSeq: number
-): AsyncGenerator<EventRecord> {
+export async function* readRange(startSeq: number, endSeq: number): AsyncGenerator<EventRecord> {
   for await (const event of readFrom(startSeq)) {
     if (event.seq > endSeq) {
       break;
@@ -567,14 +572,14 @@ export async function* readRange(
 /**
  * Read events from a segment file, filtered by start sequence.
  */
-async function readSegmentEvents(
-  filepath: string,
-  startSeq: number
-): Promise<EventRecord[]> {
+async function readSegmentEvents(filepath: string, startSeq: number): Promise<EventRecord[]> {
   try {
     const content = await Bun.file(filepath).text();
-    const lines = content.trim().split("\n").filter(l => l.trim());
-    
+    const lines = content
+      .trim()
+      .split("\n")
+      .filter((l) => l.trim());
+
     const events: EventRecord[] = [];
     for (const line of lines) {
       try {
@@ -628,7 +633,7 @@ export async function getStats(): Promise<{
  */
 export async function appendStatusUpdate(
   originalEventId: string,
-  updates: Partial<Pick<EventRecord, "status" | "retryCount" | "nextRetryAt" | "lastError">>
+  updates: Partial<Pick<EventRecord, "status" | "retryCount" | "nextRetryAt" | "lastError">>,
 ): Promise<EventRecord> {
   // Read the original event
   const original = await findEventById(originalEventId);
@@ -676,11 +681,14 @@ export async function findEventById(eventId: string): Promise<EventRecord | null
   for (let i = allSegments.length - 1; i >= 0; i--) {
     const seg = allSegments[i];
     const segPath = join(EVENT_LOG_DIR, seg.filename);
-    
+
     try {
       const content = await Bun.file(segPath).text();
-      const lines = content.trim().split("\n").filter(l => l.trim());
-      
+      const lines = content
+        .trim()
+        .split("\n")
+        .filter((l) => l.trim());
+
       // Search backwards within segment
       for (let j = lines.length - 1; j >= 0; j--) {
         try {

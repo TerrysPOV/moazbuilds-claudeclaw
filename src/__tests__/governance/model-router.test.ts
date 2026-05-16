@@ -25,7 +25,7 @@ describe("ModelRouter", () => {
   beforeEach(async () => {
     resetUsageTracker();
     resetBudgetEngine();
-    
+
     // Clear budget policies file for test isolation
     try {
       const { rm } = await import("fs/promises");
@@ -33,10 +33,10 @@ describe("ModelRouter", () => {
     } catch {
       // File might not exist
     }
-    
+
     await initUsageTracker();
     await initBudgetEngine();
-    
+
     // Reset router config
     configureRouter({
       defaultProvider: "anthropic",
@@ -99,7 +99,7 @@ describe("ModelRouter", () => {
     await recordInvocationCompletion(
       start.invocationId,
       { inputTokens: 100000, outputTokens: 50000 },
-      { currency: "USD", totalCost: 0.50 }
+      { currency: "USD", totalCost: 0.5 },
     );
 
     const decision = await selectModel({ channelId: "low-limit-chan" });
@@ -177,14 +177,12 @@ describe("ModelRouter", () => {
     await recordInvocationCompletion(
       start.invocationId,
       { inputTokens: 100000, outputTokens: 50000 },
-      { currency: "USD", totalCost: 0.50 }
+      { currency: "USD", totalCost: 0.5 },
     );
 
-    const result = await isModelAllowed(
-      "anthropic",
-      "claude-3-5-sonnet",
-      { channelId: "deny-chan" }
-    );
+    const result = await isModelAllowed("anthropic", "claude-3-5-sonnet", {
+      channelId: "deny-chan",
+    });
 
     expect(result.allowed).toBe(false);
     expect(result.reason).toContain("blocked");
@@ -225,7 +223,7 @@ describe("ModelRouter", () => {
     await recordInvocationCompletion(
       start.invocationId,
       { inputTokens: 5000, outputTokens: 2500 },
-      { currency: "USD", totalCost: 0.02 } // Above warnAt
+      { currency: "USD", totalCost: 0.02 }, // Above warnAt
     );
 
     const decision = await selectModel({ channelId: "warn-chan" });

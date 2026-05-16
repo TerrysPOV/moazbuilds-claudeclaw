@@ -38,11 +38,7 @@ async function cleanup(): Promise<void> {
  * Write a job file directly, bypassing addJob validation.
  * Used to inject invalid model strings that addJob would reject.
  */
-async function writeJobFileRaw(
-  agentName: string,
-  label: string,
-  body: string,
-): Promise<void> {
+async function writeJobFileRaw(agentName: string, label: string, body: string): Promise<void> {
   const dir = join(AGENTS_DIR, agentName, "jobs");
   await mkdir(dir, { recursive: true });
   await writeFile(join(dir, `${label}.md`), body, "utf8");
@@ -164,12 +160,13 @@ describe("Phase 18 end-to-end model override", () => {
 
     const captured: string[] = [];
     const SENTINEL = "P18_03_E2E_SENTINEL";
-    const spy = spyOn(runnerMod, "runClaudeOnce").mockImplementation(
-      (async (_args: string[], model: string) => {
-        captured.push(model);
-        throw new Error(SENTINEL);
-      }) as any,
-    );
+    const spy = spyOn(runnerMod, "runClaudeOnce").mockImplementation((async (
+      _args: string[],
+      model: string,
+    ) => {
+      captured.push(model);
+      throw new Error(SENTINEL);
+    }) as any);
 
     try {
       await runnerMod.run("e2e-test", "prompt", undefined, { modelOverride: model });

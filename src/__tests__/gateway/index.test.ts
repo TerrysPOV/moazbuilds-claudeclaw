@@ -1,6 +1,6 @@
 /**
  * Gateway Integration Tests
- * 
+ *
  * Tests cover:
  * - Happy path end-to-end: normalize -> gateway -> event log -> processor
  * - Mapping creation and reuse
@@ -281,26 +281,28 @@ describe("Gateway", () => {
     it("should process valid event and return event record", async () => {
       const mockProcessor = vi.fn().mockResolvedValue({ success: true });
       const deps: GatewayDependencies = {
-        eventLog: { append: vi.fn().mockResolvedValue({
-          id: randomUUID(),
-          seq: 1,
-          type: "inbound:telegram",
-          source: "telegram",
-          timestamp: new Date().toISOString(),
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          status: "pending",
-          channelId: "telegram:123",
-          threadId: "default",
-          payload: {},
-          dedupeKey: "test",
-          retryCount: 0,
-          nextRetryAt: null,
-          correlationId: null,
-          causationId: null,
-          replayedFromEventId: null,
-          lastError: null,
-        })},
+        eventLog: {
+          append: vi.fn().mockResolvedValue({
+            id: randomUUID(),
+            seq: 1,
+            type: "inbound:telegram",
+            source: "telegram",
+            timestamp: new Date().toISOString(),
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            status: "pending",
+            channelId: "telegram:123",
+            threadId: "default",
+            payload: {},
+            dedupeKey: "test",
+            retryCount: 0,
+            nextRetryAt: null,
+            correlationId: null,
+            causationId: null,
+            replayedFromEventId: null,
+            lastError: null,
+          }),
+        },
         processor: { processPersistedEvent: mockProcessor },
         resume: {
           getOrCreateSessionMapping: vi.fn().mockResolvedValue({
@@ -353,26 +355,28 @@ describe("Gateway", () => {
         shouldRetry: false,
       });
       const deps: GatewayDependencies = {
-        eventLog: { append: vi.fn().mockResolvedValue({
-          id: randomUUID(),
-          seq: 1,
-          type: "inbound:telegram",
-          source: "telegram",
-          timestamp: new Date().toISOString(),
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          status: "pending",
-          channelId: "telegram:123",
-          threadId: "default",
-          payload: {},
-          dedupeKey: "test",
-          retryCount: 0,
-          nextRetryAt: null,
-          correlationId: null,
-          causationId: null,
-          replayedFromEventId: null,
-          lastError: null,
-        })},
+        eventLog: {
+          append: vi.fn().mockResolvedValue({
+            id: randomUUID(),
+            seq: 1,
+            type: "inbound:telegram",
+            source: "telegram",
+            timestamp: new Date().toISOString(),
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            status: "pending",
+            channelId: "telegram:123",
+            threadId: "default",
+            payload: {},
+            dedupeKey: "test",
+            retryCount: 0,
+            nextRetryAt: null,
+            correlationId: null,
+            causationId: null,
+            replayedFromEventId: null,
+            lastError: null,
+          }),
+        },
         processor: { processPersistedEvent: mockProcessor },
         resume: {
           getOrCreateSessionMapping: vi.fn().mockResolvedValue({
@@ -508,46 +512,50 @@ describe("Gateway", () => {
       const mappings: Map<string, any> = new Map();
 
       const deps: GatewayDependencies = {
-        eventLog: { append: vi.fn().mockResolvedValue({
-          id: randomUUID(),
-          seq: 1,
-          type: "inbound:telegram",
-          source: "telegram",
-          timestamp: new Date().toISOString(),
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          status: "pending",
-          channelId: "telegram:123",
-          threadId: "default",
-          payload: {},
-          dedupeKey: "test",
-          retryCount: 0,
-          nextRetryAt: null,
-          correlationId: null,
-          causationId: null,
-          replayedFromEventId: null,
-          lastError: null,
-        })},
+        eventLog: {
+          append: vi.fn().mockResolvedValue({
+            id: randomUUID(),
+            seq: 1,
+            type: "inbound:telegram",
+            source: "telegram",
+            timestamp: new Date().toISOString(),
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            status: "pending",
+            channelId: "telegram:123",
+            threadId: "default",
+            payload: {},
+            dedupeKey: "test",
+            retryCount: 0,
+            nextRetryAt: null,
+            correlationId: null,
+            causationId: null,
+            replayedFromEventId: null,
+            lastError: null,
+          }),
+        },
         processor: { processPersistedEvent: vi.fn().mockResolvedValue({ success: true }) },
         resume: {
-          getOrCreateSessionMapping: vi.fn().mockImplementation(async (channelId: string, threadId: string) => {
-            const key = `${channelId}:${threadId}`;
-            if (!mappings.has(key)) {
-              mappings.set(key, {
-                mappingId: `mapping-${mappings.size + 1}`,
-                channelId,
-                threadId,
-                claudeSessionId: null,
-                lastSeq: 0,
-                turnCount: 0,
-                status: "pending",
-                lastActiveAt: new Date().toISOString(),
-                createdAt: new Date().toISOString(),
-                updatedAt: new Date().toISOString(),
-              });
-            }
-            return mappings.get(key);
-          }),
+          getOrCreateSessionMapping: vi
+            .fn()
+            .mockImplementation(async (channelId: string, threadId: string) => {
+              const key = `${channelId}:${threadId}`;
+              if (!mappings.has(key)) {
+                mappings.set(key, {
+                  mappingId: `mapping-${mappings.size + 1}`,
+                  channelId,
+                  threadId,
+                  claudeSessionId: null,
+                  lastSeq: 0,
+                  turnCount: 0,
+                  status: "pending",
+                  lastActiveAt: new Date().toISOString(),
+                  createdAt: new Date().toISOString(),
+                  updatedAt: new Date().toISOString(),
+                });
+              }
+              return mappings.get(key);
+            }),
           getResumeArgsForEvent: vi.fn().mockImplementation(async (event: NormalizedEvent) => {
             const key = `${event.channelId}:${event.threadId}`;
             const entry = mappings.get(key);
@@ -559,13 +567,15 @@ describe("Gateway", () => {
               canResume: entry?.claudeSessionId !== null,
             };
           }),
-          updateSessionAfterProcessing: vi.fn().mockImplementation(async (channelId: string, threadId: string, seq: number) => {
-            const key = `${channelId}:${threadId}`;
-            const existing = mappings.get(key);
-            if (existing) {
-              mappings.set(key, { ...existing, lastSeq: seq, turnCount: existing.turnCount + 1 });
-            }
-          }),
+          updateSessionAfterProcessing: vi
+            .fn()
+            .mockImplementation(async (channelId: string, threadId: string, seq: number) => {
+              const key = `${channelId}:${threadId}`;
+              const existing = mappings.get(key);
+              if (existing) {
+                mappings.set(key, { ...existing, lastSeq: seq, turnCount: existing.turnCount + 1 });
+              }
+            }),
         },
       };
 
@@ -689,7 +699,7 @@ describe("Concurrent events", () => {
   it("should handle concurrent events consistently", async () => {
     const callOrder: string[] = [];
     const deps: GatewayDependencies = {
-      eventLog: { 
+      eventLog: {
         append: vi.fn().mockImplementation(async (entry: any) => {
           callOrder.push(`append-${entry.channelId}-${entry.threadId}`);
           return {
@@ -714,10 +724,12 @@ describe("Concurrent events", () => {
           };
         }),
       },
-      processor: { processPersistedEvent: vi.fn().mockImplementation(async () => {
-        callOrder.push(`process-${Date.now()}`);
-        return { success: true };
-      })},
+      processor: {
+        processPersistedEvent: vi.fn().mockImplementation(async () => {
+          callOrder.push(`process-${Date.now()}`);
+          return { success: true };
+        }),
+      },
       resume: {
         getOrCreateSessionMapping: vi.fn().mockResolvedValue({
           mappingId: "mapping-1",
@@ -783,9 +795,9 @@ describe("Concurrent events", () => {
       },
     ];
 
-    const results = await Promise.all(events.map(e => gateway.processInboundEvent(e)));
+    const results = await Promise.all(events.map((e) => gateway.processInboundEvent(e)));
 
     // All should succeed
-    expect(results.every(r => r.success)).toBe(true);
+    expect(results.every((r) => r.success)).toBe(true);
   });
 });

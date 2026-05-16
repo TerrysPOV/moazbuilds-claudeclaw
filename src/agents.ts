@@ -53,7 +53,7 @@ export interface AgentUpdatePatch {
 }
 
 function normalizePatchField(
-  field: PatchField<string> | undefined
+  field: PatchField<string> | undefined,
 ): { value: string; mode: "append" | "replace" } | undefined {
   if (field === undefined) return undefined;
   if (typeof field === "string") return { value: field, mode: "replace" };
@@ -66,7 +66,10 @@ function readBetweenMarkers(text: string, start: string, end: string): string | 
   const j = text.indexOf(end, i + start.length);
   if (j === -1) return null;
   // strip exactly one leading + trailing newline written by replaceBetweenMarkers
-  return text.slice(i + start.length, j).replace(/^\n/, "").replace(/\n$/, "");
+  return text
+    .slice(i + start.length, j)
+    .replace(/^\n/, "")
+    .replace(/\n$/, "");
 }
 
 // ─── Section markers (Phase 17) ──────────────────────────────────────────────
@@ -85,7 +88,7 @@ function replaceBetweenMarkers(
   text: string,
   start: string,
   end: string,
-  replacement: string
+  replacement: string,
 ): string | null {
   const i = text.indexOf(start);
   if (i === -1) return null;
@@ -94,11 +97,7 @@ function replaceBetweenMarkers(
   return text.slice(0, i + start.length) + "\n" + replacement + "\n" + text.slice(j);
 }
 
-function replaceLegacySection(
-  text: string,
-  heading: string,
-  newBody: string
-): string {
+function replaceLegacySection(text: string, heading: string, newBody: string): string {
   // Matches `## <heading>` block until next `## ` or EOF.
   const re = new RegExp(`(^|\\n)## ${heading}\\s*\\n[\\s\\S]*?(?=\\n## |$)`, "");
   const match = text.match(re);
@@ -160,9 +159,10 @@ export function applyClaudeMdPatch(claudeMd: string, patch: AgentUpdatePatch): s
   let out = claudeMd;
 
   if (patch.discordChannels !== undefined) {
-    const body = patch.discordChannels.length > 0
-      ? patch.discordChannels.map((c) => `- ${c}`).join("\n")
-      : "_none specified_";
+    const body =
+      patch.discordChannels.length > 0
+        ? patch.discordChannels.map((c) => `- ${c}`).join("\n")
+        : "_none specified_";
     const replaced = replaceBetweenMarkers(out, DISCORD_START, DISCORD_END, body);
     if (replaced !== null) {
       out = replaced;
@@ -351,7 +351,10 @@ export function parseScheduleToCron(input: string): string | null {
   if (m) {
     const raw = m[1];
     if (/,| and /.test(raw)) {
-      const parts = raw.split(/\s*,\s*|\s+and\s+/).map((p) => p.trim()).filter(Boolean);
+      const parts = raw
+        .split(/\s*,\s*|\s+and\s+/)
+        .map((p) => p.trim())
+        .filter(Boolean);
       const hours: number[] = [];
       for (const p of parts) {
         const h = parseHour(p);
@@ -434,7 +437,7 @@ function renderSoul(personality: string, workflow?: string): string {
     `**Be resourceful before asking.** Try to figure it out first.`,
     ``,
     `**Earn trust through competence.** Be careful with external actions, bold with internal ones.`,
-    ``
+    ``,
   );
   return lines.join("\n");
 }
@@ -444,7 +447,8 @@ function renderClaudeMd(opts: AgentCreateOpts): string {
     opts.discordChannels && opts.discordChannels.length > 0
       ? opts.discordChannels.map((c) => `- ${c}`).join("\n")
       : "_none specified_";
-  const sources = opts.dataSources && opts.dataSources.trim() ? opts.dataSources.trim() : "_none specified_";
+  const sources =
+    opts.dataSources && opts.dataSources.trim() ? opts.dataSources.trim() : "_none specified_";
   const lines = [
     `# Agent: ${opts.name}`,
     ``,
@@ -465,13 +469,7 @@ function renderClaudeMd(opts: AgentCreateOpts): string {
   ];
   const dm = opts.defaultModel ? opts.defaultModel.trim().toLowerCase() : "";
   if (dm) {
-    lines.push(
-      `## Default Model`,
-      CLAUDE_MD_MODEL_START,
-      dm,
-      CLAUDE_MD_MODEL_END,
-      ``,
-    );
+    lines.push(`## Default Model`, CLAUDE_MD_MODEL_START, dm, CLAUDE_MD_MODEL_END, ``);
   }
   return lines.join("\n");
 }
@@ -499,9 +497,14 @@ function parseFrontmatterValue(raw: string): string {
   return raw.trim().replace(/^["']|["']$/g, "");
 }
 
-function parseJobFileContent(
-  content: string
-): { label: string; cron: string; enabled: boolean; recurring: boolean; model?: string; trigger: string } | null {
+function parseJobFileContent(content: string): {
+  label: string;
+  cron: string;
+  enabled: boolean;
+  recurring: boolean;
+  model?: string;
+  trigger: string;
+} | null {
   const match = content.match(/^---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/);
   if (!match) return null;
   const fm = match[1];
@@ -538,7 +541,9 @@ function parseJobFileContent(
   }
 
   const modelLine = lines.find((l) => l.startsWith("model:"));
-  const model = modelLine ? parseFrontmatterValue(modelLine.replace("model:", "")) || undefined : undefined;
+  const model = modelLine
+    ? parseFrontmatterValue(modelLine.replace("model:", "")) || undefined
+    : undefined;
 
   return { label, cron, enabled, recurring, model, trigger };
 }
@@ -595,7 +600,13 @@ export async function addJob(
 export async function updateJob(
   agentName: string,
   label: string,
-  patch: { cron?: string; trigger?: string; enabled?: boolean; recurring?: boolean; model?: string }
+  patch: {
+    cron?: string;
+    trigger?: string;
+    enabled?: boolean;
+    recurring?: boolean;
+    model?: string;
+  },
 ): Promise<AgentJob> {
   const path = jobFilePath(agentName, label);
   if (!existsSync(path)) {

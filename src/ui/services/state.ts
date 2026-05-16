@@ -82,7 +82,11 @@ function redactSettings(raw: unknown): unknown {
   }
   if (out.slack && typeof out.slack === "object") {
     const sl = out.slack as Record<string, unknown>;
-    out.slack = { ...sl, botToken: sl.botToken ? "[redacted]" : "", appToken: sl.appToken ? "[redacted]" : "" };
+    out.slack = {
+      ...sl,
+      botToken: sl.botToken ? "[redacted]" : "",
+      appToken: sl.appToken ? "[redacted]" : "",
+    };
   }
   return out;
 }

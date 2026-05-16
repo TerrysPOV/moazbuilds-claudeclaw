@@ -59,7 +59,7 @@ describe("Telemetry", () => {
       {
         currency: "USD",
         totalCost: 0.165,
-      }
+      },
     );
 
     const telemetry = await getTelemetry({});
@@ -80,7 +80,7 @@ describe("Telemetry", () => {
     await recordInvocationCompletion(
       start.invocationId,
       { inputTokens: 1000, outputTokens: 500 },
-      { currency: "USD", totalCost: 0.02 }
+      { currency: "USD", totalCost: 0.02 },
     );
 
     // Future date should return empty
@@ -105,7 +105,7 @@ describe("Telemetry", () => {
     await recordInvocationCompletion(
       anthropicStart.invocationId,
       { inputTokens: 1000, outputTokens: 500 },
-      { currency: "USD", totalCost: 0.02 }
+      { currency: "USD", totalCost: 0.02 },
     );
 
     // OpenAI invocation
@@ -116,7 +116,7 @@ describe("Telemetry", () => {
     await recordInvocationCompletion(
       openaiStart.invocationId,
       { inputTokens: 1000, outputTokens: 500 },
-      { currency: "USD", totalCost: 0.03 }
+      { currency: "USD", totalCost: 0.03 },
     );
 
     const anthropicTelemetry = await getTelemetry({ provider: "anthropic" });
@@ -133,7 +133,7 @@ describe("Telemetry", () => {
     await recordInvocationCompletion(
       start.invocationId,
       { inputTokens: 10000, outputTokens: 5000 },
-      { currency: "USD", totalCost: 0.105 }
+      { currency: "USD", totalCost: 0.105 },
     );
 
     const breakdown = await getProviderBreakdown();
@@ -154,7 +154,7 @@ describe("Telemetry", () => {
     await recordInvocationCompletion(
       start.invocationId,
       { inputTokens: 500, outputTokens: 250 },
-      { currency: "USD", totalCost: 0.005 }
+      { currency: "USD", totalCost: 0.005 },
     );
 
     const breakdown = await getModelBreakdown();
@@ -176,7 +176,7 @@ describe("Telemetry", () => {
     await recordInvocationCompletion(
       start.invocationId,
       { inputTokens: 2000, outputTokens: 1000 },
-      { currency: "USD", totalCost: 0.045 }
+      { currency: "USD", totalCost: 0.045 },
     );
 
     const breakdown = await getChannelBreakdown();
@@ -234,7 +234,7 @@ describe("Telemetry", () => {
         outputCost: 7.5,
         cacheCost: 0.5,
         totalCost: 11.0,
-      }
+      },
     );
 
     const telemetry = await getTelemetry({});

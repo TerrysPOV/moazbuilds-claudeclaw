@@ -16,21 +16,50 @@ import {
   incrementMessageCount,
   backupSession,
 } from "./sessions";
-import { needsRotation, rotateSession, loadLatestSummary } from "./rotation";import {
+import { needsRotation, rotateSession, loadLatestSummary } from "./rotation";
+import {
   getThreadSession,
   createThreadSession,
   removeThreadSession,
   incrementThreadTurn,
   markThreadCompactWarned,
 } from "./sessionManager";
-import { getSettings, DEFAULT_SESSION_TIMEOUT_MS, type ModelConfig, type SecurityConfig, type AgenticMode } from "./config";
+import {
+  getSettings,
+  DEFAULT_SESSION_TIMEOUT_MS,
+  type ModelConfig,
+  type SecurityConfig,
+  type AgenticMode,
+} from "./config";
 import { buildClockPromptPrefix } from "./timezone";
-import { selectModel as governanceSelectModel, configureRouter as configureGovernanceRouter } from "./governance/model-router";
-import { recordInvocationStart, recordInvocationCompletion, recordInvocationFailure } from "./governance/usage-tracker";
-import { recordExecutionMetric, checkLimits, handleTrigger as watchdogHandleTrigger } from "./governance/watchdog";
-import { startSession as watchdogStart, recordResult as watchdogRecord, abortReason as watchdogAbortReason, clearSession as watchdogClear } from "./watchdog";
+import {
+  selectModel as governanceSelectModel,
+  configureRouter as configureGovernanceRouter,
+} from "./governance/model-router";
+import {
+  recordInvocationStart,
+  recordInvocationCompletion,
+  recordInvocationFailure,
+} from "./governance/usage-tracker";
+import {
+  recordExecutionMetric,
+  checkLimits,
+  handleTrigger as watchdogHandleTrigger,
+} from "./governance/watchdog";
+import {
+  startSession as watchdogStart,
+  recordResult as watchdogRecord,
+  abortReason as watchdogAbortReason,
+  clearSession as watchdogClear,
+} from "./watchdog";
 import { getGovernanceClient, type GovernanceClient } from "./governance/client";
-import { loadMemory, loadMemoryInstructions, ensureMemoryFile, getMemoryPath, indexSessionsBackground } from "./memory";
+import {
+  loadMemory,
+  loadMemoryInstructions,
+  ensureMemoryFile,
+  getMemoryPath,
+  indexSessionsBackground,
+} from "./memory";
 import { loadAgent } from "./agents";
 import { selectModel } from "./model-router";
 import { recordResult, abortReason, clearSession, startSession } from "./watchdog";
@@ -43,7 +72,12 @@ const LOGS_DIR = join(process.cwd(), ".claude/claudeclaw/logs");
 let governanceInitialized = false;
 function ensureGovernanceRouter(modes?: AgenticMode[], defaultMode?: string): void {
   if (!governanceInitialized && modes && defaultMode) {
-    configureGovernanceRouter({ modes, defaultMode, defaultProvider: "anthropic", defaultModel: "claude-3-5-sonnet" });
+    configureGovernanceRouter({
+      modes,
+      defaultMode,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-3-5-sonnet",
+    });
     governanceInitialized = true;
   }
 }
@@ -82,7 +116,7 @@ function resolveClaudeExecutable(): string {
       "@anthropic-ai",
       "claude-code",
       "bin",
-      "claude.exe"
+      "claude.exe",
     );
     return existsSync(exePath) ? exePath : "claude";
   } catch {
@@ -107,10 +141,7 @@ export async function probeClaudeCliVersion(): Promise<{ version: string | null;
       stdout: "pipe",
       stderr: "pipe",
     });
-    const [stdout] = await Promise.all([
-      new Response(proc.stdout).text(),
-      proc.exited,
-    ]);
+    const [stdout] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
     // `claude --version` prints something like "2.1.141 (Claude Code)" — extract
     // the leading semver-ish token. We don't enforce strict semver here.
     const match = stdout.match(/(\d+\.\d+\.\d+)/);
@@ -169,7 +200,7 @@ export function cleanSpawnEnv(): Record<string, string> {
     "CLAUDECODE",
     "CLAUDE_CODE_OAUTH_TOKEN",
     "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
-    "ANTHROPIC_API_KEY",  // see comment above — prevents accidental API-key billing
+    "ANTHROPIC_API_KEY", // see comment above — prevents accidental API-key billing
   ]);
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
@@ -183,7 +214,13 @@ export type CompactEvent =
   | { type: "warn"; turnCount: number }
   | { type: "auto-compact-start" }
   | { type: "auto-compact-done"; success: boolean }
-  | { type: "auto-compact-retry"; success: boolean; stdout: string; stderr: string; exitCode: number };
+  | {
+      type: "auto-compact-retry";
+      success: boolean;
+      stdout: string;
+      stderr: string;
+      exitCode: number;
+    };
 
 type CompactEventListener = (event: CompactEvent) => void;
 const compactListeners: CompactEventListener[] = [];
@@ -195,7 +232,9 @@ export function onCompactEvent(listener: CompactEventListener): void {
 
 function emitCompactEvent(event: CompactEvent): void {
   for (const listener of compactListeners) {
-    try { listener(event); } catch {}
+    try {
+      listener(event);
+    } catch {}
   }
 }
 
@@ -332,11 +371,20 @@ function enqueue<T>(fn: () => Promise<T>, threadId?: string): Promise<T> {
   if (threadId) {
     const current = threadQueues.get(threadId) ?? Promise.resolve();
     const task = current.then(fn, fn);
-    threadQueues.set(threadId, task.then(() => {}, () => {}));
+    threadQueues.set(
+      threadId,
+      task.then(
+        () => {},
+        () => {},
+      ),
+    );
     return task;
   }
   const task = globalQueue.then(fn, fn);
-  globalQueue = task.then(() => {}, () => {});
+  globalQueue = task.then(
+    () => {},
+    () => {},
+  );
   return task;
 }
 
@@ -373,7 +421,9 @@ export function killActive(): boolean {
   let killed = false;
   if (mainActiveProcs.size > 0) {
     for (const proc of mainActiveProcs) {
-      try { proc.kill(); } catch {}
+      try {
+        proc.kill();
+      } catch {}
     }
     mainActiveProcs.clear();
     killed = true;
@@ -404,7 +454,9 @@ function extractRateLimitMessage(stdout: string, stderr: string): string | null 
 }
 
 function sameModelConfig(a: ModelConfig, b: ModelConfig): boolean {
-  return a.model.trim().toLowerCase() === b.model.trim().toLowerCase() && a.api.trim() === b.api.trim();
+  return (
+    a.model.trim().toLowerCase() === b.model.trim().toLowerCase() && a.api.trim() === b.api.trim()
+  );
 }
 
 function hasModelConfig(value: ModelConfig): boolean {
@@ -436,7 +488,11 @@ function isNotFoundError(error: unknown): boolean {
  * env via this single source of truth — without it, the PTY path silently
  * dropped configured model selection and provider routing.
  */
-export function buildChildEnv(baseEnv: Record<string, string>, model: string, api: string): Record<string, string> {
+export function buildChildEnv(
+  baseEnv: Record<string, string>,
+  model: string,
+  api: string,
+): Record<string, string> {
   const childEnv: Record<string, string> = { ...baseEnv };
   const normalizedModel = model.trim().toLowerCase();
 
@@ -487,12 +543,14 @@ function resolveTimeoutMs(name: string): number {
   return minutes * 60_000;
 }
 
-
 // Cap stdout/stderr to prevent unbounded memory growth.
 // 10 MB is far beyond any real Claude response; protects against runaway streams only.
 const MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
 
-async function collectStream(stream: ReadableStream<Uint8Array>, maxBytes: number): Promise<string> {
+async function collectStream(
+  stream: ReadableStream<Uint8Array>,
+  maxBytes: number,
+): Promise<string> {
   const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
   let totalBytes = 0;
@@ -525,7 +583,6 @@ async function collectStream(stream: ReadableStream<Uint8Array>, maxBytes: numbe
   return new TextDecoder().decode(merged);
 }
 
-
 export interface RunOptions {
   modelOverride?: string;
 }
@@ -536,11 +593,12 @@ export async function runClaudeOnce(
   api: string,
   baseEnv: Record<string, string>,
   timeoutMs: number = DEFAULT_SESSION_TIMEOUT_MS,
-  cwd?: string
+  cwd?: string,
 ): Promise<{ rawStdout: string; stderr: string; exitCode: number }> {
   const args = [...baseArgs];
   const normalizedModel = model.trim().toLowerCase();
-  if (model.trim() && normalizedModel !== "glm" && normalizedModel !== "kimi-k2p6") args.push("--model", model.trim());
+  if (model.trim() && normalizedModel !== "glm" && normalizedModel !== "kimi-k2p6")
+    args.push("--model", model.trim());
 
   const proc = Bun.spawn(args, {
     stdout: "pipe",
@@ -552,17 +610,20 @@ export async function runClaudeOnce(
   mainActiveProcs.add(proc);
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
   const timeoutPromise = new Promise<never>((_, reject) => {
-    timeoutId = setTimeout(() => reject(new Error(`Claude session timed out after ${timeoutMs / 1000}s`)), timeoutMs);
+    timeoutId = setTimeout(
+      () => reject(new Error(`Claude session timed out after ${timeoutMs / 1000}s`)),
+      timeoutMs,
+    );
   });
 
   try {
-    const [rawStdout, stderr] = await Promise.race([
+    const [rawStdout, stderr] = (await Promise.race([
       Promise.all([
         collectStream(proc.stdout as ReadableStream<Uint8Array>, MAX_OUTPUT_BYTES),
         collectStream(proc.stderr as ReadableStream<Uint8Array>, MAX_OUTPUT_BYTES),
       ]),
       timeoutPromise,
-    ]) as [string, string];
+    ])) as [string, string];
 
     if (timeoutId) clearTimeout(timeoutId);
     await proc.exited;
@@ -577,8 +638,14 @@ export async function runClaudeOnce(
     if (timeoutId) clearTimeout(timeoutId);
     mainActiveProcs.delete(proc);
     // Kill the hung process
-    try { proc.kill("SIGTERM"); } catch {}
-    setTimeout(() => { try { proc.kill("SIGKILL"); } catch {} }, 5000);
+    try {
+      proc.kill("SIGTERM");
+    } catch {}
+    setTimeout(() => {
+      try {
+        proc.kill("SIGKILL");
+      } catch {}
+    }, 5000);
 
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[${new Date().toLocaleTimeString()}] ${message}`);
@@ -605,7 +672,7 @@ async function runClaudeStream(
   timeoutMs: number = DEFAULT_SESSION_TIMEOUT_MS,
   cwd?: string,
   onChunk?: (text: string) => void,
-  onToolEvent?: (line: string) => void
+  onToolEvent?: (line: string) => void,
 ): Promise<{ rawStdout: string; stderr: string; exitCode: number; sessionId?: string }> {
   const args = [...baseArgs];
   const normalizedModel = model.trim().toLowerCase();
@@ -643,14 +710,21 @@ async function runClaudeStream(
         if (!trimmed) continue;
         try {
           const event = JSON.parse(trimmed) as Record<string, unknown>;
-          if ((event.type === "system" || event.type === "result") && typeof event.session_id === "string") {
+          if (
+            (event.type === "system" || event.type === "result") &&
+            typeof event.session_id === "string"
+          ) {
             sessionId = event.session_id;
           }
           if (event.type === "result" && typeof event.result === "string") {
             resultText = event.result;
           }
           // Emit streaming callbacks if provided
-          if ((onChunk || onToolEvent) && event.type === "assistant" && (event.message as any)?.content) {
+          if (
+            (onChunk || onToolEvent) &&
+            event.type === "assistant" &&
+            (event.message as any)?.content
+          ) {
             const msg = event.message as any;
             const msgId: string = msg.id ?? "";
             if (msgId !== streamLastMsgId) {
@@ -679,7 +753,7 @@ async function runClaudeStream(
                 streamPendingToolCalls.delete(block.tool_use_id);
                 const text = extractToolResultText(block.content);
                 const firstLine = text.split("\n")[0].slice(0, 80);
-                const summary = block.is_error ? `Error: ${firstLine}` : (firstLine || "done");
+                const summary = block.is_error ? `Error: ${firstLine}` : firstLine || "done";
                 onToolEvent(`  ⎿  [${toolName}] ${summary}`);
               }
             }
@@ -695,23 +769,34 @@ async function runClaudeStream(
 
   let streamJsonTimeoutId: ReturnType<typeof setTimeout> | null = null;
   const timeoutPromise = new Promise<never>((_, reject) => {
-    streamJsonTimeoutId = setTimeout(() => reject(new Error(`Claude session timed out after ${timeoutMs / 1000}s`)), timeoutMs);
+    streamJsonTimeoutId = setTimeout(
+      () => reject(new Error(`Claude session timed out after ${timeoutMs / 1000}s`)),
+      timeoutMs,
+    );
   });
 
   try {
-    await Promise.race([
-      Promise.all([readStdout(), readStderr()]),
-      timeoutPromise,
-    ]);
+    await Promise.race([Promise.all([readStdout(), readStderr()]), timeoutPromise]);
     if (streamJsonTimeoutId) clearTimeout(streamJsonTimeoutId);
     await proc.exited;
     mainActiveProcs.delete(proc);
-    return { rawStdout: resultText, stderr: stderr.trim(), exitCode: proc.exitCode ?? 1, sessionId };
+    return {
+      rawStdout: resultText,
+      stderr: stderr.trim(),
+      exitCode: proc.exitCode ?? 1,
+      sessionId,
+    };
   } catch (err) {
     if (streamJsonTimeoutId) clearTimeout(streamJsonTimeoutId);
     mainActiveProcs.delete(proc);
-    try { proc.kill("SIGTERM"); } catch {}
-    setTimeout(() => { try { proc.kill("SIGKILL"); } catch {} }, 5000);
+    try {
+      proc.kill("SIGTERM");
+    } catch {}
+    setTimeout(() => {
+      try {
+        proc.kill("SIGKILL");
+      } catch {}
+    }, 5000);
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[${new Date().toLocaleTimeString()}] ${message}`);
     return { rawStdout: "", stderr: message, exitCode: 124, sessionId };
@@ -723,13 +808,20 @@ function formatToolCallSummary(name: string, input: Record<string, unknown>): st
   switch (name) {
     case "Write":
     case "Edit":
-    case "Read":    return `${name}(${s(input.file_path)})`;
-    case "Bash":    return `Bash(${s(input.command, 60)})`;
-    case "Grep":    return `Grep(${s(input.pattern)} in ${s(input.path ?? ".")})`;
-    case "Glob":    return `Glob(${s(input.pattern)})`;
-    case "WebSearch": return `WebSearch(${s(input.query)})`;
-    case "WebFetch":  return `WebFetch(${s(input.url, 60)})`;
-    default:        return `${name}(...)`;
+    case "Read":
+      return `${name}(${s(input.file_path)})`;
+    case "Bash":
+      return `Bash(${s(input.command, 60)})`;
+    case "Grep":
+      return `Grep(${s(input.pattern)} in ${s(input.path ?? ".")})`;
+    case "Glob":
+      return `Glob(${s(input.pattern)})`;
+    case "WebSearch":
+      return `WebSearch(${s(input.query)})`;
+    case "WebFetch":
+      return `WebFetch(${s(input.url, 60)})`;
+    default:
+      return `${name}(...)`;
   }
 }
 
@@ -737,8 +829,8 @@ function extractToolResultText(content: unknown): string {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {
     return (content as Array<{ type?: string; text?: string }>)
-      .filter(b => b.type === "text")
-      .map(b => b.text ?? "")
+      .filter((b) => b.type === "text")
+      .map((b) => b.text ?? "")
       .join("");
   }
   return String(content ?? "");
@@ -757,8 +849,14 @@ async function runClaudeStreaming(
   api: string,
   baseEnv: Record<string, string>,
   onChunk?: (text: string) => void,
-  onToolEvent?: (line: string) => void
-): Promise<{ result: string; stderr: string; exitCode: number; sessionId?: string; isRateLimit: boolean }> {
+  onToolEvent?: (line: string) => void,
+): Promise<{
+  result: string;
+  stderr: string;
+  exitCode: number;
+  sessionId?: string;
+  isRateLimit: boolean;
+}> {
   const args = [...baseArgs];
   const normalizedModel = model.trim().toLowerCase();
   if (model.trim() && normalizedModel !== "glm") args.push("--model", model.trim());
@@ -789,6 +887,7 @@ async function runClaudeStreaming(
     buf += decoder.decode(value, { stream: true });
 
     let nl: number;
+    // biome-ignore lint/suspicious/noAssignInExpressions: standard indexOf-loop idiom; refactor would obscure intent.
     while ((nl = buf.indexOf("\n")) !== -1) {
       const line = buf.slice(0, nl).trim();
       buf = buf.slice(nl + 1);
@@ -828,7 +927,7 @@ async function runClaudeStreaming(
               pendingToolCalls.delete(block.tool_use_id);
               const text = extractToolResultText(block.content);
               const firstLine = text.split("\n")[0].slice(0, 80);
-              const summary = block.is_error ? `Error: ${firstLine}` : (firstLine || "done");
+              const summary = block.is_error ? `Error: ${firstLine}` : firstLine || "done";
               onToolEvent(`  ⎿  [${name}] ${summary}`);
             }
           }
@@ -905,10 +1004,14 @@ export async function ensureAgentDir(name: string): Promise<string> {
   const realRoot = await realpath(agentsRoot);
   const realDir = await realpath(dir);
   if (!realRoot.startsWith(realProjectDir + sep)) {
-    throw new Error(`agents/ root "${realRoot}" resolves outside the project directory via symlink — rejecting`);
+    throw new Error(
+      `agents/ root "${realRoot}" resolves outside the project directory via symlink — rejecting`,
+    );
   }
   if (!realDir.startsWith(realRoot + sep)) {
-    throw new Error(`Agent directory "${realDir}" resolves outside the agents root via symlink — rejecting`);
+    throw new Error(
+      `Agent directory "${realDir}" resolves outside the agents root via symlink — rejecting`,
+    );
   }
   return realDir;
 }
@@ -925,11 +1028,7 @@ export async function ensureProjectClaudeMd(): Promise<void> {
   if (existsSync(PROJECT_CLAUDE_MD)) return;
 
   const promptContent = (await loadPrompts()).trim();
-  const managedBlock = [
-    CLAUDECLAW_BLOCK_START,
-    promptContent,
-    CLAUDECLAW_BLOCK_END,
-  ].join("\n");
+  const managedBlock = [CLAUDECLAW_BLOCK_START, promptContent, CLAUDECLAW_BLOCK_END].join("\n");
 
   let content = "";
 
@@ -938,7 +1037,10 @@ export async function ensureProjectClaudeMd(): Promise<void> {
       const legacy = await readFile(LEGACY_PROJECT_CLAUDE_MD, "utf8");
       content = legacy.trim();
     } catch (e) {
-      console.error(`[${new Date().toLocaleTimeString()}] Failed to read legacy .claude/CLAUDE.md:`, e);
+      console.error(
+        `[${new Date().toLocaleTimeString()}] Failed to read legacy .claude/CLAUDE.md:`,
+        e,
+      );
       return;
     }
   }
@@ -948,7 +1050,7 @@ export async function ensureProjectClaudeMd(): Promise<void> {
     normalized.includes(CLAUDECLAW_BLOCK_START) && normalized.includes(CLAUDECLAW_BLOCK_END);
   const managedPattern = new RegExp(
     `${CLAUDECLAW_BLOCK_START}[\\s\\S]*?${CLAUDECLAW_BLOCK_END}`,
-    "m"
+    "m",
   );
 
   const merged = hasManagedBlock
@@ -1000,9 +1102,10 @@ export function setPermissionMode(mode: PermissionMode): void {
  */
 export function buildSecurityArgs(security: SecurityConfig): string[] {
   const permissionMode = getPermissionMode();
-  const args: string[] = permissionMode === "bypassPermissions"
-    ? ["--dangerously-skip-permissions"]
-    : ["--permission-mode", permissionMode];
+  const args: string[] =
+    permissionMode === "bypassPermissions"
+      ? ["--dangerously-skip-permissions"]
+      : ["--permission-mode", permissionMode];
 
   switch (security.level) {
     case "locked":
@@ -1064,7 +1167,10 @@ export async function loadHeartbeatPromptTemplate(): Promise<string> {
       if (content.trim()) return content.trim();
     } catch (e) {
       if (!isNotFoundError(e)) {
-        console.warn(`[${new Date().toLocaleTimeString()}] Failed to read heartbeat prompt file ${file}:`, e);
+        console.warn(
+          `[${new Date().toLocaleTimeString()}] Failed to read heartbeat prompt file ${file}:`,
+          e,
+        );
       }
     }
   }
@@ -1079,18 +1185,26 @@ export async function runCompact(
   baseEnv: Record<string, string>,
   securityArgs: string[],
   timeoutMs: number,
-  cwd?: string
+  cwd?: string,
 ): Promise<boolean> {
   const compactArgs = [
-    CLAUDE_EXECUTABLE, "-p", "/compact",
-    "--output-format", "text",
-    "--resume", sessionId,
+    CLAUDE_EXECUTABLE,
+    "-p",
+    "/compact",
+    "--output-format",
+    "text",
+    "--resume",
+    sessionId,
     ...securityArgs,
   ];
-  console.log(`[${new Date().toLocaleTimeString()}] Running /compact on session ${sessionId.slice(0, 8)}...`);
+  console.log(
+    `[${new Date().toLocaleTimeString()}] Running /compact on session ${sessionId.slice(0, 8)}...`,
+  );
   const result = await runClaudeOnce(compactArgs, model, api, baseEnv, timeoutMs, cwd);
   const success = result.exitCode === 0;
-  console.log(`[${new Date().toLocaleTimeString()}] Compact ${success ? "succeeded" : `failed (exit ${result.exitCode})`}`);
+  console.log(
+    `[${new Date().toLocaleTimeString()}] Compact ${success ? "succeeded" : `failed (exit ${result.exitCode})`}`,
+  );
   return success;
 }
 
@@ -1098,7 +1212,9 @@ export async function runCompact(
  * High-level compact: resolves session + settings internally.
  * Returns { success, message }.
  */
-export async function compactCurrentSession(agentName?: string): Promise<{ success: boolean; message: string }> {
+export async function compactCurrentSession(
+  agentName?: string,
+): Promise<{ success: boolean; message: string }> {
   const existing = await getSession(agentName);
   if (!existing) return { success: false, message: "No active session to compact." };
 
@@ -1115,7 +1231,7 @@ export async function compactCurrentSession(agentName?: string): Promise<{ succe
     baseEnv,
     securityArgs,
     timeoutMs,
-    compactCwd
+    compactCwd,
   );
 
   return ok
@@ -1138,7 +1254,7 @@ async function evaluateToolForExecution(
     sessionId?: string;
     claudeSessionId?: string | null;
     eventId: string;
-  }
+  },
 ): Promise<{ allowed: boolean; decision: import("./policy/engine").PolicyDecision }> {
   const gc = getGovernanceClient();
   const request: import("./policy/engine").ToolRequestContext = {
@@ -1222,7 +1338,7 @@ async function loadAgentPrompts(agentName: string): Promise<string> {
 // because Discord threads have their own session store. agentName is used only for cwd isolation.
 export async function compactCurrentThreadSession(
   threadId: string,
-  agentName?: string
+  agentName?: string,
 ): Promise<{ success: boolean; message: string }> {
   const existing = await getThreadSession(threadId);
   if (!existing) return { success: false, message: "No active session to compact." };
@@ -1240,11 +1356,14 @@ export async function compactCurrentThreadSession(
     baseEnv,
     securityArgs,
     timeoutMs,
-    compactCwd
+    compactCwd,
   );
 
   return ok
-    ? { success: true, message: `✅ Thread session compact complete (${existing.sessionId.slice(0, 8)})` }
+    ? {
+        success: true,
+        message: `✅ Thread session compact complete (${existing.sessionId.slice(0, 8)})`,
+      }
     : { success: false, message: `❌ Compact failed (${existing.sessionId.slice(0, 8)})` };
 }
 
@@ -1257,605 +1376,751 @@ async function execClaude(
   agentName?: string,
   timeoutCategory?: string,
   onChunk?: (text: string) => void,
-  onToolEvent?: (line: string) => void
+  onToolEvent?: (line: string) => void,
 ): Promise<RunResult> {
   mainRunCount++;
   persistRunCount();
   try {
-  await mkdir(LOGS_DIR, { recursive: true });
+    await mkdir(LOGS_DIR, { recursive: true });
 
-  // Rotate the global session if thresholds are exceeded (thread/agent sessions are not rotated).
-  let rotationSummary: string | null = null;
-  if (!threadId && !agentName) {
-    const { session: sessionConfig } = getSettings();
-    if (sessionConfig.autoRotate) {
-      const peeked = await peekSession();
-      if (peeked && needsRotation(peeked, sessionConfig)) {
-        rotationSummary = await rotateSession(sessionConfig);
+    // Rotate the global session if thresholds are exceeded (thread/agent sessions are not rotated).
+    let rotationSummary: string | null = null;
+    if (!threadId && !agentName) {
+      const { session: sessionConfig } = getSettings();
+      if (sessionConfig.autoRotate) {
+        const peeked = await peekSession();
+        if (peeked && needsRotation(peeked, sessionConfig)) {
+          rotationSummary = await rotateSession(sessionConfig);
+        }
       }
     }
-  }
 
-  const existing = threadId
-    ? await getThreadSession(threadId)
-    : await getSession(agentName);
-  const isNew = !existing;
-  // Start the watchdog clock for resumed sessions (we know the ID immediately).
-  if (existing) startSession(existing.sessionId);
-  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const logFile = join(LOGS_DIR, `${name}-${timestamp}.log`);
+    const existing = threadId ? await getThreadSession(threadId) : await getSession(agentName);
+    const isNew = !existing;
+    // Start the watchdog clock for resumed sessions (we know the ID immediately).
+    if (existing) startSession(existing.sessionId);
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const logFile = join(LOGS_DIR, `${name}-${timestamp}.log`);
 
-  const settings = getSettings();
-  const { security, model, api, fallback, agentic, watchdog } = settings;
+    const settings = getSettings();
+    const { security, model, api, fallback, agentic, watchdog } = settings;
 
-  // Generate invocation ID for tracking
-  const invocationId = crypto.randomUUID();
-  const invocationSessionId = existing?.sessionId;
+    // Generate invocation ID for tracking
+    const invocationId = crypto.randomUUID();
+    const invocationSessionId = existing?.sessionId;
 
-  // Initialize watchdog metrics
-  await recordExecutionMetric({ invocationId, sessionId: invocationSessionId }, {});
-  // Minimal watchdog: start clock for resumed sessions (new sessions get startSession after JSON parse)
-  if (invocationSessionId) watchdogStart(invocationSessionId);
+    // Initialize watchdog metrics
+    await recordExecutionMetric({ invocationId, sessionId: invocationSessionId }, {});
+    // Minimal watchdog: start clock for resumed sessions (new sessions get startSession after JSON parse)
+    if (invocationSessionId) watchdogStart(invocationSessionId);
 
-  // Determine which model to use based on agentic routing
-  let primaryConfig: ModelConfig;
-  let taskType = "unknown";
-  let routingReasoning = "";
+    // Determine which model to use based on agentic routing
+    let primaryConfig: ModelConfig;
+    let taskType = "unknown";
+    let routingReasoning = "";
 
-  if (modelOverride) {
-    primaryConfig = { model: modelOverride, api };
-    taskType = "job-override";
-    routingReasoning = `override: ${modelOverride}`;
-    console.log(
-      `[${new Date().toLocaleTimeString()}] Job model override: ${modelOverride}`,
-    );
-  } else if (agentic.enabled) {
-    ensureGovernanceRouter(agentic.modes, agentic.defaultMode);
-    const routing = await governanceSelectModel({
-      prompt,
-      taskType: agentic.defaultMode,
-      sessionId: existing?.sessionId,
-      channelId: undefined,
-      source: name,
-    });
-    primaryConfig = { model: routing.selectedModel, api: routing.selectedProvider === "openai" ? "" : api };
-    taskType = routing.reason;
-    routingReasoning = routing.reason;
-    // Handle budget block
-    if (routing.budgetState === "block") {
-      console.warn(`[${new Date().toLocaleTimeString()}] Execution blocked: budget limit exceeded`);
-      // Record failure and return
-      await recordInvocationFailure(invocationId, { type: "budget-blocked", message: `Budget state: ${routing.budgetState}` });
-      return { stdout: "", stderr: "Execution blocked: budget limit exceeded", exitCode: 0 };
-    }
-    console.log(
-      `[${new Date().toLocaleTimeString()}] Agentic routing: ${routing.selectedModel} (${routing.reason})`
-    );
-  } else {
-    primaryConfig = { model, api };
-  }
-
-  const fallbackConfig: ModelConfig = {
-    model: fallback?.model ?? "",
-    api: fallback?.api ?? "",
-  };
-  const securityArgs = buildSecurityArgs(security);
-  const timeoutMs = timeoutMsOverride ?? resolveTimeoutMs(timeoutCategory ?? name);
-
-  console.log(
-    `[${new Date().toLocaleTimeString()}] Running: ${name} (${isNew ? "new session" : `resume ${existing.sessionId.slice(0, 8)}`}, security: ${security.level}, timeout: ${timeoutMs / 60_000}m)`
-  );
-
-  // Plugins: before_agent_start — fired before Claude is invoked.
-  const pm = getPluginManager();
-  const ctx = pluginCtx(threadId, agentName);
-  if (pm) await pm.emit("before_agent_start", { prompt }, ctx);
-
-  // stream-json emits NDJSON events as Claude works, including during subagent (Task tool)
-  // orchestration. This keeps the process alive and producing output rather than silently
-  // blocking until all spawned agents finish. --verbose is required for stream-json in
-  // print (-p) mode. Session ID is captured from the system/init event; the final result
-  // text comes from the result event — no separate output format needed for new vs resumed.
-  const args = [CLAUDE_EXECUTABLE, "-p", prompt, "--output-format", "stream-json", "--verbose", ...securityArgs];
-
-  if (!isNew) {
-    args.push("--resume", existing.sessionId);
-  }
-
-  // Build the appended system prompt: CLAUDE.md + directory scoping
-  // This is passed on EVERY invocation (not just new sessions) because
-  // --append-system-prompt does not persist across --resume.
-  const memPath = getMemoryPath(agentName);
-  // Prompt files (IDENTITY.md, USER.md, SOUL.md) are already embedded in
-  // CLAUDE.md by ensureProjectClaudeMd(), which runs before every call.
-  const appendParts: string[] = [
-    `You are running inside ClaudeClaw. IMPORTANT: After completing any task, you MUST update your memory file at ${memPath} using the Write tool.`,
-  ];
-
-  if (rotationSummary) appendParts.push(`Context from the previous session:\n\n${rotationSummary}`);
-
-  try {
-    const claudeMd = await Bun.file(PROJECT_CLAUDE_MD).text();
-    if (claudeMd.trim()) appendParts.push(claudeMd.trim());
-  } catch (e) {
-    console.error(`[${new Date().toLocaleTimeString()}] Failed to read project CLAUDE.md:`, e);
-  }
-
-  // Plugins: before_prompt_build — lets plugins inject system context
-  if (pm) {
-    const pluginResult = await pm.emit("before_prompt_build", { prompt }, ctx);
-    if (pluginResult?.appendSystemContext) appendParts.push(pluginResult.appendSystemContext);
-  }
-
-  if (agentName) {
-    // Agent path: load only the agent's IDENTITY/SOUL/CLAUDE.md.
-    const agentPrompts = await loadAgentPrompts(agentName);
-    if (agentPrompts) appendParts.push(agentPrompts);
-  } else {
-    // Main session path: global prompts + project CLAUDE.md.
-    const promptContent = await loadPrompts();
-    if (promptContent) appendParts.push(promptContent);
-
-    if (existsSync(PROJECT_CLAUDE_MD)) {
-      try {
-        const claudeMd = await Bun.file(PROJECT_CLAUDE_MD).text();
-        if (claudeMd.trim()) appendParts.push(claudeMd.trim());
-      } catch (e) {
-        console.error(`[${new Date().toLocaleTimeString()}] Failed to read project CLAUDE.md:`, e);
+    if (modelOverride) {
+      primaryConfig = { model: modelOverride, api };
+      taskType = "job-override";
+      routingReasoning = `override: ${modelOverride}`;
+      console.log(`[${new Date().toLocaleTimeString()}] Job model override: ${modelOverride}`);
+    } else if (agentic.enabled) {
+      ensureGovernanceRouter(agentic.modes, agentic.defaultMode);
+      const routing = await governanceSelectModel({
+        prompt,
+        taskType: agentic.defaultMode,
+        sessionId: existing?.sessionId,
+        channelId: undefined,
+        source: name,
+      });
+      primaryConfig = {
+        model: routing.selectedModel,
+        api: routing.selectedProvider === "openai" ? "" : api,
+      };
+      taskType = routing.reason;
+      routingReasoning = routing.reason;
+      // Handle budget block
+      if (routing.budgetState === "block") {
+        console.warn(
+          `[${new Date().toLocaleTimeString()}] Execution blocked: budget limit exceeded`,
+        );
+        // Record failure and return
+        await recordInvocationFailure(invocationId, {
+          type: "budget-blocked",
+          message: `Budget state: ${routing.budgetState}`,
+        });
+        return { stdout: "", stderr: "Execution blocked: budget limit exceeded", exitCode: 0 };
       }
-    }
-  }
-
-  // Load memory (put after static files for optimal prompt caching)
-  if (isNew) await ensureMemoryFile(agentName);
-  const memoryContent = await loadMemory(agentName);
-  if (memoryContent) {
-    appendParts.push(`## Your Memory (from MEMORY.md)\n\n${memoryContent}`);
-  }
-  const memoryInstructions = await loadMemoryInstructions(agentName);
-  if (memoryInstructions) appendParts.push(memoryInstructions);
-
-  if (security.level !== "unrestricted") appendParts.push(DIR_SCOPE_PROMPT);
-  if (appendParts.length > 0) {
-    args.push("--append-system-prompt", appendParts.join("\n\n"));
-  }
-
-  const baseEnv = cleanSpawnEnv();
-  const spawnCwd = agentName ? await ensureAgentDir(agentName) : undefined;
-
-  // Record invocation start
-  const invocationContext = {
-    sessionId: existing?.sessionId,
-    claudeSessionId: existing?.sessionId ?? null,
-    source: name,
-    channelId: undefined,
-    provider: primaryConfig.model.startsWith("gpt") || primaryConfig.model.startsWith("o1") || primaryConfig.model.startsWith("o3") ? "openai" : "anthropic",
-    model: primaryConfig.model,
-    metadata: { taskType, routingReasoning },
-  };
-  await recordInvocationStart(invocationContext, invocationId);
-
-  // Capture memory file mtime before invocation (for fallback write detection)
-  let memMtimeBefore = 0;
-  try {
-    const memPath = getMemoryPath(agentName);
-    if (existsSync(memPath)) {
-      const { statSync } = await import("fs");
-      memMtimeBefore = statSync(memPath).mtimeMs;
-    }
-  } catch {}
-
-  // ──────────────────────────────────────────────────────────────────────────
-  // PTY routing decision (SPEC §5.2 + §7.1).
-  //
-  // Order of precedence:
-  //   1. `name === "bootstrap"` → ALWAYS legacy `runClaudeStream` (§7.1).
-  //      The bootstrap call seeds a fresh global session and is low-volume;
-  //      keeping it on the legacy path simplifies the supervisor.
-  //   2. `settings.pty.enabled === false` → legacy `runClaudeStream` (§5.2).
-  //   3. Otherwise → `runOnPty(sessionKey, …)` against the supervisor.
-  //
-  // Downstream logic (rate-limit fallback, corruption recovery, stale-session
-  // recovery) is unchanged — it consumes `exec` with the same shape regardless.
-  // Per §5.3 the stale-session retry path explicitly uses runClaudeStream
-  // directly, so we don't compound supervisor recovery with downstream recovery.
-  const isInfraCall = name === "bootstrap";
-  const useLegacyPath = !settings.pty.enabled || isInfraCall;
-  let exec: { rawStdout: string; stderr: string; exitCode: number; sessionId?: string };
-  if (useLegacyPath) {
-    exec = await runClaudeStream(args, primaryConfig.model, primaryConfig.api, baseEnv, timeoutMs, spawnCwd, onChunk, onToolEvent);
-  } else {
-    const sessionKey = threadId
-      ? `thread:${threadId}`
-      : agentName
-        ? `agent:${agentName}`
-        : "global";
-    // Phase D fixes #2 (CRITICAL-1) and #3 (MAJOR-2/3): thread the assembled
-    // --append-system-prompt payload AND the canonical securityArgs through
-    // to the PTY path so named agents keep their identity/memory and the
-    // operator's permissionMode is honoured (instead of always
-    // --dangerously-skip-permissions).
-    //
-    // Codex Phase D #1: ALSO thread the resolved primaryConfig.model and
-    // primaryConfig.api through, so the PTY supervisor can:
-    //   - pass `--model <model>` (matching what the legacy path does), and
-    //   - build child env with `buildChildEnv(baseEnv, model, api)` —
-    //     applying ANTHROPIC_AUTH_TOKEN, the GLM/Kimi base-URL shims, etc.
-    // Without these, settings.api / agentic-router model choices / GLM /
-    // Kimi configuration silently drop on the PTY path.
-    const appendSystemPrompt = appendParts.length > 0 ? appendParts.join("\n\n") : undefined;
-    exec = await runOnPty(sessionKey, prompt, {
-      timeoutMs,
-      threadId,
-      agentName,
-      modelOverride: primaryConfig.model || (modelOverride ?? undefined),
-      api: primaryConfig.api,
-      securityArgs,
-      appendSystemPrompt,
-      onChunk,
-      onToolEvent,
-    });
-  }
-  const primaryRateLimit = extractRateLimitMessage(exec.rawStdout, exec.stderr);
-  let usedFallback = false;
-
-  if (primaryRateLimit && hasModelConfig(fallbackConfig) && !sameModelConfig(primaryConfig, fallbackConfig)) {
-    console.warn(
-      `[${new Date().toLocaleTimeString()}] Claude limit reached; retrying with fallback${fallbackConfig.model ? ` (${fallbackConfig.model})` : ""}...`
-    );
-    const fallbackSession = await getFallbackSession(agentName, threadId);
-    const fallbackArgs = [CLAUDE_EXECUTABLE, "-p", prompt, "--output-format", "stream-json", "--verbose", ...securityArgs];
-    if (fallbackSession) {
-      fallbackArgs.push("--resume", fallbackSession.sessionId);
-    }
-    if (appendParts.length > 0) {
-      fallbackArgs.push("--append-system-prompt", appendParts.join("\n\n"));
-    }
-    exec = await runClaudeStream(fallbackArgs, fallbackConfig.model, fallbackConfig.api, baseEnv, timeoutMs, spawnCwd);
-    usedFallback = true;
-    let fallbackRateLimit = extractRateLimitMessage(exec.rawStdout, exec.stderr);
-
-    // If the fallback resumed a corrupted session, reset it and retry fresh.
-    if (!fallbackRateLimit && fallbackSession && exec.exitCode !== 0 && SIGNATURE_ERROR.test(exec.rawStdout + exec.stderr)) {
-      await resetFallbackSession(agentName, threadId);
-      const flabel = threadId ? ` (thread ${threadId.slice(0, 8)})` : agentName ? ` (agent ${agentName})` : "";
-      console.warn(
-        `[${new Date().toLocaleTimeString()}] Detected corrupted fallback session (thinking block signature mismatch). Reset${flabel}, retrying fallback fresh...`
+      console.log(
+        `[${new Date().toLocaleTimeString()}] Agentic routing: ${routing.selectedModel} (${routing.reason})`,
       );
-      const freshFallbackArgs = fallbackArgs.filter((a) => a !== "--resume" && a !== fallbackSession.sessionId);
-      exec = await runClaudeStream(freshFallbackArgs, fallbackConfig.model, fallbackConfig.api, baseEnv, timeoutMs, spawnCwd);
-      fallbackRateLimit = extractRateLimitMessage(exec.rawStdout, exec.stderr);
-      if (!fallbackRateLimit && exec.sessionId) {
-        await createFallbackSession(exec.sessionId, agentName, threadId);
-        console.log(`[${new Date().toLocaleTimeString()}] Fallback session recovered: ${exec.sessionId}${flabel}`);
-      }
-    } else if (!fallbackRateLimit) {
-      if (!fallbackSession && exec.sessionId) {
-        await createFallbackSession(exec.sessionId, agentName, threadId);
-        const label = threadId ? ` (thread ${threadId.slice(0, 8)})` : agentName ? ` (agent ${agentName})` : "";
-        console.log(`[${new Date().toLocaleTimeString()}] Fallback session created: ${exec.sessionId}${label}`);
-      } else if (fallbackSession) {
-        await incrementFallbackTurn(agentName, threadId);
-      }
-    }
-  }
-
-  let rawStdout = exec.rawStdout;
-  let stderr = exec.stderr;
-  let exitCode = exec.exitCode;
-  let stdout = rawStdout;
-  let sessionId = existing?.sessionId ?? "unknown";
-
-  // Auto-detect corrupted primary session from thinking block signature mismatch.
-  // Gated on !usedFallback — fallback corruption is handled inside the fallback block above.
-  if (exitCode !== 0 && !isNew && !usedFallback && SIGNATURE_ERROR.test(rawStdout + stderr)) {
-    if (threadId) {
-      await removeThreadSession(threadId);
-    } else if (agentName) {
-      await resetSession(agentName);
     } else {
-      await backupSession();
-    }
-    const label = threadId ? ` (thread ${threadId.slice(0, 8)})` : agentName ? ` (agent ${agentName})` : "";
-    console.warn(
-      `[${new Date().toLocaleTimeString()}] Detected corrupted session (thinking block signature mismatch). Reset${label}, retrying with fresh session...`
-    );
-    const freshArgs = args.filter((a) => a !== "--resume" && a !== existing?.sessionId);
-    const fmtIdx = freshArgs.indexOf("--output-format");
-    if (fmtIdx !== -1 && fmtIdx + 1 < freshArgs.length) freshArgs[fmtIdx + 1] = "stream-json";
-    exec = await runClaudeStream(freshArgs, primaryConfig.model, primaryConfig.api, baseEnv, timeoutMs, spawnCwd);
-    rawStdout = exec.rawStdout;
-    stderr = exec.stderr;
-    exitCode = exec.exitCode;
-    stdout = rawStdout;
-
-    // Persist the fresh session ID so subsequent calls resume it correctly.
-    if (exec.sessionId) {
-      sessionId = exec.sessionId;
-      if (threadId) {
-        await createThreadSession(threadId, sessionId);
-        console.log(`[${new Date().toLocaleTimeString()}] Thread session recovered: ${sessionId} (thread ${threadId.slice(0, 8)})`);
-      } else {
-        await createSession(sessionId, agentName);
-        const sLabel = agentName ? ` (agent ${agentName})` : "";
-        console.log(`[${new Date().toLocaleTimeString()}] Session recovered: ${sessionId}${sLabel}`);
-      }
-      startSession(sessionId);
-    }
-  }
-
-  let recoveredFromStale = false;
-
-  // --- Stale session recovery ---
-  // Claude Code returns "No conversation found with session ID: <id>" when
-  // --resume points at a session it no longer has (cleared, expired, etc.).
-  // Back up the dead ID, drop --resume, and retry as a new session so the
-  // user isn't permanently stuck.
-  if (
-    !isNew &&
-    exitCode !== 0 &&
-    existing &&
-    isStaleSessionError(rawStdout, stderr)
-  ) {
-    console.warn(
-      `[${new Date().toLocaleTimeString()}] Stale session ${existing.sessionId.slice(0, 8)} for ${name}; recovering with a new session...`
-    );
-
-    if (usedFallback) {
-      await resetFallbackSession(agentName, threadId);
-    } else if (threadId) {
-      await removeThreadSession(threadId);
-    } else if (agentName) {
-      await resetSession(agentName);
-    } else {
-      await backupSession();
+      primaryConfig = { model, api };
     }
 
-    const retryArgs = withOutputFormat(stripResume(args), "stream-json");
-    const retryConfig = usedFallback ? fallbackConfig : primaryConfig;
-    exec = await runClaudeStream(
-      retryArgs,
-      retryConfig.model,
-      retryConfig.api,
-      baseEnv,
-      timeoutMs,
-      spawnCwd
+    const fallbackConfig: ModelConfig = {
+      model: fallback?.model ?? "",
+      api: fallback?.api ?? "",
+    };
+    const securityArgs = buildSecurityArgs(security);
+    const timeoutMs = timeoutMsOverride ?? resolveTimeoutMs(timeoutCategory ?? name);
+
+    console.log(
+      `[${new Date().toLocaleTimeString()}] Running: ${name} (${isNew ? "new session" : `resume ${existing.sessionId.slice(0, 8)}`}, security: ${security.level}, timeout: ${timeoutMs / 60_000}m)`,
     );
 
-    rawStdout = exec.rawStdout;
-    stderr = exec.stderr;
-    exitCode = exec.exitCode;
-    stdout = rawStdout;
-    recoveredFromStale = true;
-  }
+    // Plugins: before_agent_start — fired before Claude is invoked.
+    const pm = getPluginManager();
+    const ctx = pluginCtx(threadId, agentName);
+    if (pm) await pm.emit("before_agent_start", { prompt }, ctx);
 
-  const rateLimitMessage = extractRateLimitMessage(rawStdout, stderr);
+    // stream-json emits NDJSON events as Claude works, including during subagent (Task tool)
+    // orchestration. This keeps the process alive and producing output rather than silently
+    // blocking until all spawned agents finish. --verbose is required for stream-json in
+    // print (-p) mode. Session ID is captured from the system/init event; the final result
+    // text comes from the result event — no separate output format needed for new vs resumed.
+    const args = [
+      CLAUDE_EXECUTABLE,
+      "-p",
+      prompt,
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      ...securityArgs,
+    ];
 
-  if (rateLimitMessage) {
-    stdout = rateLimitMessage;
-    const resetTime = parseRateLimitResetTime(rateLimitMessage);
-    rateLimitResetAt = resetTime ?? (Date.now() + 60 * 60_000);
-    rateLimitNotified = false;
-    console.warn(
-      `[${new Date().toLocaleTimeString()}] Rate limit detected. Reset at: ${new Date(rateLimitResetAt).toISOString()}`
-    );
-  }
-
-  // Surface stderr when the result event never arrived (abort, tool error, etc.)
-  if (!rateLimitMessage && exitCode !== 0 && !stdout && stderr) {
-    stdout = stderr;
-  }
-
-  // Capture session ID from stream events and persist for new sessions.
-  // Gate only on isNew + sessionId present — not on exitCode, so a session that timed
-  // out mid-run is still persisted and can be resumed on the next message.
-  const parseAsNew = isNew || recoveredFromStale;
-  if (!rateLimitMessage && parseAsNew && exec.sessionId) {
-    sessionId = exec.sessionId;
-    if (recoveredFromStale && usedFallback) {
-      await createFallbackSession(sessionId, agentName, threadId);
-      const label = threadId ? ` (thread ${threadId.slice(0, 8)})` : agentName ? ` (agent ${agentName})` : "";
-      console.log(`[${new Date().toLocaleTimeString()}] Fallback session created: ${sessionId}${label}`);
-      startSession(sessionId);
-    } else if (!usedFallback) {
-      if (threadId) {
-        await createThreadSession(threadId, sessionId);
-        console.log(`[${new Date().toLocaleTimeString()}] Thread session created: ${sessionId} (thread ${threadId.slice(0, 8)})`);
-      } else {
-        await createSession(sessionId, agentName);
-        const label = agentName ? ` (agent ${agentName})` : "";
-        console.log(`[${new Date().toLocaleTimeString()}] Session created: ${sessionId}${label}`);
-      }
-      startSession(sessionId);
+    if (!isNew) {
+      args.push("--resume", existing.sessionId);
     }
-  }
 
-  const result: RunResult = {
-    stdout,
-    stderr,
-    exitCode,
-  };
+    // Build the appended system prompt: CLAUDE.md + directory scoping
+    // This is passed on EVERY invocation (not just new sessions) because
+    // --append-system-prompt does not persist across --resume.
+    const memPath = getMemoryPath(agentName);
+    // Prompt files (IDENTITY.md, USER.md, SOUL.md) are already embedded in
+    // CLAUDE.md by ensureProjectClaudeMd(), which runs before every call.
+    const appendParts: string[] = [
+      `You are running inside ClaudeClaw. IMPORTANT: After completing any task, you MUST update your memory file at ${memPath} using the Write tool.`,
+    ];
 
-  // Record successful completion
-  await recordInvocationCompletion(invocationId, undefined, undefined);
+    if (rotationSummary)
+      appendParts.push(`Context from the previous session:\n\n${rotationSummary}`);
 
-  // Check watchdog limits
-  const watchdogDecision = await checkLimits({ invocationId, sessionId: invocationSessionId });
-  if (watchdogDecision.state === "suspend" || watchdogDecision.state === "kill") {
-    console.warn(`[${new Date().toLocaleTimeString()}] Watchdog ${watchdogDecision.state}: ${watchdogDecision.reason}`);
-    await watchdogHandleTrigger({ invocationId, sessionId: invocationSessionId }, watchdogDecision);
-    // Send escalation notification for watchdog triggers
     try {
-      const { handleWatchdogTrigger } = await import("./escalation");
-      await handleWatchdogTrigger(watchdogDecision, { invocationId, sessionId: invocationSessionId });
-    } catch (escalationError) {
-      console.error("[escalation] Failed to send watchdog notification:", escalationError);
+      const claudeMd = await Bun.file(PROJECT_CLAUDE_MD).text();
+      if (claudeMd.trim()) appendParts.push(claudeMd.trim());
+    } catch (e) {
+      console.error(`[${new Date().toLocaleTimeString()}] Failed to read project CLAUDE.md:`, e);
     }
-  }
 
-  // Plugins: agent_end — fire-and-forget, does not block response
-  if (pm && exitCode === 0) {
-    pm.emitAsync("agent_end", {
-      messages: [{ role: "assistant", content: stdout }],
-    }, ctx);
-  }
+    // Plugins: before_prompt_build — lets plugins inject system context
+    if (pm) {
+      const pluginResult = await pm.emit("before_prompt_build", { prompt }, ctx);
+      if (pluginResult?.appendSystemContext) appendParts.push(pluginResult.appendSystemContext);
+    }
 
-  const output = [
-    `# ${name}`,
-    `Date: ${new Date().toISOString()}`,
-    `Session: ${sessionId} (${isNew ? "new" : "resumed"})`,
-    `Model config: ${usedFallback ? "fallback" : "primary"}`,
-    ...(agentic.enabled ? [`Task type: ${taskType}`, `Routing: ${routingReasoning}`] : []),
-    `Prompt: ${prompt}`,
-    `Exit code: ${result.exitCode}`,
-    "",
-    "## Output",
-    stdout,
-    ...(stderr ? ["## Stderr", stderr] : []),
-  ].join("\n");
+    if (agentName) {
+      // Agent path: load only the agent's IDENTITY/SOUL/CLAUDE.md.
+      const agentPrompts = await loadAgentPrompts(agentName);
+      if (agentPrompts) appendParts.push(agentPrompts);
+    } else {
+      // Main session path: global prompts + project CLAUDE.md.
+      const promptContent = await loadPrompts();
+      if (promptContent) appendParts.push(promptContent);
 
-  await Bun.write(logFile, output);
-  // Count this invocation for rotation tracking (global session only; agent sessions don't rotate).
-  if (!agentName && !threadId) await incrementMessageCount();
-  console.log(`[${new Date().toLocaleTimeString()}] Done: ${name} → ${logFile}`);
+      if (existsSync(PROJECT_CLAUDE_MD)) {
+        try {
+          const claudeMd = await Bun.file(PROJECT_CLAUDE_MD).text();
+          if (claudeMd.trim()) appendParts.push(claudeMd.trim());
+        } catch (e) {
+          console.error(
+            `[${new Date().toLocaleTimeString()}] Failed to read project CLAUDE.md:`,
+            e,
+          );
+        }
+      }
+    }
 
-  // Fallback: append session log to MEMORY.md only if Claude didn't write it
-  if (exitCode === 0 && stdout && name !== "bootstrap") {
+    // Load memory (put after static files for optimal prompt caching)
+    if (isNew) await ensureMemoryFile(agentName);
+    const memoryContent = await loadMemory(agentName);
+    if (memoryContent) {
+      appendParts.push(`## Your Memory (from MEMORY.md)\n\n${memoryContent}`);
+    }
+    const memoryInstructions = await loadMemoryInstructions(agentName);
+    if (memoryInstructions) appendParts.push(memoryInstructions);
+
+    if (security.level !== "unrestricted") appendParts.push(DIR_SCOPE_PROMPT);
+    if (appendParts.length > 0) {
+      args.push("--append-system-prompt", appendParts.join("\n\n"));
+    }
+
+    const baseEnv = cleanSpawnEnv();
+    const spawnCwd = agentName ? await ensureAgentDir(agentName) : undefined;
+
+    // Record invocation start
+    const invocationContext = {
+      sessionId: existing?.sessionId,
+      claudeSessionId: existing?.sessionId ?? null,
+      source: name,
+      channelId: undefined,
+      provider:
+        primaryConfig.model.startsWith("gpt") ||
+        primaryConfig.model.startsWith("o1") ||
+        primaryConfig.model.startsWith("o3")
+          ? "openai"
+          : "anthropic",
+      model: primaryConfig.model,
+      metadata: { taskType, routingReasoning },
+    };
+    await recordInvocationStart(invocationContext, invocationId);
+
+    // Capture memory file mtime before invocation (for fallback write detection)
+    let memMtimeBefore = 0;
     try {
       const memPath = getMemoryPath(agentName);
       if (existsSync(memPath)) {
         const { statSync } = await import("fs");
-        const afterMtime = statSync(memPath).mtimeMs;
+        memMtimeBefore = statSync(memPath).mtimeMs;
+      }
+    } catch {}
 
-        // Claude wrote memory if the file was modified after we started this invocation
-        const claudeWroteMemory = afterMtime > memMtimeBefore;
+    // ──────────────────────────────────────────────────────────────────────────
+    // PTY routing decision (SPEC §5.2 + §7.1).
+    //
+    // Order of precedence:
+    //   1. `name === "bootstrap"` → ALWAYS legacy `runClaudeStream` (§7.1).
+    //      The bootstrap call seeds a fresh global session and is low-volume;
+    //      keeping it on the legacy path simplifies the supervisor.
+    //   2. `settings.pty.enabled === false` → legacy `runClaudeStream` (§5.2).
+    //   3. Otherwise → `runOnPty(sessionKey, …)` against the supervisor.
+    //
+    // Downstream logic (rate-limit fallback, corruption recovery, stale-session
+    // recovery) is unchanged — it consumes `exec` with the same shape regardless.
+    // Per §5.3 the stale-session retry path explicitly uses runClaudeStream
+    // directly, so we don't compound supervisor recovery with downstream recovery.
+    const isInfraCall = name === "bootstrap";
+    const useLegacyPath = !settings.pty.enabled || isInfraCall;
+    let exec: { rawStdout: string; stderr: string; exitCode: number; sessionId?: string };
+    if (useLegacyPath) {
+      exec = await runClaudeStream(
+        args,
+        primaryConfig.model,
+        primaryConfig.api,
+        baseEnv,
+        timeoutMs,
+        spawnCwd,
+        onChunk,
+        onToolEvent,
+      );
+    } else {
+      const sessionKey = threadId
+        ? `thread:${threadId}`
+        : agentName
+          ? `agent:${agentName}`
+          : "global";
+      // Phase D fixes #2 (CRITICAL-1) and #3 (MAJOR-2/3): thread the assembled
+      // --append-system-prompt payload AND the canonical securityArgs through
+      // to the PTY path so named agents keep their identity/memory and the
+      // operator's permissionMode is honoured (instead of always
+      // --dangerously-skip-permissions).
+      //
+      // Codex Phase D #1: ALSO thread the resolved primaryConfig.model and
+      // primaryConfig.api through, so the PTY supervisor can:
+      //   - pass `--model <model>` (matching what the legacy path does), and
+      //   - build child env with `buildChildEnv(baseEnv, model, api)` —
+      //     applying ANTHROPIC_AUTH_TOKEN, the GLM/Kimi base-URL shims, etc.
+      // Without these, settings.api / agentic-router model choices / GLM /
+      // Kimi configuration silently drop on the PTY path.
+      const appendSystemPrompt = appendParts.length > 0 ? appendParts.join("\n\n") : undefined;
+      exec = await runOnPty(sessionKey, prompt, {
+        timeoutMs,
+        threadId,
+        agentName,
+        modelOverride: primaryConfig.model || (modelOverride ?? undefined),
+        api: primaryConfig.api,
+        securityArgs,
+        appendSystemPrompt,
+        onChunk,
+        onToolEvent,
+      });
+    }
+    const primaryRateLimit = extractRateLimitMessage(exec.rawStdout, exec.stderr);
+    let usedFallback = false;
 
-        if (!claudeWroteMemory) {
-          const memContent = await readFile(memPath, "utf8");
-          const ts = new Date().toISOString().slice(0, 16).replace("T", " ");
-          const summary = stdout.slice(0, 120).replace(/\n/g, " ").trim();
-          const logEntry = `- ${ts} [${name}] ${summary}`;
+    if (
+      primaryRateLimit &&
+      hasModelConfig(fallbackConfig) &&
+      !sameModelConfig(primaryConfig, fallbackConfig)
+    ) {
+      console.warn(
+        `[${new Date().toLocaleTimeString()}] Claude limit reached; retrying with fallback${fallbackConfig.model ? ` (${fallbackConfig.model})` : ""}...`,
+      );
+      const fallbackSession = await getFallbackSession(agentName, threadId);
+      const fallbackArgs = [
+        CLAUDE_EXECUTABLE,
+        "-p",
+        prompt,
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        ...securityArgs,
+      ];
+      if (fallbackSession) {
+        fallbackArgs.push("--resume", fallbackSession.sessionId);
+      }
+      if (appendParts.length > 0) {
+        fallbackArgs.push("--append-system-prompt", appendParts.join("\n\n"));
+      }
+      exec = await runClaudeStream(
+        fallbackArgs,
+        fallbackConfig.model,
+        fallbackConfig.api,
+        baseEnv,
+        timeoutMs,
+        spawnCwd,
+      );
+      usedFallback = true;
+      let fallbackRateLimit = extractRateLimitMessage(exec.rawStdout, exec.stderr);
 
-          const logMarker = "## Session Log";
-          const logIdx = memContent.indexOf(logMarker);
-          if (logIdx !== -1) {
-            const afterMarker = logIdx + logMarker.length;
-            const updated = memContent.slice(0, afterMarker) + "\n" + logEntry + memContent.slice(afterMarker);
-            const lines = updated.split("\n");
-            const trimmed = lines.length > 200 ? lines.slice(0, 200).join("\n") + "\n" : updated;
-            await writeFile(memPath, trimmed, "utf8");
+      // If the fallback resumed a corrupted session, reset it and retry fresh.
+      if (
+        !fallbackRateLimit &&
+        fallbackSession &&
+        exec.exitCode !== 0 &&
+        SIGNATURE_ERROR.test(exec.rawStdout + exec.stderr)
+      ) {
+        await resetFallbackSession(agentName, threadId);
+        const flabel = threadId
+          ? ` (thread ${threadId.slice(0, 8)})`
+          : agentName
+            ? ` (agent ${agentName})`
+            : "";
+        console.warn(
+          `[${new Date().toLocaleTimeString()}] Detected corrupted fallback session (thinking block signature mismatch). Reset${flabel}, retrying fallback fresh...`,
+        );
+        const freshFallbackArgs = fallbackArgs.filter(
+          (a) => a !== "--resume" && a !== fallbackSession.sessionId,
+        );
+        exec = await runClaudeStream(
+          freshFallbackArgs,
+          fallbackConfig.model,
+          fallbackConfig.api,
+          baseEnv,
+          timeoutMs,
+          spawnCwd,
+        );
+        fallbackRateLimit = extractRateLimitMessage(exec.rawStdout, exec.stderr);
+        if (!fallbackRateLimit && exec.sessionId) {
+          await createFallbackSession(exec.sessionId, agentName, threadId);
+          console.log(
+            `[${new Date().toLocaleTimeString()}] Fallback session recovered: ${exec.sessionId}${flabel}`,
+          );
+        }
+      } else if (!fallbackRateLimit) {
+        if (!fallbackSession && exec.sessionId) {
+          await createFallbackSession(exec.sessionId, agentName, threadId);
+          const label = threadId
+            ? ` (thread ${threadId.slice(0, 8)})`
+            : agentName
+              ? ` (agent ${agentName})`
+              : "";
+          console.log(
+            `[${new Date().toLocaleTimeString()}] Fallback session created: ${exec.sessionId}${label}`,
+          );
+        } else if (fallbackSession) {
+          await incrementFallbackTurn(agentName, threadId);
+        }
+      }
+    }
+
+    let rawStdout = exec.rawStdout;
+    let stderr = exec.stderr;
+    let exitCode = exec.exitCode;
+    let stdout = rawStdout;
+    let sessionId = existing?.sessionId ?? "unknown";
+
+    // Auto-detect corrupted primary session from thinking block signature mismatch.
+    // Gated on !usedFallback — fallback corruption is handled inside the fallback block above.
+    if (exitCode !== 0 && !isNew && !usedFallback && SIGNATURE_ERROR.test(rawStdout + stderr)) {
+      if (threadId) {
+        await removeThreadSession(threadId);
+      } else if (agentName) {
+        await resetSession(agentName);
+      } else {
+        await backupSession();
+      }
+      const label = threadId
+        ? ` (thread ${threadId.slice(0, 8)})`
+        : agentName
+          ? ` (agent ${agentName})`
+          : "";
+      console.warn(
+        `[${new Date().toLocaleTimeString()}] Detected corrupted session (thinking block signature mismatch). Reset${label}, retrying with fresh session...`,
+      );
+      const freshArgs = args.filter((a) => a !== "--resume" && a !== existing?.sessionId);
+      const fmtIdx = freshArgs.indexOf("--output-format");
+      if (fmtIdx !== -1 && fmtIdx + 1 < freshArgs.length) freshArgs[fmtIdx + 1] = "stream-json";
+      exec = await runClaudeStream(
+        freshArgs,
+        primaryConfig.model,
+        primaryConfig.api,
+        baseEnv,
+        timeoutMs,
+        spawnCwd,
+      );
+      rawStdout = exec.rawStdout;
+      stderr = exec.stderr;
+      exitCode = exec.exitCode;
+      stdout = rawStdout;
+
+      // Persist the fresh session ID so subsequent calls resume it correctly.
+      if (exec.sessionId) {
+        sessionId = exec.sessionId;
+        if (threadId) {
+          await createThreadSession(threadId, sessionId);
+          console.log(
+            `[${new Date().toLocaleTimeString()}] Thread session recovered: ${sessionId} (thread ${threadId.slice(0, 8)})`,
+          );
+        } else {
+          await createSession(sessionId, agentName);
+          const sLabel = agentName ? ` (agent ${agentName})` : "";
+          console.log(
+            `[${new Date().toLocaleTimeString()}] Session recovered: ${sessionId}${sLabel}`,
+          );
+        }
+        startSession(sessionId);
+      }
+    }
+
+    let recoveredFromStale = false;
+
+    // --- Stale session recovery ---
+    // Claude Code returns "No conversation found with session ID: <id>" when
+    // --resume points at a session it no longer has (cleared, expired, etc.).
+    // Back up the dead ID, drop --resume, and retry as a new session so the
+    // user isn't permanently stuck.
+    if (!isNew && exitCode !== 0 && existing && isStaleSessionError(rawStdout, stderr)) {
+      console.warn(
+        `[${new Date().toLocaleTimeString()}] Stale session ${existing.sessionId.slice(0, 8)} for ${name}; recovering with a new session...`,
+      );
+
+      if (usedFallback) {
+        await resetFallbackSession(agentName, threadId);
+      } else if (threadId) {
+        await removeThreadSession(threadId);
+      } else if (agentName) {
+        await resetSession(agentName);
+      } else {
+        await backupSession();
+      }
+
+      const retryArgs = withOutputFormat(stripResume(args), "stream-json");
+      const retryConfig = usedFallback ? fallbackConfig : primaryConfig;
+      exec = await runClaudeStream(
+        retryArgs,
+        retryConfig.model,
+        retryConfig.api,
+        baseEnv,
+        timeoutMs,
+        spawnCwd,
+      );
+
+      rawStdout = exec.rawStdout;
+      stderr = exec.stderr;
+      exitCode = exec.exitCode;
+      stdout = rawStdout;
+      recoveredFromStale = true;
+    }
+
+    const rateLimitMessage = extractRateLimitMessage(rawStdout, stderr);
+
+    if (rateLimitMessage) {
+      stdout = rateLimitMessage;
+      const resetTime = parseRateLimitResetTime(rateLimitMessage);
+      rateLimitResetAt = resetTime ?? Date.now() + 60 * 60_000;
+      rateLimitNotified = false;
+      console.warn(
+        `[${new Date().toLocaleTimeString()}] Rate limit detected. Reset at: ${new Date(rateLimitResetAt).toISOString()}`,
+      );
+    }
+
+    // Surface stderr when the result event never arrived (abort, tool error, etc.)
+    if (!rateLimitMessage && exitCode !== 0 && !stdout && stderr) {
+      stdout = stderr;
+    }
+
+    // Capture session ID from stream events and persist for new sessions.
+    // Gate only on isNew + sessionId present — not on exitCode, so a session that timed
+    // out mid-run is still persisted and can be resumed on the next message.
+    const parseAsNew = isNew || recoveredFromStale;
+    if (!rateLimitMessage && parseAsNew && exec.sessionId) {
+      sessionId = exec.sessionId;
+      if (recoveredFromStale && usedFallback) {
+        await createFallbackSession(sessionId, agentName, threadId);
+        const label = threadId
+          ? ` (thread ${threadId.slice(0, 8)})`
+          : agentName
+            ? ` (agent ${agentName})`
+            : "";
+        console.log(
+          `[${new Date().toLocaleTimeString()}] Fallback session created: ${sessionId}${label}`,
+        );
+        startSession(sessionId);
+      } else if (!usedFallback) {
+        if (threadId) {
+          await createThreadSession(threadId, sessionId);
+          console.log(
+            `[${new Date().toLocaleTimeString()}] Thread session created: ${sessionId} (thread ${threadId.slice(0, 8)})`,
+          );
+        } else {
+          await createSession(sessionId, agentName);
+          const label = agentName ? ` (agent ${agentName})` : "";
+          console.log(`[${new Date().toLocaleTimeString()}] Session created: ${sessionId}${label}`);
+        }
+        startSession(sessionId);
+      }
+    }
+
+    const result: RunResult = {
+      stdout,
+      stderr,
+      exitCode,
+    };
+
+    // Record successful completion
+    await recordInvocationCompletion(invocationId, undefined, undefined);
+
+    // Check watchdog limits
+    const watchdogDecision = await checkLimits({ invocationId, sessionId: invocationSessionId });
+    if (watchdogDecision.state === "suspend" || watchdogDecision.state === "kill") {
+      console.warn(
+        `[${new Date().toLocaleTimeString()}] Watchdog ${watchdogDecision.state}: ${watchdogDecision.reason}`,
+      );
+      await watchdogHandleTrigger(
+        { invocationId, sessionId: invocationSessionId },
+        watchdogDecision,
+      );
+      // Send escalation notification for watchdog triggers
+      try {
+        const { handleWatchdogTrigger } = await import("./escalation");
+        await handleWatchdogTrigger(watchdogDecision, {
+          invocationId,
+          sessionId: invocationSessionId,
+        });
+      } catch (escalationError) {
+        console.error("[escalation] Failed to send watchdog notification:", escalationError);
+      }
+    }
+
+    // Plugins: agent_end — fire-and-forget, does not block response
+    if (pm && exitCode === 0) {
+      pm.emitAsync(
+        "agent_end",
+        {
+          messages: [{ role: "assistant", content: stdout }],
+        },
+        ctx,
+      );
+    }
+
+    const output = [
+      `# ${name}`,
+      `Date: ${new Date().toISOString()}`,
+      `Session: ${sessionId} (${isNew ? "new" : "resumed"})`,
+      `Model config: ${usedFallback ? "fallback" : "primary"}`,
+      ...(agentic.enabled ? [`Task type: ${taskType}`, `Routing: ${routingReasoning}`] : []),
+      `Prompt: ${prompt}`,
+      `Exit code: ${result.exitCode}`,
+      "",
+      "## Output",
+      stdout,
+      ...(stderr ? ["## Stderr", stderr] : []),
+    ].join("\n");
+
+    await Bun.write(logFile, output);
+    // Count this invocation for rotation tracking (global session only; agent sessions don't rotate).
+    if (!agentName && !threadId) await incrementMessageCount();
+    console.log(`[${new Date().toLocaleTimeString()}] Done: ${name} → ${logFile}`);
+
+    // Fallback: append session log to MEMORY.md only if Claude didn't write it
+    if (exitCode === 0 && stdout && name !== "bootstrap") {
+      try {
+        const memPath = getMemoryPath(agentName);
+        if (existsSync(memPath)) {
+          const { statSync } = await import("fs");
+          const afterMtime = statSync(memPath).mtimeMs;
+
+          // Claude wrote memory if the file was modified after we started this invocation
+          const claudeWroteMemory = afterMtime > memMtimeBefore;
+
+          if (!claudeWroteMemory) {
+            const memContent = await readFile(memPath, "utf8");
+            const ts = new Date().toISOString().slice(0, 16).replace("T", " ");
+            const summary = stdout.slice(0, 120).replace(/\n/g, " ").trim();
+            const logEntry = `- ${ts} [${name}] ${summary}`;
+
+            const logMarker = "## Session Log";
+            const logIdx = memContent.indexOf(logMarker);
+            if (logIdx !== -1) {
+              const afterMarker = logIdx + logMarker.length;
+              const updated =
+                memContent.slice(0, afterMarker) + "\n" + logEntry + memContent.slice(afterMarker);
+              const lines = updated.split("\n");
+              const trimmed = lines.length > 200 ? lines.slice(0, 200).join("\n") + "\n" : updated;
+              await writeFile(memPath, trimmed, "utf8");
+            }
           }
         }
+      } catch (e) {
+        // Non-fatal
       }
-    } catch (e) {
-      // Non-fatal
     }
-  }
 
-  // --- Watchdog: track consecutive timeouts ---
-  // Skip tracking for unresolved session IDs ("unknown") to avoid cross-session
-  // state collisions when a new session fails before its real ID is known.
-  const trackingId = sessionId !== "unknown" ? sessionId : null;
-  if (trackingId) {
-    if (exitCode === 0) {
-      clearSession(trackingId);
-    } else {
-      recordResult(trackingId, exitCode);
-      const reason = abortReason(trackingId, watchdog);
-      if (reason) {
-        console.warn(`[${new Date().toLocaleTimeString()}] ${reason}`);
+    // --- Watchdog: track consecutive timeouts ---
+    // Skip tracking for unresolved session IDs ("unknown") to avoid cross-session
+    // state collisions when a new session fails before its real ID is known.
+    const trackingId = sessionId !== "unknown" ? sessionId : null;
+    if (trackingId) {
+      if (exitCode === 0) {
         clearSession(trackingId);
-        return result;
-      }
-      // Non-timeout, non-zero exits: counter is already reset by recordResult.
-      // Do NOT clearSession here — that would reset startedAt and weaken maxRuntimeSeconds.
-    }
-  }
-
-  // --- Auto-compact on timeout (exit 124) ---
-  if (COMPACT_TIMEOUT_ENABLED && exitCode === 124 && !isNew && existing && !recoveredFromStale) {
-    // Save memory before compact wipes context
-    try {
-      const memPath = getMemoryPath(agentName);
-      console.log(`[${new Date().toLocaleTimeString()}] Pre-compact: saving memory to ${memPath}`);
-      await runClaudeOnce(
-        ["claude", "-p", `Session is about to compact. Save your current memory to ${memPath} now. Include: current status, what was accomplished, key context for next session. Keep it concise.`,
-         "--output-format", "text", "--resume", existing.sessionId, ...securityArgs],
-        primaryConfig.model, primaryConfig.api, baseEnv, 30_000
-      );
-    } catch (e) {
-      console.warn(`[${new Date().toLocaleTimeString()}] Pre-compact memory save failed:`, e);
-    }
-
-    emitCompactEvent({ type: "auto-compact-start" });
-    const compactOk = await runCompact(
-      existing.sessionId,
-      primaryConfig.model,
-      primaryConfig.api,
-      baseEnv,
-      securityArgs,
-      timeoutMs,
-      spawnCwd
-    );
-    emitCompactEvent({ type: "auto-compact-done", success: compactOk });
-    if (compactOk && pm) pm.emitAsync("after_compaction", {}, ctx);
-
-    if (compactOk) {
-      console.log(`[${new Date().toLocaleTimeString()}] Retrying ${name} after compact...`);
-      const retryExec = await runClaudeStream(args, primaryConfig.model, primaryConfig.api, baseEnv, timeoutMs, spawnCwd);
-      const retryResult: RunResult = {
-        stdout: retryExec.rawStdout,
-        stderr: retryExec.stderr,
-        exitCode: retryExec.exitCode,
-      };
-      emitCompactEvent({
-        type: "auto-compact-retry",
-        success: retryExec.exitCode === 0,
-        stdout: retryResult.stdout,
-        stderr: retryResult.stderr,
-        exitCode: retryResult.exitCode,
-      });
-
-      if (retryExec.exitCode === 0) {
-        const count = threadId ? await incrementThreadTurn(threadId) : await incrementTurn(agentName);
-        console.log(`[${new Date().toLocaleTimeString()}] Turn count: ${count} (after compact + retry)`);
-        // Check watchdog after successful retry
-        const retryWatchdogDecision = await checkLimits({ invocationId, sessionId: invocationSessionId });
-        if (retryWatchdogDecision.state === "suspend" || retryWatchdogDecision.state === "kill") {
-          console.warn(`[${new Date().toLocaleTimeString()}] Watchdog ${retryWatchdogDecision.state} after retry: ${retryWatchdogDecision.reason}`);
-          await watchdogHandleTrigger({ invocationId, sessionId: invocationSessionId }, retryWatchdogDecision);
-        }
-      }
-      return retryResult;
-    }
-  }
-
-  // --- Turn tracking & compact warning ---
-  if (exitCode === 0 && !isNew && !recoveredFromStale) {
-    const turnCount = threadId ? await incrementThreadTurn(threadId) : await incrementTurn(agentName);
-    const turnLabel = threadId ? ` (thread ${threadId.slice(0, 8)})` : agentName ? ` (agent ${agentName})` : "";
-    console.log(`[${new Date().toLocaleTimeString()}] Turn count: ${turnCount}${turnLabel}`);
-
-    if (turnCount >= COMPACT_WARN_THRESHOLD && existing && !existing.compactWarned) {
-      if (threadId) {
-        await markThreadCompactWarned(threadId);
       } else {
-        await markCompactWarned(agentName);
+        recordResult(trackingId, exitCode);
+        const reason = abortReason(trackingId, watchdog);
+        if (reason) {
+          console.warn(`[${new Date().toLocaleTimeString()}] ${reason}`);
+          clearSession(trackingId);
+          return result;
+        }
+        // Non-timeout, non-zero exits: counter is already reset by recordResult.
+        // Do NOT clearSession here — that would reset startedAt and weaken maxRuntimeSeconds.
       }
-      emitCompactEvent({ type: "warn", turnCount });
     }
 
-    // memory-search: periodic re-index every N turns (issue #19 follow-up).
-    // Default 10 turns; 0 disables. Fire-and-forget — never blocks the runner.
-    const memSettings = getSettings().memorySearch;
-    const reindexEvery = memSettings?.reindexEveryNTurns ?? 10;
-    if (reindexEvery > 0 && turnCount > 0 && turnCount % reindexEvery === 0) {
-      console.log(`[${new Date().toLocaleTimeString()}] memory-search: periodic re-index (turn ${turnCount})`);
-      indexSessionsBackground(memSettings);
-    }
-  }
+    // --- Auto-compact on timeout (exit 124) ---
+    if (COMPACT_TIMEOUT_ENABLED && exitCode === 124 && !isNew && existing && !recoveredFromStale) {
+      // Save memory before compact wipes context
+      try {
+        const memPath = getMemoryPath(agentName);
+        console.log(
+          `[${new Date().toLocaleTimeString()}] Pre-compact: saving memory to ${memPath}`,
+        );
+        await runClaudeOnce(
+          [
+            "claude",
+            "-p",
+            `Session is about to compact. Save your current memory to ${memPath} now. Include: current status, what was accomplished, key context for next session. Keep it concise.`,
+            "--output-format",
+            "text",
+            "--resume",
+            existing.sessionId,
+            ...securityArgs,
+          ],
+          primaryConfig.model,
+          primaryConfig.api,
+          baseEnv,
+          30_000,
+        );
+      } catch (e) {
+        console.warn(`[${new Date().toLocaleTimeString()}] Pre-compact memory save failed:`, e);
+      }
 
-  return result;
+      emitCompactEvent({ type: "auto-compact-start" });
+      const compactOk = await runCompact(
+        existing.sessionId,
+        primaryConfig.model,
+        primaryConfig.api,
+        baseEnv,
+        securityArgs,
+        timeoutMs,
+        spawnCwd,
+      );
+      emitCompactEvent({ type: "auto-compact-done", success: compactOk });
+      if (compactOk && pm) pm.emitAsync("after_compaction", {}, ctx);
+
+      if (compactOk) {
+        console.log(`[${new Date().toLocaleTimeString()}] Retrying ${name} after compact...`);
+        const retryExec = await runClaudeStream(
+          args,
+          primaryConfig.model,
+          primaryConfig.api,
+          baseEnv,
+          timeoutMs,
+          spawnCwd,
+        );
+        const retryResult: RunResult = {
+          stdout: retryExec.rawStdout,
+          stderr: retryExec.stderr,
+          exitCode: retryExec.exitCode,
+        };
+        emitCompactEvent({
+          type: "auto-compact-retry",
+          success: retryExec.exitCode === 0,
+          stdout: retryResult.stdout,
+          stderr: retryResult.stderr,
+          exitCode: retryResult.exitCode,
+        });
+
+        if (retryExec.exitCode === 0) {
+          const count = threadId
+            ? await incrementThreadTurn(threadId)
+            : await incrementTurn(agentName);
+          console.log(
+            `[${new Date().toLocaleTimeString()}] Turn count: ${count} (after compact + retry)`,
+          );
+          // Check watchdog after successful retry
+          const retryWatchdogDecision = await checkLimits({
+            invocationId,
+            sessionId: invocationSessionId,
+          });
+          if (retryWatchdogDecision.state === "suspend" || retryWatchdogDecision.state === "kill") {
+            console.warn(
+              `[${new Date().toLocaleTimeString()}] Watchdog ${retryWatchdogDecision.state} after retry: ${retryWatchdogDecision.reason}`,
+            );
+            await watchdogHandleTrigger(
+              { invocationId, sessionId: invocationSessionId },
+              retryWatchdogDecision,
+            );
+          }
+        }
+        return retryResult;
+      }
+    }
+
+    // --- Turn tracking & compact warning ---
+    if (exitCode === 0 && !isNew && !recoveredFromStale) {
+      const turnCount = threadId
+        ? await incrementThreadTurn(threadId)
+        : await incrementTurn(agentName);
+      const turnLabel = threadId
+        ? ` (thread ${threadId.slice(0, 8)})`
+        : agentName
+          ? ` (agent ${agentName})`
+          : "";
+      console.log(`[${new Date().toLocaleTimeString()}] Turn count: ${turnCount}${turnLabel}`);
+
+      if (turnCount >= COMPACT_WARN_THRESHOLD && existing && !existing.compactWarned) {
+        if (threadId) {
+          await markThreadCompactWarned(threadId);
+        } else {
+          await markCompactWarned(agentName);
+        }
+        emitCompactEvent({ type: "warn", turnCount });
+      }
+
+      // memory-search: periodic re-index every N turns (issue #19 follow-up).
+      // Default 10 turns; 0 disables. Fire-and-forget — never blocks the runner.
+      const memSettings = getSettings().memorySearch;
+      const reindexEvery = memSettings?.reindexEveryNTurns ?? 10;
+      if (reindexEvery > 0 && turnCount > 0 && turnCount % reindexEvery === 0) {
+        console.log(
+          `[${new Date().toLocaleTimeString()}] memory-search: periodic re-index (turn ${turnCount})`,
+        );
+        indexSessionsBackground(memSettings);
+      }
+    }
+
+    return result;
   } finally {
     mainRunCount--;
     persistRunCount();
@@ -1871,9 +2136,23 @@ export async function run(
   agentName?: string,
   timeoutCategory?: string,
   onChunk?: (text: string) => void,
-  onToolEvent?: (line: string) => void
+  onToolEvent?: (line: string) => void,
 ): Promise<RunResult> {
-  return enqueue(() => execClaude(name, prompt, threadId, modelOverride, timeoutMs, agentName, timeoutCategory, onChunk, onToolEvent), threadId);
+  return enqueue(
+    () =>
+      execClaude(
+        name,
+        prompt,
+        threadId,
+        modelOverride,
+        timeoutMs,
+        agentName,
+        timeoutCategory,
+        onChunk,
+        onToolEvent,
+      ),
+    threadId,
+  );
 }
 
 async function streamClaude(
@@ -1881,7 +2160,7 @@ async function streamClaude(
   prompt: string,
   onChunk: (text: string) => void,
   onUnblock: () => void,
-  onAgentEvent?: (ev: AgentStreamEvent) => void
+  onAgentEvent?: (ev: AgentStreamEvent) => void,
 ): Promise<void> {
   await mkdir(LOGS_DIR, { recursive: true });
 
@@ -1907,13 +2186,22 @@ async function streamClaude(
   // stream-json gives us events as they happen — text before tool calls,
   // so we can unblock the UI as soon as Claude acknowledges, not after sub-agents finish.
   // --verbose is required for stream-json to produce output in -p (print) mode.
-  const args = [CLAUDE_EXECUTABLE, "-p", prompt, "--output-format", "stream-json", "--verbose", ...securityArgs];
+  const args = [
+    CLAUDE_EXECUTABLE,
+    "-p",
+    prompt,
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    ...securityArgs,
+  ];
 
   if (existing) args.push("--resume", existing.sessionId);
 
   const appendParts: string[] = ["You are running inside ClaudeClaw."];
 
-  if (streamRotationSummary) appendParts.push(`Context from the previous session:\n\n${streamRotationSummary}`);
+  if (streamRotationSummary)
+    appendParts.push(`Context from the previous session:\n\n${streamRotationSummary}`);
 
   try {
     const claudeMd = await Bun.file(PROJECT_CLAUDE_MD).text();
@@ -1932,11 +2220,14 @@ async function streamClaude(
   }
 
   const normalizedModel = model.trim().toLowerCase();
-  if (model.trim() && normalizedModel !== "glm" && normalizedModel !== "kimi-k2p6") args.push("--model", model.trim());
+  if (model.trim() && normalizedModel !== "glm" && normalizedModel !== "kimi-k2p6")
+    args.push("--model", model.trim());
 
   const childEnv = buildChildEnv(cleanSpawnEnv(), model, api);
 
-  console.log(`[${new Date().toLocaleTimeString()}] Running: ${name} (stream-json, session: ${existing?.sessionId?.slice(0, 8) ?? "new"})`);
+  console.log(
+    `[${new Date().toLocaleTimeString()}] Running: ${name} (stream-json, session: ${existing?.sessionId?.slice(0, 8) ?? "new"})`,
+  );
 
   const proc = Bun.spawn(args, {
     stdout: "pipe",
@@ -1983,11 +2274,19 @@ async function streamClaude(
           const sid = event.session_id as string | undefined;
           if (sid && !existing) {
             await createSession(sid);
-            console.log(`[${new Date().toLocaleTimeString()}] Session created (stream-json): ${sid}`);
+            console.log(
+              `[${new Date().toLocaleTimeString()}] Session created (stream-json): ${sid}`,
+            );
           }
         } else if (event.type === "assistant") {
           // Text and tool_use blocks from the assistant
-          type ContentBlock = { type: string; text?: string; id?: string; name?: string; input?: Record<string, unknown> };
+          type ContentBlock = {
+            type: string;
+            text?: string;
+            id?: string;
+            name?: string;
+            input?: Record<string, unknown>;
+          };
           const msg = event.message as { content?: ContentBlock[] } | undefined;
           const blocks = msg?.content ?? [];
           let hasActivity = false;
@@ -1999,7 +2298,9 @@ async function streamClaude(
             }
             // Detect Agent tool spawns and emit lifecycle event
             if (block.type === "tool_use" && block.name === "Agent" && block.id && onAgentEvent) {
-              const description = String(block.input?.description ?? block.input?.prompt ?? "Running background task...");
+              const description = String(
+                block.input?.description ?? block.input?.prompt ?? "Running background task...",
+              );
               pendingAgents.set(block.id, description);
               onAgentEvent({ type: "spawn", id: block.id, description });
               hasActivity = true;
@@ -2008,11 +2309,19 @@ async function streamClaude(
             if (block.type === "tool_use") {
               hasActivity = true;
               if (streamPm && block.name) {
-                streamPm.emitAsync("tool_result_persist", {
-                  toolName: block.name,
-                  params: block.input ?? {},
-                  message: { content: [{ type: "text", text: JSON.stringify(block.input ?? {}).slice(0, 500) }] },
-                }, streamCtx);
+                streamPm.emitAsync(
+                  "tool_result_persist",
+                  {
+                    toolName: block.name,
+                    params: block.input ?? {},
+                    message: {
+                      content: [
+                        { type: "text", text: JSON.stringify(block.input ?? {}).slice(0, 500) },
+                      ],
+                    },
+                  },
+                  streamCtx,
+                );
               }
             }
           }
@@ -2023,13 +2332,19 @@ async function streamClaude(
           const msg = event.message as { content?: ToolResultBlock[] } | undefined;
           const blocks = msg?.content ?? [];
           for (const block of blocks) {
-            if (block.type === "tool_result" && block.tool_use_id && pendingAgents.has(block.tool_use_id)) {
+            if (
+              block.type === "tool_result" &&
+              block.tool_use_id &&
+              pendingAgents.has(block.tool_use_id)
+            ) {
               const description = pendingAgents.get(block.tool_use_id)!;
               pendingAgents.delete(block.tool_use_id);
-              const result = typeof block.content === "string"
-                ? block.content
-                : JSON.stringify(block.content ?? "");
-              if (onAgentEvent) onAgentEvent({ type: "done", id: block.tool_use_id, description, result });
+              const result =
+                typeof block.content === "string"
+                  ? block.content
+                  : JSON.stringify(block.content ?? "");
+              if (onAgentEvent)
+                onAgentEvent({ type: "done", id: block.tool_use_id, description, result });
             }
           }
         } else if (event.type === "tool_use") {
@@ -2058,7 +2373,7 @@ async function streamClaude(
     isStaleSessionError("", stderrText)
   ) {
     console.warn(
-      `[${new Date().toLocaleTimeString()}] Stale session ${existing.sessionId.slice(0, 8)} for ${name} (stream); recovering with a new session...`
+      `[${new Date().toLocaleTimeString()}] Stale session ${existing.sessionId.slice(0, 8)} for ${name} (stream); recovering with a new session...`,
     );
     await backupSession();
     await streamClaude(name, prompt, onChunk, onUnblock, onAgentEvent);
@@ -2082,9 +2397,11 @@ export async function streamUserMessage(
   prompt: string,
   onChunk: (text: string) => void,
   onUnblock: () => void,
-  onAgentEvent?: (ev: AgentStreamEvent) => void
+  onAgentEvent?: (ev: AgentStreamEvent) => void,
 ): Promise<void> {
-  return enqueue(() => streamClaude(name, prefixUserMessageWithClock(prompt), onChunk, onUnblock, onAgentEvent));
+  return enqueue(() =>
+    streamClaude(name, prefixUserMessageWithClock(prompt), onChunk, onUnblock, onAgentEvent),
+  );
 }
 
 function prefixUserMessageWithClock(prompt: string): string {
@@ -2105,9 +2422,19 @@ export async function runUserMessage(
   agentName?: string,
   onChunk?: (text: string) => void,
   onToolEvent?: (line: string) => void,
-  modelOverride?: string
+  modelOverride?: string,
 ): Promise<RunResult> {
-  return run(name, prefixUserMessageWithClock(prompt), threadId, modelOverride, undefined, agentName, undefined, onChunk, onToolEvent);
+  return run(
+    name,
+    prefixUserMessageWithClock(prompt),
+    threadId,
+    modelOverride,
+    undefined,
+    agentName,
+    undefined,
+    onChunk,
+    onToolEvent,
+  );
 }
 
 // Path where Claude Code stores session JSONL transcripts for this project
@@ -2115,7 +2442,7 @@ const CLAUDE_SESSIONS_DIR = join(
   process.env.HOME ?? "/root",
   ".claude",
   "projects",
-  PROJECT_DIR.replace(/\//g, "-")
+  PROJECT_DIR.replace(/\//g, "-"),
 );
 
 const FORK_SYSTEM_PROMPT = [
@@ -2162,11 +2489,16 @@ export async function runFork(prompt: string): Promise<RunResult> {
   const securityArgs = buildSecurityArgs(security);
 
   const args = [
-    CLAUDE_EXECUTABLE, "-p", prompt,
-    "--output-format", "json",
+    CLAUDE_EXECUTABLE,
+    "-p",
+    prompt,
+    "--output-format",
+    "json",
     ...securityArgs,
-    "--model", FORK_MODEL,
-    "--append-system-prompt", FORK_SYSTEM_PROMPT,
+    "--model",
+    FORK_MODEL,
+    "--append-system-prompt",
+    FORK_SYSTEM_PROMPT,
   ];
 
   const proc = Bun.spawn(args, {
@@ -2178,7 +2510,9 @@ export async function runFork(prompt: string): Promise<RunResult> {
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeoutId = setTimeout(() => {
-      try { proc.kill(); } catch {}
+      try {
+        proc.kill();
+      } catch {}
       reject(new Error(`Fork timed out after ${FORK_TIMEOUT_MS / 1000}s`));
     }, FORK_TIMEOUT_MS);
   });
@@ -2188,13 +2522,13 @@ export async function runFork(prompt: string): Promise<RunResult> {
   let exitCode: number;
 
   try {
-    [rawStdout, rawStderr] = await Promise.race([
+    [rawStdout, rawStderr] = (await Promise.race([
       Promise.all([
         collectStream(proc.stdout as ReadableStream<Uint8Array>, MAX_OUTPUT_BYTES),
         collectStream(proc.stderr as ReadableStream<Uint8Array>, MAX_OUTPUT_BYTES),
       ]),
       timeoutPromise,
-    ]) as [string, string];
+    ])) as [string, string];
     if (timeoutId) clearTimeout(timeoutId);
     await proc.exited;
     exitCode = proc.exitCode ?? 1;
@@ -2224,7 +2558,9 @@ export async function bootstrap(): Promise<void> {
 
   console.log(`[${new Date().toLocaleTimeString()}] Bootstrapping new session...`);
   const { session: sessionConfig } = getSettings();
-  const summary = sessionConfig.summaryPath ? await loadLatestSummary(sessionConfig.summaryPath) : null;
+  const summary = sessionConfig.summaryPath
+    ? await loadLatestSummary(sessionConfig.summaryPath)
+    : null;
   const wakeupPrompt = summary
     ? `Wakeup, my friend!\n\nContext from the previous session:\n\n${summary}`
     : "Wakeup, my friend!";

@@ -28,7 +28,11 @@ export interface FireResult {
 
 export interface FireJobOptions {
   /** Injectable runner for tests. Defaults to runner.run. */
-  runner?: (name: string, prompt: string, agent?: string) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
+  runner?: (
+    name: string,
+    prompt: string,
+    agent?: string,
+  ) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
   /** Injectable prompt resolver for tests. Defaults to config.resolvePrompt. */
   promptResolver?: (prompt: string) => Promise<string>;
   /** Injectable agent-job loader for tests. Defaults to loadAgentJobsUnfiltered. */

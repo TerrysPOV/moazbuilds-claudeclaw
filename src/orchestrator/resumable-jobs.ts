@@ -1,13 +1,25 @@
 /**
  * Resumable Jobs Integration
- * 
+ *
  * Wraps existing scheduled/job execution paths in durable workflow orchestration.
  * Provides cron trigger integration and daemon restart recovery.
  */
 
-import { WorkflowDefinition, TaskDefinition, WorkflowState } from "./types.ts";
-import { createWorkflow, saveDefinition, saveState, loadState, listActive, loadDefinition } from "./workflow-state.ts";
-import { executeWorkflow, resumeWorkflow, registerHandlers, setGovernanceClient } from "./executor.ts";
+import { type WorkflowDefinition, type TaskDefinition, WorkflowState } from "./types.ts";
+import {
+  createWorkflow,
+  saveDefinition,
+  saveState,
+  loadState,
+  listActive,
+  loadDefinition,
+} from "./workflow-state.ts";
+import {
+  executeWorkflow,
+  resumeWorkflow,
+  registerHandlers,
+  setGovernanceClient,
+} from "./executor.ts";
 import { validateWorkflow } from "./task-graph.ts";
 import { OrchestratorGovernanceAdapter } from "./governance-adapter.ts";
 
@@ -76,12 +88,12 @@ async function savePendingJobs(jobs: PendingJob[]): Promise<void> {
   const { dirname } = await import("path");
   const { mkdir } = await import("fs/promises");
   const { existsSync } = await import("fs");
-  
+
   const dir = dirname(PENDING_JOBS_FILE);
   if (!existsSync(dir)) {
     await mkdir(dir, { recursive: true });
   }
-  
+
   await writeFile(PENDING_JOBS_FILE, JSON.stringify(jobs, null, 2), "utf-8");
 }
 
@@ -97,9 +109,9 @@ export function createWorkflowForJob(job: JobDefinition): WorkflowDefinition {
     input: job.input,
     onError: job.onError || "fail_workflow",
     maxRetries: job.maxRetries,
-    retryPolicy: job.retryPolicy
+    retryPolicy: job.retryPolicy,
   };
-  
+
   return {
     id: `wf-${job.id}-${Date.now()}`,
     type: job.type,
@@ -111,45 +123,47 @@ export function createWorkflowForJob(job: JobDefinition): WorkflowDefinition {
       ...job.metadata,
       jobId: job.id,
       jobName: job.name,
-      scheduledAt: job.schedule
+      scheduledAt: job.schedule,
     },
-    tasks: [task]
+    tasks: [task],
   };
 }
 
 /**
  * Schedule a job for durable execution
  */
-export async function scheduleJob(job: JobDefinition): Promise<{ workflowId: string; jobId: string }> {
+export async function scheduleJob(
+  job: JobDefinition,
+): Promise<{ workflowId: string; jobId: string }> {
   // Validate job has required fields
   if (!job.id || !job.actionRef) {
     throw new Error("Job must have id and actionRef");
   }
-  
+
   // Create workflow from job
   const workflow = createWorkflowForJob(job);
-  
+
   // Validate workflow
   const validation = validateWorkflow(workflow);
   if (!validation.valid) {
     throw new Error(`Invalid workflow: ${validation.errors.join(", ")}`);
   }
-  
+
   // Create and persist workflow state
   await createWorkflow(workflow, { persistDefinition: true });
-  
+
   // Track as pending job
   const pendingJob: PendingJob = {
     jobId: job.id,
     workflowId: workflow.id,
     status: "pending",
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
   };
-  
+
   const jobs = await loadPendingJobs();
   jobs.push(pendingJob);
   await savePendingJobs(jobs);
-  
+
   return { workflowId: workflow.id, jobId: job.id };
 }
 
@@ -159,7 +173,7 @@ export async function scheduleJob(job: JobDefinition): Promise<{ workflowId: str
  */
 export async function resumePending(): Promise<{ resumed: number; failed: number }> {
   const pendingJobs = await loadPendingJobs();
-  const activeJobs = pendingJobs.filter(j => j.status === "pending" || j.status === "active");
+  const activeJobs = pendingJobs.filter((j) => j.status === "pending" || j.status === "active");
 
   let resumed = 0;
   let failed = 0;
@@ -203,8 +217,8 @@ export async function resumePending(): Promise<{ resumed: number; failed: number
 
   // Build updated list immutably: remove finished jobs, activate running ones
   const remaining = pendingJobs
-    .filter(j => !removeIds.has(j.workflowId))
-    .map(j => activateIds.has(j.workflowId) ? { ...j, status: "active" as const } : j);
+    .filter((j) => !removeIds.has(j.workflowId))
+    .map((j) => (activateIds.has(j.workflowId) ? { ...j, status: "active" as const } : j));
   await savePendingJobs(remaining);
 
   return { resumed, failed };
@@ -215,7 +229,7 @@ export async function resumePending(): Promise<{ resumed: number; failed: number
  */
 export async function getPendingCount(): Promise<number> {
   const jobs = await loadPendingJobs();
-  return jobs.filter(j => j.status === "pending").length;
+  return jobs.filter((j) => j.status === "pending").length;
 }
 
 /**
@@ -238,49 +252,51 @@ export async function initializeJobSystem(): Promise<{
 
   // Resume any workflows that were in progress when daemon stopped
   const result = await resumePending();
-  
+
   // Also rebuild from active workflows
   const activeWorkflows = await listActive();
-  
+
   // Add any orphaned active workflows to pending tracking
   const pendingJobs = await loadPendingJobs();
-  const trackedWorkflowIds = new Set(pendingJobs.map(j => j.workflowId));
-  
+  const trackedWorkflowIds = new Set(pendingJobs.map((j) => j.workflowId));
+
   for (const workflowId of activeWorkflows) {
     if (!trackedWorkflowIds.has(workflowId)) {
       // Orphaned active workflow - add to tracking
       const state = await loadState(workflowId);
       if (state) {
         const def = await loadDefinition(workflowId);
-        const jobId = def?.metadata?.jobId as string || workflowId;
-        
+        const jobId = (def?.metadata?.jobId as string) || workflowId;
+
         pendingJobs.push({
           jobId,
           workflowId,
           status: "active",
-          createdAt: state.createdAt
+          createdAt: state.createdAt,
         });
-        
+
         trackedWorkflowIds.add(workflowId);
       }
     }
   }
-  
+
   await savePendingJobs(pendingJobs);
-  
+
   return { pendingResumed: result.resumed, pendingFailed: result.failed };
 }
 
 /**
  * Process a cron trigger - creates workflow from cron job definition
  */
-export async function processCronTrigger(job: JobDefinition): Promise<{ workflowId: string; jobId: string }> {
+export async function processCronTrigger(
+  job: JobDefinition,
+): Promise<{ workflowId: string; jobId: string }> {
   // Add cron metadata
   const cronJob: JobDefinition = {
     ...job,
-    source: "cron"
+    source: "cron",
   };
-  
+
   return scheduleJob(cronJob);
 }
 
@@ -301,12 +317,12 @@ export function adaptLegacyJob(legacyJob: LegacyJobAdapter): JobDefinition {
  */
 export async function executeJobNow(job: JobDefinition): Promise<string> {
   const { workflowId } = await scheduleJob(job);
-  
+
   // Execute workflow asynchronously
-  executeWorkflow(workflowId).catch(err => {
+  executeWorkflow(workflowId).catch((err) => {
     console.error(`Job ${job.id} execution failed:`, err);
   });
-  
+
   return workflowId;
 }
 
@@ -314,18 +330,21 @@ export async function executeJobNow(job: JobDefinition): Promise<string> {
  * Register job action handlers from existing jobs.ts
  */
 export function registerJobHandlers(
-  handlers: Record<string, (input: Record<string, unknown>) => Promise<unknown>>
+  handlers: Record<string, (input: Record<string, unknown>) => Promise<unknown>>,
 ): void {
-  const adaptedHandlers: Record<string, (input: Record<string, unknown>, context: any) => Promise<unknown>> = {};
-  
+  const adaptedHandlers: Record<
+    string,
+    (input: Record<string, unknown>, context: any) => Promise<unknown>
+  > = {};
+
   for (const [key, handler] of Object.entries(handlers)) {
     adaptedHandlers[key] = async (input, _context) => {
       return handler(input);
     };
   }
-  
+
   registerHandlers({
     actions: adaptedHandlers,
-    compensations: {}
+    compensations: {},
   });
 }

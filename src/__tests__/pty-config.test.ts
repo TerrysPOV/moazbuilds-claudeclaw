@@ -107,12 +107,12 @@ describe("parseSettings — pty defaults", () => {
   it("rejects invalid numeric values and falls back to defaults", async () => {
     await writeRawSettings({
       pty: {
-        idleReapMinutes: 0,           // must be > 0
-        maxRetries: -1,                // must be >= 0
-        backoffMs: "not-an-array",     // must be array
-        turnIdleTimeoutMs: -100,       // must be > 0
-        cols: 10,                      // must be >= 40
-        rows: 5,                       // must be >= 10
+        idleReapMinutes: 0, // must be > 0
+        maxRetries: -1, // must be >= 0
+        backoffMs: "not-an-array", // must be array
+        turnIdleTimeoutMs: -100, // must be > 0
+        cols: 10, // must be >= 40
+        rows: 5, // must be >= 10
       },
     });
     await reloadSettings();

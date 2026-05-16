@@ -2,8 +2,14 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  mkdtempSync, rmSync, writeFileSync, readFileSync,
-  existsSync, statSync, chmodSync, mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  statSync,
+  chmodSync,
+  mkdirSync,
 } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { createHmac } from "node:crypto";
@@ -47,9 +53,18 @@ async function invokeViaTool(
 function readNewAuditEvents(offsetBytes: number): Record<string, unknown>[] {
   if (!existsSync(DEFAULT_AUDIT_PATH)) return [];
   const content = readFileSync(DEFAULT_AUDIT_PATH, "utf8").slice(offsetBytes);
-  return content.trim().split("\n").filter(Boolean).map((line) => {
-    try { return JSON.parse(line); } catch { return null; }
-  }).filter(Boolean) as Record<string, unknown>[];
+  return content
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean) as Record<string, unknown>[];
 }
 
 let tmpDir: string;
@@ -65,16 +80,19 @@ beforeEach(async () => {
 
   const configPath = join(tmpDir, "mcp-proxy.json");
   const tokenPath = join(tmpDir, "mcp-proxy.token");
-  writeFileSync(configPath, JSON.stringify({
-    servers: {
-      "test-server": {
-        command: BUN_BIN,
-        args: ["run", MOCK_SERVER],
-        enabled: true,
-        allowedTools: ["echo"],
+  writeFileSync(
+    configPath,
+    JSON.stringify({
+      servers: {
+        "test-server": {
+          command: BUN_BIN,
+          args: ["run", MOCK_SERVER],
+          enabled: true,
+          allowedTools: ["echo"],
+        },
       },
-    },
-  }));
+    }),
+  );
 
   plugin = new McpProxyPlugin({ configPath, tokenPath });
   await plugin.start();
@@ -87,7 +105,9 @@ afterEach(async () => {
   _resetMcpBridge();
   _resetHttpGateway();
   _resetMcpProxy();
-  try { rmSync(tmpDir, { recursive: true }); } catch {}
+  try {
+    rmSync(tmpDir, { recursive: true });
+  } catch {}
 });
 
 describe("mcp-proxy audit forensics", () => {
@@ -98,13 +118,15 @@ describe("mcp-proxy audit forensics", () => {
     const customRequestId = "deadbeef12345678";
 
     const resp = await invokeViaTool(
-      gateway, "mcp-proxy", "test-server__echo",
+      gateway,
+      "mcp-proxy",
+      "test-server__echo",
       { arguments: { message: "audit-propagation" }, mode: "direct" },
       proxyToken,
       { requestId: customRequestId },
     );
     expect(resp?.status).toBe(200);
-    const data = await resp!.json() as { request_id: string };
+    const data = (await resp!.json()) as { request_id: string };
     expect(data.request_id).toBe(customRequestId);
 
     const events = readNewAuditEvents(preOffset);
@@ -124,11 +146,19 @@ describe("mcp-proxy audit forensics", () => {
     const localTmpDir = mkdtempSync(join(tmpdir(), "mcp-proxy-all-events-"));
     const configPath = join(localTmpDir, "mcp-proxy.json");
     const tokenPath = join(localTmpDir, "mcp-proxy.token");
-    writeFileSync(configPath, JSON.stringify({
-      servers: {
-        "test-server": { command: BUN_BIN, args: ["run", MOCK_SERVER], enabled: true, allowedTools: ["echo"] },
-      },
-    }));
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        servers: {
+          "test-server": {
+            command: BUN_BIN,
+            args: ["run", MOCK_SERVER],
+            enabled: true,
+            allowedTools: ["echo"],
+          },
+        },
+      }),
+    );
 
     const preOffset = existsSync(DEFAULT_AUDIT_PATH) ? statSync(DEFAULT_AUDIT_PATH).size : 0;
     const localPlugin = new McpProxyPlugin({ configPath, tokenPath });
@@ -138,7 +168,9 @@ describe("mcp-proxy audit forensics", () => {
 
     try {
       const respOk = await invokeViaTool(
-        localGateway, "mcp-proxy", "test-server__echo",
+        localGateway,
+        "mcp-proxy",
+        "test-server__echo",
         { arguments: { message: "ok" }, mode: "direct" },
         localToken,
       );
@@ -146,7 +178,9 @@ describe("mcp-proxy audit forensics", () => {
 
       // Force a 502 by calling a tool that doesn't exist in the bridge
       const respErr = await invokeViaTool(
-        localGateway, "mcp-proxy", "test-server__nonexistent_tool",
+        localGateway,
+        "mcp-proxy",
+        "test-server__nonexistent_tool",
         { mode: "direct" },
         localToken,
       );
@@ -164,7 +198,9 @@ describe("mcp-proxy audit forensics", () => {
       _resetMcpBridge();
       _resetHttpGateway();
       _resetMcpProxy();
-      try { rmSync(localTmpDir, { recursive: true }); } catch {}
+      try {
+        rmSync(localTmpDir, { recursive: true });
+      } catch {}
     }
   });
 
@@ -185,7 +221,9 @@ describe("mcp-proxy audit forensics", () => {
     // After swapping the singleton the new bridge has no tools → invokeTool will
     // throw "Unknown tool" → gateway returns 502, not a daemon crash.
     const resp = await invokeViaTool(
-      gateway, "mcp-proxy", "test-server__echo",
+      gateway,
+      "mcp-proxy",
+      "test-server__echo",
       { arguments: { message: "test" }, mode: "direct" },
       proxyToken,
     );
@@ -203,7 +241,9 @@ describe("mcp-proxy audit forensics", () => {
     // 5 invocations
     for (let i = 0; i < 5; i++) {
       await invokeViaTool(
-        gateway, "mcp-proxy", "test-server__echo",
+        gateway,
+        "mcp-proxy",
+        "test-server__echo",
         { arguments: { message: `msg-${i}` }, mode: "direct" },
         proxyToken,
       );
@@ -230,7 +270,11 @@ describe("mcp-proxy audit forensics", () => {
     const resp1 = await gateway.handleRequest(
       new Request("http://localhost/api/plugin/mcp-proxy/tools/test-server__echo/invoke", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-Plus-Ts": ts, "X-Plus-Signature": badSig },
+        headers: {
+          "Content-Type": "application/json",
+          "X-Plus-Ts": ts,
+          "X-Plus-Signature": badSig,
+        },
         body,
       }),
       new URL("http://localhost/api/plugin/mcp-proxy/tools/test-server__echo/invoke"),
@@ -240,8 +284,11 @@ describe("mcp-proxy audit forensics", () => {
 
     // Error case 2: stale timestamp
     const resp2 = await invokeViaTool(
-      gateway, "mcp-proxy", "test-server__echo",
-      { mode: "direct" }, proxyToken,
+      gateway,
+      "mcp-proxy",
+      "test-server__echo",
+      { mode: "direct" },
+      proxyToken,
       { tsOverride: new Date(Date.now() - 20 * 60 * 1000).toISOString() },
     );
     const body2 = await resp2!.text();
@@ -249,8 +296,11 @@ describe("mcp-proxy audit forensics", () => {
 
     // Error case 3: unknown tool → 502
     const resp3 = await invokeViaTool(
-      gateway, "mcp-proxy", "test-server__ghost",
-      { mode: "direct" }, proxyToken,
+      gateway,
+      "mcp-proxy",
+      "test-server__ghost",
+      { mode: "direct" },
+      proxyToken,
     );
     const body3 = await resp3!.text();
     expect(body3).not.toContain(tokenHex);

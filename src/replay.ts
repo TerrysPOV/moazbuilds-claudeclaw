@@ -1,22 +1,34 @@
 /**
  * Replay Support
- * 
+ *
  * Allows intentional reprocessing of events.
- * 
+ *
  * SAFETY:
  * - Replay never mutates existing done records
  * - Replay always creates new event records
  * - Replay events carry replayedFromEventId for provenance
  * - Can replay from: sequence number, range, or DLQ
- * 
+ *
  * USE CASES:
  * - Recover from processor bugs by reprocessing affected events
  * - Backfill new functionality across historical events
  * - Retry DLQ events after fixing root cause
  */
 
-import { initEventLog, append, readFrom, readRange, type EventRecord, type EventEntryInput } from "./event-log";
-import { initDLQ, replay as replayDLQEntry, list as listDLQ, type DLQEntry } from "./dead-letter-queue";
+import {
+  initEventLog,
+  append,
+  readFrom,
+  readRange,
+  type EventRecord,
+  type EventEntryInput,
+} from "./event-log";
+import {
+  initDLQ,
+  replay as replayDLQEntry,
+  list as listDLQ,
+  type DLQEntry,
+} from "./dead-letter-queue";
 
 export interface ReplayResult {
   originalSeq: number;
@@ -65,7 +77,7 @@ export async function replayFrom(startSeq: number): Promise<ReplaySummary> {
   }
 
   console.log(
-    `[replay] Replay from seq ${startSeq} complete: ${successful} successful, ${failed} failed`
+    `[replay] Replay from seq ${startSeq} complete: ${successful} successful, ${failed} failed`,
   );
 
   return {
@@ -79,10 +91,7 @@ export async function replayFrom(startSeq: number): Promise<ReplaySummary> {
 /**
  * Replay events in a sequence range (inclusive).
  */
-export async function replayRange(
-  startSeq: number,
-  endSeq: number
-): Promise<ReplaySummary> {
+export async function replayRange(startSeq: number, endSeq: number): Promise<ReplaySummary> {
   await initReplay();
 
   const results: ReplayResult[] = [];
@@ -101,7 +110,7 @@ export async function replayRange(
   }
 
   console.log(
-    `[replay] Replay range ${startSeq}-${endSeq} complete: ${successful} successful, ${failed} failed`
+    `[replay] Replay range ${startSeq}-${endSeq} complete: ${successful} successful, ${failed} failed`,
   );
 
   return {
@@ -177,9 +186,7 @@ export async function replayDLQ(): Promise<ReplaySummary> {
     }
   }
 
-  console.log(
-    `[replay] DLQ replay complete: ${successful} successful, ${failed} failed`
-  );
+  console.log(`[replay] DLQ replay complete: ${successful} successful, ${failed} failed`);
 
   return {
     requested: entries.length,
@@ -254,7 +261,7 @@ export async function previewReplayFrom(startSeq: number): Promise<{
     };
   }
 
-  const types = [...new Set(events.map(e => e.type))];
+  const types = [...new Set(events.map((e) => e.type))];
 
   return {
     count: events.length,
@@ -269,7 +276,7 @@ export async function previewReplayFrom(startSeq: number): Promise<{
  */
 export async function previewReplayRange(
   startSeq: number,
-  endSeq: number
+  endSeq: number,
 ): Promise<{
   count: number;
   eventTypes: string[];
@@ -281,7 +288,7 @@ export async function previewReplayRange(
     events.push(event);
   }
 
-  const types = [...new Set(events.map(e => e.type))];
+  const types = [...new Set(events.map((e) => e.type))];
 
   return {
     count: events.length,
@@ -311,9 +318,9 @@ export async function previewReplayDLQ(): Promise<{
     };
   }
 
-  const types = [...new Set(entries.map(e => e.event.type))];
+  const types = [...new Set(entries.map((e) => e.event.type))];
   const sorted = [...entries].sort(
-    (a, b) => new Date(a.deadLetteredAt).getTime() - new Date(b.deadLetteredAt).getTime()
+    (a, b) => new Date(a.deadLetteredAt).getTime() - new Date(b.deadLetteredAt).getTime(),
   );
 
   return {

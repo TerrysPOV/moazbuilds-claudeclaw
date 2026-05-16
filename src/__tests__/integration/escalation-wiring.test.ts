@@ -1,11 +1,11 @@
 /**
  * Escalation Wiring Integration Tests
- * 
+ *
  * Tests that escalation functions are properly wired into:
  * - Gateway (shouldBlockAdmission)
  * - Orchestrator (shouldBlockScheduling)
  * - Runner (handleWatchdogTrigger, handleOrchestrationFailure)
- * 
+ *
  * Run with: bun test src/__tests__/integration/escalation-wiring.test.ts
  */
 
@@ -328,26 +328,28 @@ describe("Gateway Escalation Wiring", () => {
       await resume({});
 
       const mockDeps: GatewayDependencies = {
-        eventLog: { append: vi.fn().mockResolvedValue({
-          id: randomUUID(),
-          seq: 1,
-          type: "inbound:telegram",
-          source: "telegram",
-          timestamp: new Date().toISOString(),
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          status: "pending",
-          channelId: "telegram:123",
-          threadId: "default",
-          payload: {},
-          dedupeKey: "test",
-          retryCount: 0,
-          nextRetryAt: null,
-          correlationId: null,
-          causationId: null,
-          replayedFromEventId: null,
-          lastError: null,
-        })},
+        eventLog: {
+          append: vi.fn().mockResolvedValue({
+            id: randomUUID(),
+            seq: 1,
+            type: "inbound:telegram",
+            source: "telegram",
+            timestamp: new Date().toISOString(),
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            status: "pending",
+            channelId: "telegram:123",
+            threadId: "default",
+            payload: {},
+            dedupeKey: "test",
+            retryCount: 0,
+            nextRetryAt: null,
+            correlationId: null,
+            causationId: null,
+            replayedFromEventId: null,
+            lastError: null,
+          }),
+        },
         processor: { processPersistedEvent: vi.fn().mockResolvedValue({ success: true }) },
         resume: {
           getOrCreateSessionMapping: vi.fn().mockResolvedValue({
@@ -427,7 +429,7 @@ describe("Orchestrator Escalation Wiring", () => {
   beforeEach(async () => {
     await fullCleanup(); // Clean slate before each test
     await setupEscalationDir();
-    
+
     // Register a handler that fails for test-action
     registerHandlers({
       actions: {
@@ -437,7 +439,7 @@ describe("Orchestrator Escalation Wiring", () => {
       },
       compensations: {},
     });
-    
+
     // Clear governance client
     setGovernanceClient(null);
   });
@@ -499,7 +501,7 @@ describe("Orchestrator Escalation Wiring", () => {
 });
 
 // =============================================================================
-// Watchdog Escalation Wiring Tests  
+// Watchdog Escalation Wiring Tests
 // =============================================================================
 
 describe("Watchdog Escalation Wiring", () => {
@@ -522,9 +524,7 @@ describe("Watchdog Escalation Wiring", () => {
       };
 
       // This should not throw
-      await expect(
-        handleWatchdogTrigger(decision, context)
-      ).resolves.toBeDefined();
+      await expect(handleWatchdogTrigger(decision, context)).resolves.toBeDefined();
     });
 
     it("should handle watchdog kill trigger", async () => {
@@ -536,9 +536,7 @@ describe("Watchdog Escalation Wiring", () => {
       };
 
       // This should not throw
-      await expect(
-        handleWatchdogTrigger(decision, context)
-      ).resolves.toBeDefined();
+      await expect(handleWatchdogTrigger(decision, context)).resolves.toBeDefined();
     });
 
     it("should trigger auto-pause on watchdog kill", async () => {
@@ -611,7 +609,7 @@ describe("Escalation Integration Scenarios", () => {
   it("should track orchestration failure counts", async () => {
     // Trigger a failure notification
     const workflowId = "test-workflow-" + randomUUID().slice(0, 8);
-    
+
     await handleOrchestrationFailure(workflowId, "Test error message");
 
     // Check failure was tracked

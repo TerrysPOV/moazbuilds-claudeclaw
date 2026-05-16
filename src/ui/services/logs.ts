@@ -16,9 +16,7 @@ async function readRecentRunLogs(tail: number) {
     return [];
   }
 
-  const candidates = files
-    .filter((f) => f.endsWith(".log") && f !== "daemon.log")
-    .slice(0, 200);
+  const candidates = files.filter((f) => f.endsWith(".log") && f !== "daemon.log").slice(0, 200);
 
   const withStats = await Promise.all(
     candidates.map(async (name) => {
@@ -29,7 +27,7 @@ async function readRecentRunLogs(tail: number) {
       } catch {
         return null;
       }
-    })
+    }),
   );
 
   return await Promise.all(
@@ -40,7 +38,7 @@ async function readRecentRunLogs(tail: number) {
       .map(async ({ name, path }) => ({
         file: name,
         lines: await readTail(path, tail),
-      }))
+      })),
   );
 }
 

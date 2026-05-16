@@ -1,11 +1,11 @@
 /**
  * Workflow Audit & Telemetry
- * 
+ *
  * Exposes durable orchestration state for audit/telemetry without making telemetry canonical.
  * Derives metrics from persisted workflow state.
  */
 
-import { WorkflowState, WorkflowDefinition } from "./types.ts";
+import { type WorkflowState, WorkflowDefinition } from "./types.ts";
 import { loadState, loadDefinition, listAll, getWorkflowStats } from "./workflow-state.ts";
 
 /**
@@ -66,7 +66,15 @@ export interface AggregatedTelemetry {
 export interface TelemetryRecord {
   timestamp: string;
   workflowId: string;
-  event: "created" | "started" | "task_started" | "task_completed" | "task_failed" | "workflow_completed" | "workflow_failed" | "workflow_cancelled";
+  event:
+    | "created"
+    | "started"
+    | "task_started"
+    | "task_completed"
+    | "task_failed"
+    | "workflow_completed"
+    | "workflow_failed"
+    | "workflow_cancelled";
   taskId?: string;
   details?: Record<string, unknown>;
 }
@@ -79,15 +87,15 @@ export async function getWorkflowTelemetry(workflowId: string): Promise<Workflow
   if (!state) {
     return null;
   }
-  
+
   const definition = await loadDefinition(workflowId);
-  
+
   // Calculate retry count
   let retryCount = 0;
   for (const taskState of Object.values(state.taskStates)) {
     retryCount += taskState.attemptCount;
   }
-  
+
   // Calculate duration
   let durationMs: number | undefined;
   if (state.completedAt && state.startedAt) {
@@ -95,9 +103,9 @@ export async function getWorkflowTelemetry(workflowId: string): Promise<Workflow
   } else if (state.startedAt) {
     durationMs = Date.now() - new Date(state.startedAt).getTime();
   }
-  
+
   const totalTasks = definition?.tasks.length || Object.keys(state.taskStates).length;
-  
+
   return {
     workflowId: state.workflowId,
     status: state.status,
@@ -112,10 +120,10 @@ export async function getWorkflowTelemetry(workflowId: string): Promise<Workflow
       running: state.runningTasks.length,
       ready: state.readyTasks.length,
       blocked: state.blockedTasks.length,
-      continued: state.continuedTasks?.length || 0
+      continued: state.continuedTasks?.length || 0,
     },
     retryCount,
-    error: state.error
+    error: state.error,
   };
 }
 
@@ -125,14 +133,14 @@ export async function getWorkflowTelemetry(workflowId: string): Promise<Workflow
 export async function getActiveWorkflows(): Promise<WorkflowTelemetry[]> {
   const allWorkflowIds = await listAll();
   const active: WorkflowTelemetry[] = [];
-  
+
   for (const workflowId of allWorkflowIds) {
     const telemetry = await getWorkflowTelemetry(workflowId);
     if (telemetry && !isTerminalStatus(telemetry.status)) {
       active.push(telemetry);
     }
   }
-  
+
   return active;
 }
 
@@ -142,14 +150,14 @@ export async function getActiveWorkflows(): Promise<WorkflowTelemetry[]> {
 export async function getCompletedWorkflows(): Promise<WorkflowTelemetry[]> {
   const allWorkflowIds = await listAll();
   const completed: WorkflowTelemetry[] = [];
-  
+
   for (const workflowId of allWorkflowIds) {
     const telemetry = await getWorkflowTelemetry(workflowId);
     if (telemetry && telemetry.status === "completed") {
       completed.push(telemetry);
     }
   }
-  
+
   return completed;
 }
 
@@ -159,14 +167,14 @@ export async function getCompletedWorkflows(): Promise<WorkflowTelemetry[]> {
 export async function getFailedWorkflows(): Promise<WorkflowTelemetry[]> {
   const allWorkflowIds = await listAll();
   const failed: WorkflowTelemetry[] = [];
-  
+
   for (const workflowId of allWorkflowIds) {
     const telemetry = await getWorkflowTelemetry(workflowId);
     if (telemetry && telemetry.status === "failed") {
       failed.push(telemetry);
     }
   }
-  
+
   return failed;
 }
 
@@ -183,11 +191,11 @@ function isTerminalStatus(status: WorkflowState["status"]): boolean {
 export async function getAggregatedTelemetry(): Promise<AggregatedTelemetry> {
   const stats = await getWorkflowStats();
   const allWorkflowIds = await listAll();
-  
+
   let totalRetryCount = 0;
   let totalDurationMs = 0;
   let durationCount = 0;
-  
+
   let totalTaskCount = 0;
   let completedTaskCount = 0;
   let failedTaskCount = 0;
@@ -195,18 +203,18 @@ export async function getAggregatedTelemetry(): Promise<AggregatedTelemetry> {
   let readyTaskCount = 0;
   let blockedTaskCount = 0;
   let continuedTaskCount = 0;
-  
+
   for (const workflowId of allWorkflowIds) {
     const telemetry = await getWorkflowTelemetry(workflowId);
     if (!telemetry) continue;
-    
+
     totalRetryCount += telemetry.retryCount;
-    
+
     if (telemetry.durationMs) {
       totalDurationMs += telemetry.durationMs;
       durationCount++;
     }
-    
+
     totalTaskCount += telemetry.taskCounts.total;
     completedTaskCount += telemetry.taskCounts.completed;
     failedTaskCount += telemetry.taskCounts.failed;
@@ -215,7 +223,7 @@ export async function getAggregatedTelemetry(): Promise<AggregatedTelemetry> {
     blockedTaskCount += telemetry.taskCounts.blocked;
     continuedTaskCount += telemetry.taskCounts.continued;
   }
-  
+
   return {
     timestamp: new Date().toISOString(),
     workflows: {
@@ -223,7 +231,7 @@ export async function getAggregatedTelemetry(): Promise<AggregatedTelemetry> {
       completed: stats.completed,
       failed: stats.failed,
       cancelled: stats.total - stats.active - stats.completed - stats.failed,
-      total: stats.total
+      total: stats.total,
     },
     tasks: {
       total: totalTaskCount,
@@ -232,10 +240,10 @@ export async function getAggregatedTelemetry(): Promise<AggregatedTelemetry> {
       running: runningTaskCount,
       ready: readyTaskCount,
       blocked: blockedTaskCount,
-      continued: continuedTaskCount
+      continued: continuedTaskCount,
     },
     averageDurationMs: durationCount > 0 ? totalDurationMs / durationCount : undefined,
-    retryRate: totalTaskCount > 0 ? totalRetryCount / totalTaskCount : 0
+    retryRate: totalTaskCount > 0 ? totalRetryCount / totalTaskCount : 0,
   };
 }
 
@@ -248,25 +256,25 @@ export async function generateAuditRecords(workflowId: string): Promise<Telemetr
   if (!state) {
     return [];
   }
-  
+
   const records: TelemetryRecord[] = [];
-  
+
   // Workflow created
   records.push({
     timestamp: state.createdAt,
     workflowId: state.workflowId,
-    event: "created"
+    event: "created",
   });
-  
+
   // Workflow started
   if (state.startedAt) {
     records.push({
       timestamp: state.startedAt,
       workflowId: state.workflowId,
-      event: "started"
+      event: "started",
     });
   }
-  
+
   // Task events
   for (const taskState of Object.values(state.taskStates)) {
     if (taskState.lastAttemptAt) {
@@ -274,14 +282,14 @@ export async function generateAuditRecords(workflowId: string): Promise<Telemetr
         timestamp: taskState.lastAttemptAt,
         workflowId: state.workflowId,
         event: "task_started",
-        taskId: taskState.taskId
+        taskId: taskState.taskId,
       });
     }
-    
+
     if (taskState.completedAt) {
-      const event: TelemetryRecord["event"] = 
+      const event: TelemetryRecord["event"] =
         taskState.status === "failed" ? "task_failed" : "task_completed";
-      
+
       records.push({
         timestamp: taskState.completedAt,
         workflowId: state.workflowId,
@@ -289,30 +297,32 @@ export async function generateAuditRecords(workflowId: string): Promise<Telemetr
         taskId: taskState.taskId,
         details: {
           attemptCount: taskState.attemptCount,
-          error: taskState.error
-        }
+          error: taskState.error,
+        },
       });
     }
   }
-  
+
   // Workflow completed/failed/cancelled
   if (state.completedAt) {
     const event: TelemetryRecord["event"] =
-      state.status === "completed" ? "workflow_completed" :
-      state.status === "failed" ? "workflow_failed" :
-      "workflow_cancelled";
-    
+      state.status === "completed"
+        ? "workflow_completed"
+        : state.status === "failed"
+          ? "workflow_failed"
+          : "workflow_cancelled";
+
     records.push({
       timestamp: state.completedAt,
       workflowId: state.workflowId,
       event,
-      details: { error: state.error }
+      details: { error: state.error },
     });
   }
-  
+
   // Sort by timestamp
   records.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-  
+
   return records;
 }
 
@@ -335,48 +345,46 @@ export interface TelemetryAPIResponse {
 /**
  * Get telemetry API response
  */
-export async function getTelemetryAPI(
-  options: {
-    active?: boolean;
-    completed?: boolean;
-    failed?: boolean;
-    aggregated?: boolean;
-    workflowId?: string;
-    audit?: boolean;
-  }
-): Promise<TelemetryAPIResponse> {
+export async function getTelemetryAPI(options: {
+  active?: boolean;
+  completed?: boolean;
+  failed?: boolean;
+  aggregated?: boolean;
+  workflowId?: string;
+  audit?: boolean;
+}): Promise<TelemetryAPIResponse> {
   try {
     const data: TelemetryAPIResponse["data"] = {};
-    
+
     if (options.workflowId) {
-      data.workflow = await getWorkflowTelemetry(options.workflowId) || undefined;
+      data.workflow = (await getWorkflowTelemetry(options.workflowId)) || undefined;
     }
-    
+
     if (options.active) {
       data.active = await getActiveWorkflows();
     }
-    
+
     if (options.completed) {
       data.completed = await getCompletedWorkflows();
     }
-    
+
     if (options.failed) {
       data.failed = await getFailedWorkflows();
     }
-    
+
     if (options.aggregated) {
       data.aggregated = await getAggregatedTelemetry();
     }
-    
+
     if (options.audit && options.workflowId) {
       data.audit = await generateAuditRecords(options.workflowId);
     }
-    
+
     return { success: true, data };
   } catch (err) {
     return {
       success: false,
-      error: err instanceof Error ? err.message : String(err)
+      error: err instanceof Error ? err.message : String(err),
     };
   }
 }

@@ -21,7 +21,7 @@ const WATCHDOG_DIR = join(process.cwd(), ".claude", "claudeclaw", "watchdog");
 describe("Watchdog", () => {
   beforeEach(async () => {
     resetWatchdog();
-    
+
     // Clear watchdog directory for test isolation
     try {
       const { rm, readdir } = await import("fs/promises");
@@ -34,9 +34,9 @@ describe("Watchdog", () => {
     } catch {
       // Directory might not exist yet
     }
-    
+
     await initWatchdog();
-    
+
     // Configure with relaxed limits for testing
     configureWatchdog({
       limits: {
@@ -72,13 +72,16 @@ describe("Watchdog", () => {
   test("should record execution metrics", async () => {
     const invocationId = "test-invocation-1";
 
-    await recordExecutionMetric({
-      invocationId,
-      sessionId: "test-session",
-    }, {
-      toolCallCount: 5,
-      turnCount: 2,
-    });
+    await recordExecutionMetric(
+      {
+        invocationId,
+        sessionId: "test-session",
+      },
+      {
+        toolCallCount: 5,
+        turnCount: 2,
+      },
+    );
 
     const metrics = await getActiveInvocation(invocationId);
     expect(metrics).not.toBeNull();
@@ -112,12 +115,15 @@ describe("Watchdog", () => {
   test("should return healthy when under limits", async () => {
     const invocationId = "test-invocation-healthy";
 
-    await recordExecutionMetric({
-      invocationId,
-    }, {
-      toolCallCount: 3,
-      turnCount: 2,
-    });
+    await recordExecutionMetric(
+      {
+        invocationId,
+      },
+      {
+        toolCallCount: 3,
+        turnCount: 2,
+      },
+    );
 
     const decision = await checkLimits({ invocationId });
 
@@ -129,12 +135,15 @@ describe("Watchdog", () => {
     const invocationId = "test-invocation-warn";
 
     // 8 out of 10 = 80%
-    await recordExecutionMetric({
-      invocationId,
-    }, {
-      toolCallCount: 8,
-      turnCount: 1,
-    });
+    await recordExecutionMetric(
+      {
+        invocationId,
+      },
+      {
+        toolCallCount: 8,
+        turnCount: 1,
+      },
+    );
 
     const decision = await checkLimits({ invocationId });
 
@@ -145,17 +154,20 @@ describe("Watchdog", () => {
   test("should trigger suspend at tool call limit", async () => {
     const invocationId = "test-invocation-suspend";
 
-    await recordExecutionMetric({
-      invocationId,
-    }, {
-      toolCallCount: 10, // At limit
-      turnCount: 1,
-    });
+    await recordExecutionMetric(
+      {
+        invocationId,
+      },
+      {
+        toolCallCount: 10, // At limit
+        turnCount: 1,
+      },
+    );
 
     const decision = await checkLimits({ invocationId });
 
     expect(decision.state).toBe("suspend");
-    expect(decision.triggeredLimits.some(l => l.includes("maxToolCalls"))).toBe(true);
+    expect(decision.triggeredLimits.some((l) => l.includes("maxToolCalls"))).toBe(true);
   });
 
   test("should detect repeated tool patterns", async () => {
@@ -169,17 +181,20 @@ describe("Watchdog", () => {
     const decision = await checkLimits({ invocationId });
 
     expect(decision.state).toBe("suspend");
-    expect(decision.triggeredLimits.some(l => l.includes("Repeated"))).toBe(true);
+    expect(decision.triggeredLimits.some((l) => l.includes("Repeated"))).toBe(true);
   });
 
   test("should handle trigger for warn state", async () => {
     const invocationId = "test-invocation-warn-handle";
 
-    await recordExecutionMetric({
-      invocationId,
-    }, {
-      toolCallCount: 8, // Warning level
-    });
+    await recordExecutionMetric(
+      {
+        invocationId,
+      },
+      {
+        toolCallCount: 8, // Warning level
+      },
+    );
 
     const decision = await checkLimits({ invocationId });
     const result = await handleTrigger({ invocationId }, decision);
@@ -191,11 +206,14 @@ describe("Watchdog", () => {
   test("should handle trigger for suspend state", async () => {
     const invocationId = "test-invocation-suspend-handle";
 
-    await recordExecutionMetric({
-      invocationId,
-    }, {
-      toolCallCount: 10, // At limit
-    });
+    await recordExecutionMetric(
+      {
+        invocationId,
+      },
+      {
+        toolCallCount: 10, // At limit
+      },
+    );
 
     const decision = await checkLimits({ invocationId });
     const result = await handleTrigger({ invocationId }, decision);
@@ -207,11 +225,14 @@ describe("Watchdog", () => {
   test("should handle trigger for kill state", async () => {
     const invocationId = "test-invocation-kill";
 
-    await recordExecutionMetric({
-      invocationId,
-    }, {
-      toolCallCount: 100, // Way over
-    });
+    await recordExecutionMetric(
+      {
+        invocationId,
+      },
+      {
+        toolCallCount: 100, // Way over
+      },
+    );
 
     const decision = await checkLimits({ invocationId });
     decision.state = "kill"; // Force kill state for testing
@@ -231,13 +252,16 @@ describe("Watchdog", () => {
 
     await recordExecutionMetric({ invocationId: "inv-1", sessionId }, { toolCallCount: 1 });
     await recordExecutionMetric({ invocationId: "inv-2", sessionId }, { toolCallCount: 2 });
-    await recordExecutionMetric({ invocationId: "inv-3", sessionId: "other" }, { toolCallCount: 3 });
+    await recordExecutionMetric(
+      { invocationId: "inv-3", sessionId: "other" },
+      { toolCallCount: 3 },
+    );
 
     const invocations = await getSessionActiveInvocations(sessionId);
 
     expect(invocations.length).toBe(2);
-    expect(invocations.find(i => i.invocationId === "inv-1")).toBeDefined();
-    expect(invocations.find(i => i.invocationId === "inv-2")).toBeDefined();
+    expect(invocations.find((i) => i.invocationId === "inv-1")).toBeDefined();
+    expect(invocations.find((i) => i.invocationId === "inv-2")).toBeDefined();
   });
 
   test("should clear invocation", async () => {

@@ -13,24 +13,25 @@ try {
   const html = await res.text();
 
   const skills = [];
-  const esc = `\\\\?"`;  // matches both \" and "
+  const esc = `\\\\?"`; // matches both \" and "
   const pattern = new RegExp(
     `\\{${esc}source${esc}:${esc}([^"\\\\]+)${esc},${esc}skillId${esc}:${esc}([^"\\\\]+)${esc},${esc}name${esc}:${esc}([^"\\\\]+)${esc},${esc}installs${esc}:(\\d+)\\}`,
-    "g"
+    "g",
   );
   let match;
+  // biome-ignore lint/suspicious/noAssignInExpressions: standard regex exec loop idiom.
   while ((match = pattern.exec(html)) !== null) {
     skills.push({
       source: match[1],
       id: match[2],
       name: match[3],
-      installs: parseInt(match[4]),
+      installs: parseInt(match[4], 10),
     });
   }
 
   const q = query.toLowerCase();
   let filtered = skills.filter(
-    (s) => s.name.toLowerCase().includes(q) || s.source.toLowerCase().includes(q)
+    (s) => s.name.toLowerCase().includes(q) || s.source.toLowerCase().includes(q),
   );
   if (filtered.length === 0) filtered = skills.slice(0, 20);
 

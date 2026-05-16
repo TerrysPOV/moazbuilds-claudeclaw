@@ -108,8 +108,14 @@ function copyDirSync(src: string, dest: string): void {
 }
 
 function detectPkgManager(): string | null {
-  try { run("bun --version"); return "bun"; } catch {}
-  try { run("npm --version"); return "npm"; } catch {}
+  try {
+    run("bun --version");
+    return "bun";
+  } catch {}
+  try {
+    run("npm --version");
+    return "npm";
+  } catch {}
   return null;
 }
 
@@ -155,7 +161,9 @@ function startWhisperWarmupInBackground(): void {
     proc.unref();
     console.log("preflight: whisper warmup started in background");
   } catch (err) {
-    console.error(`preflight: failed to start whisper warmup - ${err instanceof Error ? err.message : String(err)}`);
+    console.error(
+      `preflight: failed to start whisper warmup - ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 }
 
@@ -343,9 +351,7 @@ function installOfficialPlugins(
       console.log(`  install: ${pluginKey}`);
 
       // Cache the plugin's source directory
-      const sourceDir = pluginDef.source
-        ? join(marketplaceDir, pluginDef.source)
-        : marketplaceDir;
+      const sourceDir = pluginDef.source ? join(marketplaceDir, pluginDef.source) : marketplaceDir;
 
       const cacheDir = join(PLUGINS_DIR, "cache", marketplaceName, name, shortSha);
       if (existsSync(cacheDir)) {
@@ -401,7 +407,9 @@ function installOfficialPlugins(
 // ── Main ────────────────────────────────────────────────────────────
 
 export function preflight(projectPath: string): void {
-  try { run("git --version"); } catch {
+  try {
+    run("git --version");
+  } catch {
     console.error("preflight: git is required but not installed.");
     process.exit(1);
   }

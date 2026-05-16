@@ -53,16 +53,19 @@ beforeEach(async () => {
 
   const configPath = join(tmpDir, "mcp-proxy.json");
   const tokenPath = join(tmpDir, "mcp-proxy.token");
-  writeFileSync(configPath, JSON.stringify({
-    servers: {
-      "test-server": {
-        command: BUN_BIN,
-        args: ["run", MOCK_SERVER],
-        enabled: true,
-        allowedTools: ["echo"],
+  writeFileSync(
+    configPath,
+    JSON.stringify({
+      servers: {
+        "test-server": {
+          command: BUN_BIN,
+          args: ["run", MOCK_SERVER],
+          enabled: true,
+          allowedTools: ["echo"],
+        },
       },
-    },
-  }));
+    }),
+  );
 
   plugin = new McpProxyPlugin({ configPath, tokenPath });
   await plugin.start();
@@ -75,7 +78,9 @@ afterEach(async () => {
   _resetMcpBridge();
   _resetHttpGateway();
   _resetMcpProxy();
-  try { rmSync(tmpDir, { recursive: true }); } catch {}
+  try {
+    rmSync(tmpDir, { recursive: true });
+  } catch {}
 });
 
 describe("mcp-proxy replay window precision", () => {
@@ -98,7 +103,7 @@ describe("mcp-proxy replay window precision", () => {
   it("timestamp +15m01s (future, outside window) returns 401 stale_or_future_timestamp", async () => {
     const resp = await invokeWithTs(gateway, proxyToken, +(REPLAY_WINDOW_S + 1));
     expect(resp?.status).toBe(401);
-    const data = await resp!.json() as { error?: { code: string } };
+    const data = (await resp!.json()) as { error?: { code: string } };
     expect(data.error?.code).toBe("stale_or_future_timestamp");
   });
 
@@ -114,7 +119,7 @@ describe("mcp-proxy replay window precision", () => {
   it("timestamp -15m01s (past, outside window) returns 401 stale_or_future_timestamp", async () => {
     const resp = await invokeWithTs(gateway, proxyToken, -(REPLAY_WINDOW_S + 1));
     expect(resp?.status).toBe(401);
-    const data = await resp!.json() as { error?: { code: string } };
+    const data = (await resp!.json()) as { error?: { code: string } };
     expect(data.error?.code).toBe("stale_or_future_timestamp");
   });
 

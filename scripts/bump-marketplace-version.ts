@@ -11,7 +11,7 @@ function bumpVersion(version: string, bumpType: BumpType): string {
     throw new Error(`Unsupported marketplace version format: ${version}`);
   }
 
-  let [, major, minor, patch] = match;
+  const [, major, minor, patch] = match;
   let nextMajor = Number(major);
   let nextMinor = Number(minor);
   let nextPatch = Number(patch);
@@ -48,7 +48,8 @@ async function main(): Promise<void> {
     throw new Error(`${MARKETPLACE_JSON} does not contain any plugins.`);
   }
 
-  const plugin = marketplace.plugins.find((entry) => entry.name === "claudeclaw-plus") ?? marketplace.plugins[0];
+  const plugin =
+    marketplace.plugins.find((entry) => entry.name === "claudeclaw-plus") ?? marketplace.plugins[0];
   if (!plugin || typeof plugin.version !== "string" || plugin.version.trim() === "") {
     throw new Error(`${MARKETPLACE_JSON} is missing a valid plugin version string.`);
   }

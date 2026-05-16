@@ -50,7 +50,7 @@ function extractUserText(line: string): string {
     raw = raw
       .replace(/^\[[\d-]+ [\d:]+ UTC[^\]]*\]\n/m, "")
       .replace(/^\[(?:WhatsApp|Slack|Discord)[^\]]*\]\n/m, "")
-      .replace(/^## Slack Directives[\s\S]*?(?=\n[A-Z\[]|\n$)/m, "")
+      .replace(/^## Slack Directives[\s\S]*?(?=\n[A-Z[]|\n$)/m, "")
       .trim();
     return raw;
   } catch {
@@ -161,10 +161,10 @@ export async function listSessions(): Promise<SessionInfo[]> {
   // Orphan JSONL sessions not tracked by any session file (up to 20 most recent)
   try {
     const projectDir = getProjectDir();
-    const files = (await readdir(projectDir)).filter(f => f.endsWith(".jsonl"));
+    const files = (await readdir(projectDir)).filter((f) => f.endsWith(".jsonl"));
     const candidates = files
-      .map(f => basename(f, ".jsonl"))
-      .filter(id => UUID_RE.test(id) && !knownIds.has(id))
+      .map((f) => basename(f, ".jsonl"))
+      .filter((id) => UUID_RE.test(id) && !knownIds.has(id))
       .slice(-20);
     for (const id of candidates) {
       try {

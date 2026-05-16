@@ -55,16 +55,19 @@ beforeEach(async () => {
 
   const configPath = join(tmpDir, "mcp-proxy.json");
   const tokenPath = join(tmpDir, "mcp-proxy.token");
-  writeFileSync(configPath, JSON.stringify({
-    servers: {
-      "test-server": {
-        command: BUN_BIN,
-        args: ["run", MOCK_SERVER],
-        enabled: true,
-        allowedTools: ["echo"],
+  writeFileSync(
+    configPath,
+    JSON.stringify({
+      servers: {
+        "test-server": {
+          command: BUN_BIN,
+          args: ["run", MOCK_SERVER],
+          enabled: true,
+          allowedTools: ["echo"],
+        },
       },
-    },
-  }));
+    }),
+  );
 
   plugin = new McpProxyPlugin({
     configPath,
@@ -86,19 +89,23 @@ afterEach(async () => {
   _resetMcpBridge();
   _resetHttpGateway();
   _resetMcpProxy();
-  try { rmSync(tmpDir, { recursive: true }); } catch {}
+  try {
+    rmSync(tmpDir, { recursive: true });
+  } catch {}
 });
 
 describe("mcp-proxy mode selector", () => {
   // ── Test 1 — direct mode calls warm pool ──────────────────────────────────
 
   it("mode=direct routes to warm pool (MCP stdio), not reasonedInvokeFn", async () => {
-    const resp = await invoke(gateway, "test-server__echo",
+    const resp = await invoke(
+      gateway,
+      "test-server__echo",
       { arguments: { message: "hi" }, mode: "direct" },
       proxyToken,
     );
     expect(resp?.status).toBe(200);
-    const data = await resp!.json() as { result?: { echo?: string } };
+    const data = (await resp!.json()) as { result?: { echo?: string } };
     expect(data.result).toMatchObject({ echo: "hi" });
     expect(reasonedCalls).toHaveLength(0); // reasonedInvokeFn not called
   });
@@ -106,7 +113,9 @@ describe("mcp-proxy mode selector", () => {
   // ── Test 2 — reasoned mode routes through inject fn ──────────────────────
 
   it("mode=reasoned routes through reasonedInvokeFn, not MCP stdio", async () => {
-    const resp = await invoke(gateway, "test-server__echo",
+    const resp = await invoke(
+      gateway,
+      "test-server__echo",
       { arguments: { message: "hi" }, mode: "reasoned" },
       proxyToken,
     );
@@ -118,12 +127,14 @@ describe("mcp-proxy mode selector", () => {
   // ── Test 3 — omitting mode defaults to direct ─────────────────────────────
 
   it("omitting mode field defaults to direct (warm pool)", async () => {
-    const resp = await invoke(gateway, "test-server__echo",
+    const resp = await invoke(
+      gateway,
+      "test-server__echo",
       { arguments: { message: "default-mode" } },
       proxyToken,
     );
     expect(resp?.status).toBe(200);
-    const data = await resp!.json() as { result?: { echo?: string } };
+    const data = (await resp!.json()) as { result?: { echo?: string } };
     expect(data.result).toMatchObject({ echo: "default-mode" });
     expect(reasonedCalls).toHaveLength(0);
   });
@@ -149,12 +160,14 @@ describe("mcp-proxy mode selector", () => {
   // ── Test 5 — mode field is stripped from args sent to MCP server ──────────
 
   it("mode field is stripped before forwarding arguments to MCP server", async () => {
-    const resp = await invoke(gateway, "test-server__echo",
+    const resp = await invoke(
+      gateway,
+      "test-server__echo",
       { arguments: { message: "strip-me" }, mode: "direct" },
       proxyToken,
     );
     expect(resp?.status).toBe(200);
-    const data = await resp!.json() as { result?: { echo?: string } };
+    const data = (await resp!.json()) as { result?: { echo?: string } };
     // The echo tool only received { message: "strip-me" }, not the mode field
     expect(data.result).toMatchObject({ echo: "strip-me" });
   });

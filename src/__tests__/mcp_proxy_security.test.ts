@@ -21,7 +21,12 @@ function signRequest(token: Buffer, body: string, ts: string): string {
   return createHmac("sha256", token).update(`${ts}\n${body}`).digest("hex");
 }
 
-async function invokeViaTool(tool: string, bodyObj: unknown, token: Buffer, tsOverride?: string): Promise<Response> {
+async function invokeViaTool(
+  tool: string,
+  bodyObj: unknown,
+  token: Buffer,
+  tsOverride?: string,
+): Promise<Response> {
   const ts = tsOverride ?? new Date().toISOString();
   const body = JSON.stringify(bodyObj);
   const sig = signRequest(token, body, ts);
@@ -47,16 +52,19 @@ beforeEach(async () => {
 
   const configPath = join(tmpDir, "mcp-proxy.json");
   const tokenPath = join(tmpDir, "mcp-proxy.token");
-  writeFileSync(configPath, JSON.stringify({
-    servers: {
-      "test-server": {
-        command: BUN_BIN,
-        args: ["run", MOCK_SERVER],
-        enabled: true,
-        allowedTools: ["echo"],
+  writeFileSync(
+    configPath,
+    JSON.stringify({
+      servers: {
+        "test-server": {
+          command: BUN_BIN,
+          args: ["run", MOCK_SERVER],
+          enabled: true,
+          allowedTools: ["echo"],
+        },
       },
-    },
-  }));
+    }),
+  );
 
   plugin = new McpProxyPlugin({ configPath, tokenPath });
   await plugin.start();
@@ -71,7 +79,9 @@ afterEach(async () => {
   _resetMcpBridge();
   _resetHttpGateway();
   _resetMcpProxy();
-  try { rmSync(tmpDir, { recursive: true }); } catch {}
+  try {
+    rmSync(tmpDir, { recursive: true });
+  } catch {}
 });
 
 // ── Test 1 — wrong HMAC → 401 ─────────────────────────────────────────────
@@ -99,7 +109,8 @@ describe("mcp-proxy security", () => {
 
   it("timestamp outside replay window returns 401", async () => {
     const staleTs = new Date(Date.now() - 20 * 60 * 1000).toISOString(); // 20 min ago
-    const resp = await invokeViaTool("test-server__echo",
+    const resp = await invokeViaTool(
+      "test-server__echo",
       { arguments: { message: "test" }, mode: "direct" },
       proxyToken,
       staleTs,
@@ -110,24 +121,26 @@ describe("mcp-proxy security", () => {
   // ── Test 3 — stderr doesn't pollute response ──────────────────────────────
 
   it("MCP server stderr goes to log file, not HTTP response body", async () => {
-    const resp = await invokeViaTool("test-server__echo",
+    const resp = await invokeViaTool(
+      "test-server__echo",
       { arguments: { message: "stderr-test" }, mode: "direct" },
       proxyToken,
     );
     expect(resp?.status).toBe(200);
-    const data = await resp!.json() as { result?: unknown };
+    const data = (await resp!.json()) as { result?: unknown };
     expect(data).toHaveProperty("result");
   });
 
   // ── Test 4 — path traversal args pass through without validation ──────────
 
   it("path-traversal args propagate cleanly to the MCP server without proxy injection", async () => {
-    const resp = await invokeViaTool("test-server__echo",
+    const resp = await invokeViaTool(
+      "test-server__echo",
       { arguments: { message: "../../etc/passwd" }, mode: "direct" },
       proxyToken,
     );
     expect(resp?.status).toBe(200);
-    const data = await resp!.json() as { result?: { echo?: string } };
+    const data = (await resp!.json()) as { result?: { echo?: string } };
     // Server echoes back exactly what we sent — proxy doesn't sanitize
     expect(data.result).toMatchObject({ echo: "../../etc/passwd" });
   });
@@ -166,16 +179,19 @@ describe("mcp-proxy security", () => {
     const capDir = mkdtempSync(join(tmpdir(), "mcp-proxy-large-test-"));
     const capConfigPath = join(capDir, "mcp-proxy.json");
     const capTokenPath = join(capDir, "mcp-proxy.token");
-    writeFileSync(capConfigPath, JSON.stringify({
-      servers: {
-        "test-server": {
-          command: BUN_BIN,
-          args: ["run", MOCK_SERVER],
-          enabled: true,
-          allowedTools: ["large_result"],
+    writeFileSync(
+      capConfigPath,
+      JSON.stringify({
+        servers: {
+          "test-server": {
+            command: BUN_BIN,
+            args: ["run", MOCK_SERVER],
+            enabled: true,
+            allowedTools: ["large_result"],
+          },
         },
-      },
-    }));
+      }),
+    );
 
     let capPlugin: McpProxyPlugin | null = null;
     try {
@@ -189,18 +205,27 @@ describe("mcp-proxy security", () => {
       const body = JSON.stringify({ arguments: {}, mode: "direct" });
       const sig = signRequest(capToken, body, ts);
       const resp = await capGateway.handleRequest(
-        new Request("http://localhost/api/plugin/mcp-proxy/tools/test-server__large_result/invoke", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-Plus-Ts": ts, "X-Plus-Signature": sig },
-          body,
-        }),
+        new Request(
+          "http://localhost/api/plugin/mcp-proxy/tools/test-server__large_result/invoke",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Plus-Ts": ts,
+              "X-Plus-Signature": sig,
+            },
+            body,
+          },
+        ),
         new URL("http://localhost/api/plugin/mcp-proxy/tools/test-server__large_result/invoke"),
       );
       // Handler throws due to result size cap → gateway wraps as 502
       expect(resp?.status).toBe(502);
     } finally {
       await capPlugin?.stop();
-      try { rmSync(capDir, { recursive: true }); } catch {}
+      try {
+        rmSync(capDir, { recursive: true });
+      } catch {}
       _resetMcpBridge();
       _resetHttpGateway();
       _resetMcpProxy();

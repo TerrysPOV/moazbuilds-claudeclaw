@@ -1,35 +1,35 @@
 /**
  * Escalation Module
- * 
+ *
  * Human escalation and operator intervention for ClaudeClaw.
- * 
+ *
  * This module provides:
  * - Pause/resume control for system intake and scheduling
  * - Structured handoff packages for human review
  * - Escalation notifications with rate limiting
  * - Trigger integration for policy, watchdog, and DLQ events
  * - Status views for operator dashboards
- * 
+ *
  * @example
  * ```typescript
  * import { pause, resume, createHandoff, notify, handleEscalationTrigger, getEscalationStatus } from "./escalation";
- * 
+ *
  * // Pause the system
  * await pause("admission_only", { reason: "Maintenance window" });
- * 
+ *
  * // Create a handoff for human review
  * await createHandoff("Needs operator review", { workflowId: "wf-123" });
- * 
+ *
  * // Send escalation notification
  * await notify("watchdog", "warning", "Watchdog triggered");
- * 
+ *
  * // Handle an escalation trigger
  * await handleEscalationTrigger({
  *   source: "policy_denial",
  *   severity: "critical",
  *   message: "Tool execution denied"
  * });
- * 
+ *
  * // Get current status
  * const status = await getEscalationStatus();
  * ```

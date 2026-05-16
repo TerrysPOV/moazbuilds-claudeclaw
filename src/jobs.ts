@@ -83,8 +83,8 @@ function parseJobFile(name: string, content: string): Job | null {
   const recurringRaw = recurringLine
     ? parseFrontmatterValue(recurringLine.replace("recurring:", "")).toLowerCase()
     : dailyLine
-    ? parseFrontmatterValue(dailyLine.replace("daily:", "")).toLowerCase()
-    : "";
+      ? parseFrontmatterValue(dailyLine.replace("daily:", "")).toLowerCase()
+      : "";
   const recurring = recurringRaw === "true" || recurringRaw === "yes" || recurringRaw === "1";
 
   const notifyLine = lines.find((l) => l.startsWith("notify:"));
@@ -92,9 +92,7 @@ function parseJobFile(name: string, content: string): Job | null {
     ? parseFrontmatterValue(notifyLine.replace("notify:", "")).toLowerCase()
     : "";
   const notify: true | false | "error" =
-    notifyRaw === "false" || notifyRaw === "no" ? false
-    : notifyRaw === "error" ? "error"
-    : true;
+    notifyRaw === "false" || notifyRaw === "no" ? false : notifyRaw === "error" ? "error" : true;
 
   const modelLine = lines.find((l) => l.startsWith("model:"));
   const modelRaw = modelLine ? parseFrontmatterValue(modelLine.replace("model:", "")) : "";
@@ -103,7 +101,8 @@ function parseJobFile(name: string, content: string): Job | null {
   const timeoutLine = lines.find((l) => l.startsWith("timeout:"));
   const timeoutRaw = timeoutLine ? parseFrontmatterValue(timeoutLine.replace("timeout:", "")) : "";
   const timeoutParsed = timeoutRaw ? parseInt(timeoutRaw, 10) : NaN;
-  const timeoutSeconds = Number.isFinite(timeoutParsed) && timeoutParsed > 0 ? timeoutParsed : undefined;
+  const timeoutSeconds =
+    Number.isFinite(timeoutParsed) && timeoutParsed > 0 ? timeoutParsed : undefined;
 
   const agentLine = lines.find((l) => l.startsWith("agent:"));
   const agentRaw = agentLine ? parseFrontmatterValue(agentLine.replace("agent:", "")) : "";
@@ -118,17 +117,32 @@ function parseJobFile(name: string, content: string): Job | null {
     ? parseFrontmatterValue(enabledLine.replace("enabled:", "")).toLowerCase()
     : "";
   const enabled =
-    enabledRaw === "false" || enabledRaw === "no" || enabledRaw === "0"
-      ? false
-      : undefined;
+    enabledRaw === "false" || enabledRaw === "no" || enabledRaw === "0" ? false : undefined;
 
   const retryLine = lines.find((l) => l.startsWith("retry:"));
-  const retry = retryLine ? parseInt(parseFrontmatterValue(retryLine.replace("retry:", "")), 10) || undefined : undefined;
+  const retry = retryLine
+    ? parseInt(parseFrontmatterValue(retryLine.replace("retry:", "")), 10) || undefined
+    : undefined;
 
   const retryDelayLine = lines.find((l) => l.startsWith("retry_delay:"));
-  const retryDelay = retryDelayLine ? parseInt(parseFrontmatterValue(retryDelayLine.replace("retry_delay:", "")), 10) || undefined : undefined;
+  const retryDelay = retryDelayLine
+    ? parseInt(parseFrontmatterValue(retryDelayLine.replace("retry_delay:", "")), 10) || undefined
+    : undefined;
 
-  return { name, schedule, prompt, recurring, notify, model, timeoutSeconds, agent, label, enabled, retry, retryDelay };
+  return {
+    name,
+    schedule,
+    prompt,
+    recurring,
+    notify,
+    model,
+    timeoutSeconds,
+    agent,
+    label,
+    enabled,
+    retry,
+    retryDelay,
+  };
 }
 
 export async function loadJobs(): Promise<Job[]> {
@@ -234,9 +248,7 @@ function resolveJobPath(jobName: string): string {
  * Returns a restore function that re-applies the original frontmatter
  * if Claude overwrote or stripped it during the run.
  */
-export async function snapshotJobFrontmatter(
-  jobName: string
-): Promise<() => Promise<boolean>> {
+export async function snapshotJobFrontmatter(jobName: string): Promise<() => Promise<boolean>> {
   const path = resolveJobPath(jobName);
   let originalContent: string;
   try {

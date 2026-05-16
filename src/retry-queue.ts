@@ -1,18 +1,18 @@
 /**
  * Retry Scheduler
- * 
+ *
  * Manages retry scheduling for failed events with exponential backoff.
- * 
+ *
  * DESIGN:
  * - In-memory priority queue as rebuildable execution index
  * - Persisted event state remains the canonical source of truth
  * - Scheduler rebuilds itself from persisted state on restart
- * 
+ *
  * RETRY POLICY:
  * - Exponential backoff: delay = min(5s * 2^retryCount, 10min)
  * - Default maxRetries: 5 (configurable)
  * - Retry state stored in event records (nextRetryAt, retryCount)
- * 
+ *
  * PERSISTENCE:
  * - Retry state stored in retry-queue.json as auxiliary index
  * - Can be fully rebuilt from event log
@@ -67,9 +67,7 @@ let isProcessing = false;
 /**
  * Initialize the retry scheduler.
  */
-export async function initRetryScheduler(
-  config: Partial<RetryConfig> = {}
-): Promise<void> {
+export async function initRetryScheduler(config: Partial<RetryConfig> = {}): Promise<void> {
   await initEventLog();
   await mkdir(RETRY_DIR, { recursive: true });
 
@@ -123,7 +121,7 @@ async function loadRetryState(): Promise<RetryState | null> {
  */
 async function saveRetryState(): Promise<void> {
   if (!retryState) return;
-  
+
   retryState.lastProcessedAt = new Date().toISOString();
   await Bun.write(RETRY_STATE_FILE, JSON.stringify(retryState, null, 2) + "\n");
 }
@@ -132,26 +130,21 @@ async function saveRetryState(): Promise<void> {
  * Calculate next retry delay using exponential backoff.
  */
 function calculateRetryDelay(retryCount: number, config: RetryConfig): number {
-  const delay = config.baseDelayMs * Math.pow(2, retryCount);
+  const delay = config.baseDelayMs * 2 ** retryCount;
   return Math.min(delay, config.maxDelayMs);
 }
 
 /**
  * Schedule an event for retry.
  */
-export async function schedule(
-  eventId: string,
-  retryCount: number
-): Promise<void> {
+export async function schedule(eventId: string, retryCount: number): Promise<void> {
   if (!retryState) {
     throw new Error("Retry scheduler not initialized");
   }
 
   // Check if max retries exceeded
   if (retryCount >= retryState.config.maxRetries) {
-    throw new Error(
-      `Max retries (${retryState.config.maxRetries}) exceeded for event ${eventId}`
-    );
+    throw new Error(`Max retries (${retryState.config.maxRetries}) exceeded for event ${eventId}`);
   }
 
   // Find the event to get its sequence number
@@ -180,9 +173,7 @@ export async function schedule(
   };
 
   // Add to in-memory queue (sorted by nextRetryAt)
-  const insertIndex = retryQueue.findIndex(
-    e => e.nextRetryAt > nextRetryAt
-  );
+  const insertIndex = retryQueue.findIndex((e) => e.nextRetryAt > nextRetryAt);
   if (insertIndex === -1) {
     retryQueue.push(entry);
   } else {
@@ -191,14 +182,14 @@ export async function schedule(
 
   // Update persisted state
   // Remove existing entry if present
-  retryState.entries = retryState.entries.filter(e => e.eventId !== eventId);
+  retryState.entries = retryState.entries.filter((e) => e.eventId !== eventId);
   retryState.entries.push(entry);
-  
+
   await saveRetryState();
 
   console.log(
     `[retry] Scheduled event ${eventId} for retry ${retryCount + 1} ` +
-    `at ${nextRetryAt} (delay: ${delay}ms)`
+      `at ${nextRetryAt} (delay: ${delay}ms)`,
   );
 }
 
@@ -207,13 +198,13 @@ export async function schedule(
  */
 export function peekDue(): RetryEntry | null {
   const now = new Date().toISOString();
-  
+
   for (const entry of retryQueue) {
     if (entry.nextRetryAt <= now) {
       return entry;
     }
   }
-  
+
   return null;
 }
 
@@ -222,22 +213,20 @@ export function peekDue(): RetryEntry | null {
  */
 export function popDue(): RetryEntry | null {
   const now = new Date().toISOString();
-  
+
   for (let i = 0; i < retryQueue.length; i++) {
     if (retryQueue[i].nextRetryAt <= now) {
       const entry = retryQueue.splice(i, 1)[0];
-      
+
       // Also remove from persisted state
       if (retryState) {
-        retryState.entries = retryState.entries.filter(
-          e => e.eventId !== entry.eventId
-        );
+        retryState.entries = retryState.entries.filter((e) => e.eventId !== entry.eventId);
       }
-      
+
       return entry;
     }
   }
-  
+
   return null;
 }
 
@@ -246,11 +235,11 @@ export function popDue(): RetryEntry | null {
  */
 export async function remove(eventId: string): Promise<void> {
   // Remove from in-memory queue
-  retryQueue = retryQueue.filter(e => e.eventId !== eventId);
-  
+  retryQueue = retryQueue.filter((e) => e.eventId !== eventId);
+
   // Remove from persisted state
   if (retryState) {
-    retryState.entries = retryState.entries.filter(e => e.eventId !== eventId);
+    retryState.entries = retryState.entries.filter((e) => e.eventId !== eventId);
     await saveRetryState();
   }
 }
@@ -267,7 +256,7 @@ export async function rebuildFromState(): Promise<void> {
 
   // Sort by nextRetryAt
   retryQueue = [...retryState.entries].sort(
-    (a, b) => new Date(a.nextRetryAt).getTime() - new Date(b.nextRetryAt).getTime()
+    (a, b) => new Date(a.nextRetryAt).getTime() - new Date(b.nextRetryAt).getTime(),
   );
 
   console.log(`[retry] Rebuilt queue with ${retryQueue.length} entries`);
@@ -350,9 +339,10 @@ async function processDueRetries(): Promise<void> {
     let processed = 0;
     let entry: RetryEntry | null;
 
+    // biome-ignore lint/suspicious/noAssignInExpressions: standard pop-loop idiom; refactor would obscure intent.
     while ((entry = popDue()) !== null) {
       processed++;
-      
+
       // Update event status to pending for reprocessing
       await appendStatusUpdate(entry.eventId, {
         status: "pending",
@@ -360,9 +350,7 @@ async function processDueRetries(): Promise<void> {
         nextRetryAt: null,
       });
 
-      console.log(
-        `[retry] Event ${entry.eventId} ready for retry ${entry.retryCount + 1}`
-      );
+      console.log(`[retry] Event ${entry.eventId} ready for retry ${entry.retryCount + 1}`);
     }
 
     if (processed > 0) {
@@ -382,7 +370,7 @@ function startCheckLoop(intervalMs: number): void {
   }
 
   checkInterval = setInterval(() => {
-    processDueRetries().catch(err => {
+    processDueRetries().catch((err) => {
       console.error("[retry] Error processing due retries:", err);
     });
   }, intervalMs);
@@ -449,5 +437,5 @@ export async function resetRetryScheduler(): Promise<void> {
  * Check if an event is scheduled for retry.
  */
 export function isScheduled(eventId: string): boolean {
-  return retryQueue.some(e => e.eventId === eventId);
+  return retryQueue.some((e) => e.eventId === eventId);
 }

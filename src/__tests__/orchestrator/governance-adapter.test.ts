@@ -53,7 +53,7 @@ describe("OrchestratorGovernanceAdapter", () => {
           channelId: "channel-1",
           toolName: "sendNotification",
           source: "orchestrator",
-        })
+        }),
       );
     });
 
@@ -125,7 +125,7 @@ describe("OrchestratorGovernanceAdapter", () => {
 
       const callArg = mockEvaluateToolRequest.mock.calls[0][0];
       expect(callArg.eventId).toMatch(
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
       );
       expect(callArg.source).toBe("orchestrator");
       expect(callArg.channelId).toBe("channel-test");
@@ -147,7 +147,12 @@ describe("OrchestratorGovernanceAdapter", () => {
           percentage: 5,
           period: "session" as const,
           currency: "USD",
-          actions: { shouldWarn: false, shouldDegrade: false, shouldReroute: false, shouldBlock: false },
+          actions: {
+            shouldWarn: false,
+            shouldDegrade: false,
+            shouldReroute: false,
+            shouldBlock: false,
+          },
           evaluatedAt: new Date().toISOString(),
         },
       ]);
@@ -174,7 +179,12 @@ describe("OrchestratorGovernanceAdapter", () => {
           percentage: 150,
           period: "daily" as const,
           currency: "USD",
-          actions: { shouldWarn: true, shouldDegrade: true, shouldReroute: true, shouldBlock: true },
+          actions: {
+            shouldWarn: true,
+            shouldDegrade: true,
+            shouldReroute: true,
+            shouldBlock: true,
+          },
           evaluatedAt: new Date().toISOString(),
         },
       ]);
@@ -200,7 +210,12 @@ describe("OrchestratorGovernanceAdapter", () => {
           percentage: 80,
           period: "session" as const,
           currency: "USD",
-          actions: { shouldWarn: true, shouldDegrade: false, shouldReroute: false, shouldBlock: false },
+          actions: {
+            shouldWarn: true,
+            shouldDegrade: false,
+            shouldReroute: false,
+            shouldBlock: false,
+          },
           evaluatedAt: new Date().toISOString(),
         },
         {
@@ -212,7 +227,12 @@ describe("OrchestratorGovernanceAdapter", () => {
           percentage: 200,
           period: "monthly" as const,
           currency: "USD",
-          actions: { shouldWarn: true, shouldDegrade: true, shouldReroute: true, shouldBlock: true },
+          actions: {
+            shouldWarn: true,
+            shouldDegrade: true,
+            shouldReroute: true,
+            shouldBlock: true,
+          },
           evaluatedAt: new Date().toISOString(),
         },
       ]);

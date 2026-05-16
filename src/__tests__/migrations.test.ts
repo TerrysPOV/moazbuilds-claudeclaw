@@ -22,7 +22,11 @@ function uniq(suffix: string): string {
   return `${TEST_PREFIX}${suffix}-${Date.now().toString(36)}${Math.floor(Math.random() * 1000)}`;
 }
 
-async function makeLegacyJob(name: string, frontmatter: string, body = "do thing"): Promise<string> {
+async function makeLegacyJob(
+  name: string,
+  frontmatter: string,
+  body = "do thing",
+): Promise<string> {
   await mkdir(JOBS_DIR, { recursive: true });
   const path = join(JOBS_DIR, `${name}.md`);
   await writeFile(path, `---\n${frontmatter}\n---\n${body}\n`, "utf8");
@@ -89,10 +93,7 @@ describe("Phase 17: migrateLegacyAgentJobs", () => {
   it("is idempotent — second call migrates nothing", async () => {
     const agent = uniq("idem");
     await makeAgentDir(agent);
-    await makeLegacyJob(
-      agent,
-      `schedule: 0 9 * * *\nrecurring: true\nagent: ${agent}`,
-    );
+    await makeLegacyJob(agent, `schedule: 0 9 * * *\nrecurring: true\nagent: ${agent}`);
 
     const first = await migrateLegacyAgentJobs();
     expect(first.migrated.length).toBe(1);

@@ -1,19 +1,19 @@
 /**
  * Idempotent Event Processor
- * 
+ *
  * Processes events from the durable event log with deduplication support.
- * 
+ *
  * DEDUPLICATION STRATEGY:
  * - Uses dedupeKey from event record (prefer upstream event IDs when available)
  * - Falls back to canonical key: hash(source + type + channelId + threadId + normalizedPayload)
  * - Persists dedupe state to disk with retention policy
  * - Dedupe state is replay-safe and survives restarts
- * 
+ *
  * RETENTION:
  * - Default retention: 7 days
  * - Configurable via config
  * - Cleanup runs periodically
- * 
+ *
  * PROCESSING:
  * - Phase 1: Serial processing for correctness
  * - Design supports future partitioned concurrency
@@ -152,7 +152,7 @@ async function saveDedupeState(): Promise<void> {
 function generateDedupeKey(event: EventRecord): string {
   // Normalize payload for consistent hashing
   const normalizedPayload = JSON.stringify(event.payload, Object.keys(event.payload || {}).sort());
-  
+
   const keyData = `${event.source}:${event.type}:${event.channelId}:${event.threadId}:${normalizedPayload}`;
   return createHash("sha256").update(keyData).digest("hex");
 }
@@ -166,7 +166,7 @@ function getDedupeKey(event: EventRecord): string {
   if (event.dedupeKey && event.dedupeKey.length > 0) {
     return event.dedupeKey;
   }
-  
+
   // Otherwise generate canonical key
   return generateDedupeKey(event);
 }
@@ -176,7 +176,7 @@ function getDedupeKey(event: EventRecord): string {
  */
 function isDuplicate(key: string): boolean {
   if (!dedupeState) return false;
-  return dedupeState.entries.some(e => e.key === key);
+  return dedupeState.entries.some((e) => e.key === key);
 }
 
 /**
@@ -209,7 +209,7 @@ async function cleanupOldEntries(): Promise<void> {
   const cutoffISO = cutoffDate.toISOString();
 
   const beforeCount = dedupeState.entries.length;
-  dedupeState.entries = dedupeState.entries.filter(e => e.timestamp >= cutoffISO);
+  dedupeState.entries = dedupeState.entries.filter((e) => e.timestamp >= cutoffISO);
   dedupeState.lastCleanupAt = new Date().toISOString();
 
   const removedCount = beforeCount - dedupeState.entries.length;
@@ -253,7 +253,7 @@ export async function processNext(): Promise<boolean> {
   try {
     // Find next pending event
     let nextEvent: EventRecord | null = null;
-    
+
     for await (const event of readFrom(lastProcessedSeq + 1)) {
       // Skip non-pending events and internal events (like status updates)
       if (event.status !== "pending" || event.type.startsWith("__")) {
@@ -275,8 +275,10 @@ export async function processNext(): Promise<boolean> {
     }
 
     // Process the event
-    console.log(`[processor] Processing event ${nextEvent.id} (seq ${nextEvent.seq}, type: ${nextEvent.type})`);
-    
+    console.log(
+      `[processor] Processing event ${nextEvent.id} (seq ${nextEvent.seq}, type: ${nextEvent.type})`,
+    );
+
     let result: ProcessingResult;
     try {
       result = await processorConfig.onEvent(nextEvent);
@@ -293,10 +295,10 @@ export async function processNext(): Promise<boolean> {
       await appendStatusUpdate(nextEvent.id, {
         status: "done",
       });
-      
+
       // Record for deduplication
       await recordProcessed(nextEvent, dedupeKey);
-      
+
       lastProcessedSeq = nextEvent.seq;
       console.log(`[processor] Successfully processed event ${nextEvent.id}`);
     } else {
@@ -307,7 +309,9 @@ export async function processNext(): Promise<boolean> {
           status: "retry_scheduled",
           lastError: result.error ?? null,
         });
-        console.log(`[processor] Event ${nextEvent.id} failed, scheduled for retry: ${result.error}`);
+        console.log(
+          `[processor] Event ${nextEvent.id} failed, scheduled for retry: ${result.error}`,
+        );
       } else {
         // Permanent failure - will go to DLQ
         await appendStatusUpdate(nextEvent.id, {
@@ -354,7 +358,9 @@ export async function processPersistedEvent(eventId: string): Promise<Processing
   }
 
   // Process the event
-  console.log(`[processor] Processing persisted event ${event.id} (seq ${event.seq}, type: ${event.type})`);
+  console.log(
+    `[processor] Processing persisted event ${event.id} (seq ${event.seq}, type: ${event.type})`,
+  );
 
   let result: ProcessingResult;
   try {
@@ -397,11 +403,11 @@ export async function processPersistedEvent(eventId: string): Promise<Processing
  */
 export async function processPending(): Promise<number> {
   let count = 0;
-  
+
   while (await processNext()) {
     count++;
   }
-  
+
   return count;
 }
 
@@ -472,12 +478,15 @@ let gatewayProcessFn: ((eventId: string) => Promise<ProcessingResult>) | null = 
 /**
  * Initialize the event processor for use with the gateway.
  * This must be called before processing Discord/Telegram events through the gateway.
- * 
+ *
  * @param processFn - The function to call for each persisted event.
  *                     For Discord/Telegram, this should call runUserMessage.
  */
 export async function initGatewayProcessor(
-  processFn: (source: string, prompt: string) => Promise<{ exitCode: number; stdout: string; stderr: string }>
+  processFn: (
+    source: string,
+    prompt: string,
+  ) => Promise<{ exitCode: number; stdout: string; stderr: string }>,
 ): Promise<void> {
   await initProcessor({
     retentionDays: 7,
@@ -504,7 +513,9 @@ export async function initGatewayProcessor(
           try {
             await deliveryHook(event, result);
           } catch (err) {
-            console.error(`[gateway-delivery] ${source} delivery failed: ${err instanceof Error ? err.message : String(err)}`);
+            console.error(
+              `[gateway-delivery] ${source} delivery failed: ${err instanceof Error ? err.message : String(err)}`,
+            );
           }
         }
 

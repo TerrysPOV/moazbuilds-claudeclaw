@@ -1,15 +1,15 @@
 /**
  * Notification Manager
- * 
+ *
  * Generate durable escalation notifications and support clean delivery abstractions.
- * 
+ *
  * DESIGN:
  * - Notification records stored durably at .claude/claudeclaw/notifications/
  * - Supports triggers: DLQ overflow, watchdog, policy denial, errors, manual escalation, pause/resume
  * - Rate limiting and deduplication to prevent spam
  * - Delivery abstraction supports webhook/email skeletons
  * - Notification record is canonical; delivery is best-effort
- * 
+ *
  * CRASH CONSCIOUSNESS:
  * - All notifications are persisted immediately
  * - Delivery failure does not erase the notification record
@@ -167,7 +167,7 @@ async function doInit(): Promise<void> {
 
 /**
  * Create and persist a notification.
- * 
+ *
  * @param type - The notification type
  * @param severity - The notification severity
  * @param message - The notification message
@@ -183,7 +183,7 @@ export async function notify(
     workflowId?: string;
     sessionId?: string;
     details?: Record<string, unknown>;
-  }
+  },
 ): Promise<EscalationNotification | null> {
   await initNotificationManager();
 
@@ -199,7 +199,9 @@ export async function notify(
     const configIndex = severityOrder.indexOf(config.minSeverity);
     const severityIndex = severityOrder.indexOf(severity);
     if (severityIndex < configIndex) {
-      console.log(`[notification] Severity ${severity} below minimum ${config.minSeverity}, skipping`);
+      console.log(
+        `[notification] Severity ${severity} below minimum ${config.minSeverity}, skipping`,
+      );
       return null;
     }
   }
@@ -268,7 +270,7 @@ export async function notify(
  */
 export async function listNotifications(
   filters: NotificationFilters = {},
-  limit: number = 100
+  limit: number = 100,
 ): Promise<EscalationNotification[]> {
   await initNotificationManager();
 
@@ -276,7 +278,7 @@ export async function listNotifications(
 
   try {
     const files = await readdir(NOTIFICATIONS_DIR);
-    const jsonFiles = files.filter(f => f.endsWith(".json"));
+    const jsonFiles = files.filter((f) => f.endsWith(".json"));
 
     for (const file of jsonFiles) {
       try {
@@ -294,19 +296,14 @@ export async function listNotifications(
         if (filters.undeliveredOnly && notification.delivery?.delivered) continue;
 
         notifications.push(notification);
-      } catch {
-        // Skip malformed files
-        continue;
-      }
+      } catch {}
     }
   } catch {
     // Directory might not exist yet
   }
 
   // Sort by createdAt descending (newest first)
-  notifications.sort((a, b) => 
-    new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-  );
+  notifications.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
   return notifications.slice(0, limit);
 }
@@ -315,7 +312,7 @@ export async function listNotifications(
  * Get a specific notification by ID.
  */
 export async function getNotification(
-  notificationId: string
+  notificationId: string,
 ): Promise<EscalationNotification | null> {
   await initNotificationManager();
 
@@ -362,7 +359,7 @@ export function getConfig(): EscalationConfig {
  * Retry delivery for an undelivered notification.
  */
 export async function retryDelivery(
-  notificationId: string
+  notificationId: string,
 ): Promise<{ success: boolean; error?: string }> {
   const notification = await getNotification(notificationId);
   if (!notification) {
@@ -390,10 +387,10 @@ export async function retryDelivery(
  * actual webhook/email services.
  */
 async function attemptDelivery(
-  notification: EscalationNotification
+  notification: EscalationNotification,
 ): Promise<{ success: boolean; error?: string }> {
   const now = new Date().toISOString();
-  
+
   notification.delivery = {
     ...notification.delivery,
     attempted: true,
@@ -413,13 +410,13 @@ async function attemptDelivery(
   }
 
   // Consider successful if any channel succeeded
-  const anySuccess = results.some(r => r.success);
-  
+  const anySuccess = results.some((r) => r.success);
+
   if (anySuccess) {
     notification.delivery!.delivered = true;
     notification.delivery!.deliveredAt = now;
   } else {
-    notification.delivery!.error = results.find(r => r.error)?.error;
+    notification.delivery!.error = results.find((r) => r.error)?.error;
   }
 
   // Update persisted notification
@@ -435,7 +432,7 @@ async function attemptDelivery(
  * Attempt webhook delivery (skeleton).
  */
 async function attemptWebhookDelivery(
-  notification: EscalationNotification
+  notification: EscalationNotification,
 ): Promise<{ success: boolean; error?: string }> {
   if (!config.webhookUrl) {
     return { success: false, error: "No webhook URL configured" };
@@ -453,7 +450,7 @@ async function attemptWebhookDelivery(
  * Attempt email delivery (skeleton).
  */
 async function attemptEmailDelivery(
-  notification: EscalationNotification
+  notification: EscalationNotification,
 ): Promise<{ success: boolean; error?: string }> {
   if (!config.emailTarget) {
     return { success: false, error: "No email target configured" };
@@ -461,7 +458,9 @@ async function attemptEmailDelivery(
 
   // Skeleton implementation - in production, this would use an email service
   console.log(`[notification] Would send email to ${config.emailTarget}`);
-  console.log(`[notification] Subject: [${notification.severity.toUpperCase()}] ${notification.type}`);
+  console.log(
+    `[notification] Subject: [${notification.severity.toUpperCase()}] ${notification.type}`,
+  );
 
   // Simulate success for now
   return { success: true };
@@ -475,7 +474,7 @@ function generateDedupeKey(
   type: NotificationType,
   severity: NotificationSeverity,
   message: string,
-  context?: { eventId?: string }
+  context?: { eventId?: string },
 ): string {
   // Create a dedupe key based on type, severity, and message (first 100 chars)
   // Include eventId if available for event-specific deduplication
@@ -505,9 +504,9 @@ function isRateLimited(type: NotificationType, severity: NotificationSeverity): 
   // Check per-type limit
   if (limits.perTypePerMinute) {
     const typeEntries = rateLimitState.typeCounts[type] || [];
-    const recentTypeEntries = typeEntries.filter(e => e.timestamp > oneMinuteAgo);
+    const recentTypeEntries = typeEntries.filter((e) => e.timestamp > oneMinuteAgo);
     const typeCount = recentTypeEntries.reduce((sum, e) => sum + e.count, 0);
-    
+
     if (typeCount >= limits.perTypePerMinute) {
       return true;
     }
@@ -516,9 +515,9 @@ function isRateLimited(type: NotificationType, severity: NotificationSeverity): 
   // Check per-severity limit
   if (limits.perSeverityPerMinute) {
     const severityEntries = rateLimitState.severityCounts[severity] || [];
-    const recentSeverityEntries = severityEntries.filter(e => e.timestamp > oneMinuteAgo);
+    const recentSeverityEntries = severityEntries.filter((e) => e.timestamp > oneMinuteAgo);
     const severityCount = recentSeverityEntries.reduce((sum, e) => sum + e.count, 0);
-    
+
     if (severityCount >= limits.perSeverityPerMinute) {
       return true;
     }
@@ -530,7 +529,7 @@ function isRateLimited(type: NotificationType, severity: NotificationSeverity): 
 function recordNotification(
   type: NotificationType,
   severity: NotificationSeverity,
-  dedupeKey: string
+  dedupeKey: string,
 ): void {
   if (!rateLimitState) return;
 
@@ -553,16 +552,16 @@ function recordNotification(
 
   // Clean up old entries (older than 5 minutes)
   const fiveMinutesAgo = new Date(Date.now() - 300000).toISOString();
-  
+
   for (const t of Object.keys(rateLimitState.typeCounts)) {
     rateLimitState.typeCounts[t] = rateLimitState.typeCounts[t].filter(
-      e => e.timestamp > fiveMinutesAgo
+      (e) => e.timestamp > fiveMinutesAgo,
     );
   }
 
   for (const s of Object.keys(rateLimitState.severityCounts)) {
     rateLimitState.severityCounts[s] = rateLimitState.severityCounts[s].filter(
-      e => e.timestamp > fiveMinutesAgo
+      (e) => e.timestamp > fiveMinutesAgo,
     );
   }
 
@@ -686,7 +685,7 @@ export async function resetNotificationManager(): Promise<void> {
   rateLimitState = null;
   config = { ...DEFAULT_CONFIG };
   initializationPromise = null;
-  
+
   // Clear persisted rate limit and config files
   try {
     const { unlink } = await import("node:fs/promises");

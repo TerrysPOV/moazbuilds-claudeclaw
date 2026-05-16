@@ -1,6 +1,6 @@
 /**
  * Tests for session-map.ts
- * 
+ *
  * Run with: bun test src/__tests__/gateway/session-map.test.ts
  */
 
@@ -63,7 +63,7 @@ describe("Session Map - Core CRUD", () => {
   it("should set and get the same entry", async () => {
     const entry = createTestEntry();
     await set("channel-1", "thread-1", entry);
-    
+
     const retrieved = await get("channel-1", "thread-1");
     expect(retrieved).not.toBeNull();
     expect(retrieved?.mappingId).toBe(entry.mappingId);
@@ -73,19 +73,19 @@ describe("Session Map - Core CRUD", () => {
   it("should delete only the targeted thread mapping", async () => {
     const entry1 = createTestEntry({ mappingId: "entry-1" });
     const entry2 = createTestEntry({ mappingId: "entry-2" });
-    
+
     await set("channel-1", "thread-1", entry1);
     await set("channel-1", "thread-2", entry2);
     await set("channel-2", "thread-1", entry1);
-    
+
     await remove("channel-1", "thread-1");
-    
+
     // thread-1 in channel-1 should be gone
     expect(await get("channel-1", "thread-1")).toBeNull();
-    
+
     // thread-2 in channel-1 should still exist
     expect(await get("channel-1", "thread-2")).not.toBeNull();
-    
+
     // thread-1 in channel-2 should still exist
     expect(await get("channel-2", "thread-1")).not.toBeNull();
   });
@@ -93,7 +93,7 @@ describe("Session Map - Core CRUD", () => {
   it("should use default thread ID when not specified", async () => {
     const entry = createTestEntry();
     await set("channel-1", DEFAULT_THREAD_ID, entry);
-    
+
     const retrieved = await get("channel-1");
     expect(retrieved?.mappingId).toBe(entry.mappingId);
   });
@@ -101,10 +101,10 @@ describe("Session Map - Core CRUD", () => {
   it("should handle malformed JSON file gracefully", async () => {
     // Write malformed JSON
     await Bun.write(TEST_SESSION_MAP_FILE, "not valid json {{{");
-    
+
     // Reset to force re-read
     resetSessionMap();
-    
+
     // Should not throw, should return empty map
     const result = await get("channel-1", "thread-1");
     expect(result).toBeNull();
@@ -113,7 +113,7 @@ describe("Session Map - Core CRUD", () => {
   it("should handle missing file gracefully", async () => {
     // File doesn't exist - reset forces re-read
     resetSessionMap();
-    
+
     // Should not throw, should return empty map
     const result = await get("channel-1", "thread-1");
     expect(result).toBeNull();
@@ -137,13 +137,13 @@ describe("Session Map - Same Channel / Different Thread Isolation", () => {
   it("should have different mapping entries for same channel with different threads", async () => {
     const entry1 = createTestEntry({ mappingId: "id-1" });
     const entry2 = createTestEntry({ mappingId: "id-2" });
-    
+
     await set("channel-1", "thread-1", entry1);
     await set("channel-1", "thread-2", entry2);
-    
+
     const retrieved1 = await get("channel-1", "thread-1");
     const retrieved2 = await get("channel-1", "thread-2");
-    
+
     expect(retrieved1?.mappingId).toBe("id-1");
     expect(retrieved2?.mappingId).toBe("id-2");
   });
@@ -166,12 +166,12 @@ describe("Session Map - Same Thread Repeat Lookup Consistency", () => {
   it("should return the same entry on repeated lookups", async () => {
     const entry = createTestEntry({ mappingId: "consistent-id" });
     await set("channel-1", "thread-1", entry);
-    
+
     // Multiple reads
     const retrieved1 = await get("channel-1", "thread-1");
     const retrieved2 = await get("channel-1", "thread-1");
     const retrieved3 = await get("channel-1", "thread-1");
-    
+
     expect(retrieved1?.mappingId).toBe("consistent-id");
     expect(retrieved2?.mappingId).toBe("consistent-id");
     expect(retrieved3?.mappingId).toBe("consistent-id");
@@ -195,14 +195,14 @@ describe("Session Map - Metadata Updates", () => {
   it("should get or create mapping returning existing entry", async () => {
     const entry = createTestEntry({ mappingId: "existing-id" });
     await set("channel-1", "thread-1", entry);
-    
+
     const retrieved = await getOrCreateMapping("channel-1", "thread-1");
     expect(retrieved.mappingId).toBe("existing-id");
   });
 
   it("should get or create mapping creating new entry with null claudeSessionId", async () => {
     const retrieved = await getOrCreateMapping("channel-1", "thread-1");
-    
+
     expect(retrieved.mappingId).toBeTruthy();
     expect(retrieved.claudeSessionId).toBeNull();
     expect(retrieved.status).toBe("pending");
@@ -210,9 +210,9 @@ describe("Session Map - Metadata Updates", () => {
 
   it("should attach real Claude session ID once available", async () => {
     await getOrCreateMapping("channel-1", "thread-1");
-    
+
     await attachClaudeSessionId("channel-1", "thread-1", "claude-session-123");
-    
+
     const retrieved = await get("channel-1", "thread-1");
     expect(retrieved?.claudeSessionId).toBe("claude-session-123");
     expect(retrieved?.status).toBe("active");
@@ -221,10 +221,10 @@ describe("Session Map - Metadata Updates", () => {
   it("should not overwrite existing non-null Claude session ID without force", async () => {
     await getOrCreateMapping("channel-1", "thread-1");
     await attachClaudeSessionId("channel-1", "thread-1", "claude-session-123");
-    
+
     // Try to overwrite
     await attachClaudeSessionId("channel-1", "thread-1", "claude-session-456");
-    
+
     // Should still be the original
     const retrieved = await get("channel-1", "thread-1");
     expect(retrieved?.claudeSessionId).toBe("claude-session-123");
@@ -233,10 +233,10 @@ describe("Session Map - Metadata Updates", () => {
   it("should force overwrite when forced", async () => {
     await getOrCreateMapping("channel-1", "thread-1");
     await attachClaudeSessionId("channel-1", "thread-1", "claude-session-123");
-    
+
     // Force overwrite
     await attachClaudeSessionId("channel-1", "thread-1", "claude-session-456", true);
-    
+
     const retrieved = await get("channel-1", "thread-1");
     expect(retrieved?.claudeSessionId).toBe("claude-session-456");
   });
@@ -244,18 +244,18 @@ describe("Session Map - Metadata Updates", () => {
   it("should update lastSeq", async () => {
     await getOrCreateMapping("channel-1", "thread-1");
     await updateLastSeq("channel-1", "thread-1", 42);
-    
+
     const retrieved = await get("channel-1", "thread-1");
     expect(retrieved?.lastSeq).toBe(42);
   });
 
   it("should increment turn count", async () => {
     await getOrCreateMapping("channel-1", "thread-1");
-    
+
     await incrementTurnCount("channel-1", "thread-1");
     await incrementTurnCount("channel-1", "thread-1");
     await incrementTurnCount("channel-1", "thread-1");
-    
+
     const retrieved = await get("channel-1", "thread-1");
     expect(retrieved?.turnCount).toBe(3);
   });
@@ -264,7 +264,7 @@ describe("Session Map - Metadata Updates", () => {
     await getOrCreateMapping("channel-1", "thread-1");
     await getOrCreateMapping("channel-2", "thread-1");
     await getOrCreateMapping("channel-3", "thread-1");
-    
+
     const channels = await listChannels();
     expect(channels).toContain("channel-1");
     expect(channels).toContain("channel-2");
@@ -277,7 +277,7 @@ describe("Session Map - Metadata Updates", () => {
     await getOrCreateMapping("channel-1", "thread-2");
     await getOrCreateMapping("channel-1", "thread-3");
     await getOrCreateMapping("channel-2", "thread-1");
-    
+
     const threads = await listThreads("channel-1");
     expect(threads).toContain("thread-1");
     expect(threads).toContain("thread-2");
@@ -288,7 +288,7 @@ describe("Session Map - Metadata Updates", () => {
   it("should mark entry as stale", async () => {
     await getOrCreateMapping("channel-1", "thread-1");
     await markStale("channel-1", "thread-1");
-    
+
     const retrieved = await get("channel-1", "thread-1");
     expect(retrieved?.status).toBe("stale");
   });
@@ -310,14 +310,12 @@ describe("Session Map - Concurrent Writes", () => {
 
   it("should serialize concurrent writes without corruption", async () => {
     // Create multiple entries concurrently
-    const entries = Array.from({ length: 10 }, (_, i) => 
-      createTestEntry({ mappingId: `concurrent-${i}` })
+    const entries = Array.from({ length: 10 }, (_, i) =>
+      createTestEntry({ mappingId: `concurrent-${i}` }),
     );
-    
-    await Promise.all(
-      entries.map((entry, i) => set(`channel-${i}`, `thread-1`, entry))
-    );
-    
+
+    await Promise.all(entries.map((entry, i) => set(`channel-${i}`, `thread-1`, entry)));
+
     // All entries should be present and correct
     for (let i = 0; i < 10; i++) {
       const retrieved = await get(`channel-${i}`, "thread-1");
@@ -326,21 +324,19 @@ describe("Session Map - Concurrent Writes", () => {
   });
 
   it("should complete concurrent writes without data loss", async () => {
-    const entries = Array.from({ length: 10 }, (_, i) => 
-      createTestEntry({ mappingId: `concurrent-${i}` })
+    const entries = Array.from({ length: 10 }, (_, i) =>
+      createTestEntry({ mappingId: `concurrent-${i}` }),
     );
-    
+
     // Start concurrent writes
-    await Promise.all(
-      entries.map((entry, i) => set(`channel-${i}`, "thread-1", entry))
-    );
-    
+    await Promise.all(entries.map((entry, i) => set(`channel-${i}`, "thread-1", entry)));
+
     // All entries should be present and correct after concurrent writes
     for (let i = 0; i < 10; i++) {
       const retrieved = await get(`channel-${i}`, "thread-1");
       expect(retrieved?.mappingId).toBe(`concurrent-${i}`);
     }
-    
+
     // Queue should be empty after
     expect(getWriteQueueLength()).toBe(0);
   });
@@ -363,9 +359,9 @@ describe("Session Map - Cleanup", () => {
   it("should preserve active entries during cleanup", async () => {
     await getOrCreateMapping("channel-1", "thread-1");
     await attachClaudeSessionId("channel-1", "thread-1", "claude-session-123");
-    
+
     const removed = await cleanup(1); // 1 day TTL
-    
+
     expect(removed).toBe(0);
     const retrieved = await get("channel-1", "thread-1");
     expect(retrieved).not.toBeNull();
@@ -374,13 +370,13 @@ describe("Session Map - Cleanup", () => {
   it("should remove empty channels after cleanup", async () => {
     // Create entry
     await getOrCreateMapping("channel-1", "thread-1");
-    
+
     // Delete it
     await remove("channel-1", "thread-1");
-    
+
     // Cleanup should remove empty channel
     await cleanup(1);
-    
+
     const channels = await listChannels();
     expect(channels).not.toContain("channel-1");
   });
@@ -388,10 +384,10 @@ describe("Session Map - Cleanup", () => {
   it("should not delete entries with null claudeSessionId that are recent", async () => {
     // Create entry (will have null claudeSessionId)
     await getOrCreateMapping("channel-1", "thread-1");
-    
+
     // Very short TTL - but entry was just created
     const removed = await cleanup(1);
-    
+
     expect(removed).toBe(0);
     expect(await get("channel-1", "thread-1")).not.toBeNull();
   });
@@ -399,7 +395,7 @@ describe("Session Map - Cleanup", () => {
   it("should delete reset entries that are old", async () => {
     // Create entry
     await getOrCreateMapping("channel-1", "thread-1");
-    
+
     // Manually set to reset status (simulating an old reset entry)
     const entry = await get("channel-1", "thread-1");
     if (entry) {
@@ -407,10 +403,10 @@ describe("Session Map - Cleanup", () => {
       entry.updatedAt = new Date(Date.now() - 100 * 24 * 60 * 60 * 1000).toISOString(); // 100 days ago
       await set("channel-1", "thread-1", entry);
     }
-    
+
     // Cleanup with 1 day TTL
     const removed = await cleanup(1);
-    
+
     expect(removed).toBe(1);
     expect(await get("channel-1", "thread-1")).toBeNull();
   });
@@ -431,27 +427,21 @@ describe("Session Map - Edge Cases", () => {
   });
 
   it("should throw when updating non-existent entry", async () => {
-    await expect(
-      update("nonexistent", "thread", { status: "active" })
-    ).rejects.toThrow();
+    await expect(update("nonexistent", "thread", { status: "active" })).rejects.toThrow();
   });
 
   it("should throw when attaching session ID to non-existent entry", async () => {
-    await expect(
-      attachClaudeSessionId("nonexistent", "thread", "session-123")
-    ).rejects.toThrow();
+    await expect(attachClaudeSessionId("nonexistent", "thread", "session-123")).rejects.toThrow();
   });
 
   it("should throw when incrementing turn count for non-existent entry", async () => {
-    await expect(
-      incrementTurnCount("nonexistent", "thread")
-    ).rejects.toThrow();
+    await expect(incrementTurnCount("nonexistent", "thread")).rejects.toThrow();
   });
 
   it("should handle empty channel ID", async () => {
     const entry = createTestEntry();
     await set("", "thread-1", entry);
-    
+
     const retrieved = await get("", "thread-1");
     expect(retrieved?.mappingId).toBe(entry.mappingId);
   });
@@ -459,19 +449,19 @@ describe("Session Map - Edge Cases", () => {
   it("should handle empty thread ID", async () => {
     const entry = createTestEntry();
     await set("channel-1", "", entry);
-    
+
     const retrieved = await get("channel-1", "");
     expect(retrieved?.mappingId).toBe(entry.mappingId);
   });
 
   it("should preserve metadata through updates", async () => {
     const entry = createTestEntry({
-      metadata: { key: "value", nested: { deep: true } }
+      metadata: { key: "value", nested: { deep: true } },
     });
     await set("channel-1", "thread-1", entry);
-    
+
     await updateLastSeq("channel-1", "thread-1", 100);
-    
+
     const retrieved = await get("channel-1", "thread-1");
     expect(retrieved?.metadata).toEqual({ key: "value", nested: { deep: true } });
   });

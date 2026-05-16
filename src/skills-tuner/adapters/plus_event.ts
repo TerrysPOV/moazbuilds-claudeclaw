@@ -1,5 +1,5 @@
-import { Adapter } from '../core/interfaces.js';
-import type { Proposal } from '../core/types.js';
+import { Adapter } from "../core/interfaces.js";
+import type { Proposal } from "../core/types.js";
 
 /**
  * Stub adapter for ClaudeClaw-Plus event bus.
@@ -10,23 +10,36 @@ import type { Proposal } from '../core/types.js';
  * notification + callback routing in TelegramAdapter.
  */
 export class PlusEventAdapter extends Adapter {
-  constructor(private plusBaseUrl: string = 'http://localhost:3000') {
+  constructor(private plusBaseUrl: string = "http://localhost:3000") {
     super();
   }
 
   async renderProposal(proposal: Proposal): Promise<void> {
     console.log(
-      '[PlusEventAdapter STUB] Would POST proposal #' + proposal.id +
-      ' (subject=' + proposal.subject + ', kind=' + proposal.kind + ')' +
-      ' to ' + this.plusBaseUrl + '/api/tuner/proposal'
+      "[PlusEventAdapter STUB] Would POST proposal #" +
+        proposal.id +
+        " (subject=" +
+        proposal.subject +
+        ", kind=" +
+        proposal.kind +
+        ")" +
+        " to " +
+        this.plusBaseUrl +
+        "/api/tuner/proposal",
     );
   }
 
   async renderApplyConfirmation(proposal: Proposal, alternativeId: string): Promise<void> {
     console.log(
-      '[PlusEventAdapter STUB] Would POST apply confirmation' +
-      ' (proposalId=' + proposal.id + ', alt=' + alternativeId + ')' +
-      ' to ' + this.plusBaseUrl + '/api/tuner/applied'
+      "[PlusEventAdapter STUB] Would POST apply confirmation" +
+        " (proposalId=" +
+        proposal.id +
+        ", alt=" +
+        alternativeId +
+        ")" +
+        " to " +
+        this.plusBaseUrl +
+        "/api/tuner/applied",
     );
   }
 }

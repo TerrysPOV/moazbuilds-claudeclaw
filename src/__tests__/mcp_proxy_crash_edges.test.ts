@@ -34,7 +34,9 @@ const activeTmpDirs: string[] = [];
 
 afterEach(() => {
   for (const d of activeTmpDirs.splice(0)) {
-    try { rmSync(d, { recursive: true }); } catch {}
+    try {
+      rmSync(d, { recursive: true });
+    } catch {}
   }
 });
 
@@ -47,7 +49,12 @@ describe("mcp-proxy crash supervision edges", () => {
 
     // Pre-populate 4 old crashes that are 6+ minutes outside the 5-min window
     const SIX_MINUTES_AGO = Date.now() - 6 * 60 * 1000;
-    p.crashTimestamps = [SIX_MINUTES_AGO, SIX_MINUTES_AGO + 1, SIX_MINUTES_AGO + 2, SIX_MINUTES_AGO + 3];
+    p.crashTimestamps = [
+      SIX_MINUTES_AGO,
+      SIX_MINUTES_AGO + 1,
+      SIX_MINUTES_AGO + 2,
+      SIX_MINUTES_AGO + 3,
+    ];
     p.crashCount = 4;
     p.stopping = false;
 
@@ -89,7 +96,7 @@ describe("mcp-proxy crash supervision edges", () => {
       for (let i = 0; i < 5; i++) {
         p.status = "up";
         p.crashTimestamps = []; // reset window for clean test
-        p.crashCount = i;       // crashCount before this crash (backoff index = crashCount)
+        p.crashCount = i; // crashCount before this crash (backoff index = crashCount)
         p._handleCrash(`crash ${i + 1}`);
       }
 

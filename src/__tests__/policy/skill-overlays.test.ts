@@ -1,6 +1,6 @@
 /**
  * Tests for policy/skill-overlays.ts
- * 
+ *
  * Run with: bun test src/__tests__/policy/skill-overlays.test.ts
  */
 
@@ -26,7 +26,7 @@ requiredTools:
 
 # Skill Content
 `;
-    
+
     const overlay = parseSkillMetadata(content, "test-skill");
     expect(overlay).not.toBeNull();
     expect(overlay?.requiredTools).toEqual(["View", "GlobTool", "GrepTool"]);
@@ -41,7 +41,7 @@ preferredTools:
 
 # Skill Content
 `;
-    
+
     const overlay = parseSkillMetadata(content, "test-skill");
     expect(overlay).not.toBeNull();
     expect(overlay?.preferredTools).toEqual(["View", "Bash"]);
@@ -56,7 +56,7 @@ deniedTools:
 
 # Skill Content
 `;
-    
+
     const overlay = parseSkillMetadata(content, "test-skill");
     expect(overlay).not.toBeNull();
     expect(overlay?.deniedTools).toEqual(["Bash", "Edit"]);
@@ -75,7 +75,7 @@ deniedTools:
 
 # Skill Content
 `;
-    
+
     const overlay = parseSkillMetadata(content, "code-review");
     expect(overlay).not.toBeNull();
     expect(overlay?.skillName).toBe("code-review");
@@ -91,7 +91,7 @@ description: A test skill
 
 # Skill Content
 `;
-    
+
     const overlay = parseSkillMetadata(content, "test-skill");
     expect(overlay).toBeNull();
   });
@@ -100,7 +100,7 @@ description: A test skill
     const content = `# Skill Content
 This is just regular markdown content.
 `;
-    
+
     const overlay = parseSkillMetadata(content, "test-skill");
     expect(overlay).toBeNull();
   });
@@ -114,7 +114,7 @@ deniedTools: []
 
 # Skill Content
 `;
-    
+
     const overlay = parseSkillMetadata(content, "test-skill");
     expect(overlay).not.toBeNull();
     expect(overlay?.requiredTools).toEqual([]);
@@ -129,18 +129,18 @@ describe("Skill Overlays - Overlay to Rules Conversion", () => {
       skillName: "code-review",
       deniedTools: ["Bash", "Edit"],
     };
-    
+
     const rules = overlayToRules(overlay);
-    
+
     expect(rules).toHaveLength(2);
-    
-    const bashRule = rules.find(r => r.tool === "Bash");
+
+    const bashRule = rules.find((r) => r.tool === "Bash");
     expect(bashRule).toBeDefined();
     expect(bashRule?.action).toBe("deny");
     expect(bashRule?.scope?.skillName).toBe("code-review");
     expect(bashRule?.id).toContain("code-review");
-    
-    const editRule = rules.find(r => r.tool === "Edit");
+
+    const editRule = rules.find((r) => r.tool === "Edit");
     expect(editRule).toBeDefined();
     expect(editRule?.action).toBe("deny");
   });
@@ -150,7 +150,7 @@ describe("Skill Overlays - Overlay to Rules Conversion", () => {
       skillName: "read-only",
       deniedTools: [],
     };
-    
+
     const rules = overlayToRules(overlay);
     expect(rules).toHaveLength(0);
   });
@@ -160,7 +160,7 @@ describe("Skill Overlays - Overlay to Rules Conversion", () => {
       skillName: "test",
       deniedTools: ["Bash"],
     };
-    
+
     const rules = overlayToRules(overlay, 200);
     expect(rules[0].priority).toBe(250); // base + 50
   });
@@ -171,7 +171,7 @@ describe("Skill Overlays - Overlay to Rules Conversion", () => {
       requiredTools: ["View"],
       preferredTools: ["View", "GrepTool"],
     };
-    
+
     const rules = overlayToRules(overlay);
     expect(rules).toHaveLength(0);
   });
@@ -183,9 +183,9 @@ describe("Skill Overlays - Policy Evaluation", () => {
       skillName: "code-review",
       deniedTools: ["Bash", "Edit"],
     };
-    
+
     const result = evaluateSkillPolicy(overlay, "Bash");
-    
+
     expect(result.allowed).toBe(false);
     expect(result.deniedTools).toContain("Bash");
     expect(result.skillOverlay).toBe(overlay);
@@ -196,9 +196,9 @@ describe("Skill Overlays - Policy Evaluation", () => {
       skillName: "code-review",
       deniedTools: ["Bash", "Edit"],
     };
-    
+
     const result = evaluateSkillPolicy(overlay, "View");
-    
+
     expect(result.allowed).toBe(true);
     expect(result.deniedTools).toBeUndefined();
   });
@@ -208,7 +208,7 @@ describe("Skill Overlays - Policy Evaluation", () => {
       skillName: "open-skill",
       deniedTools: [],
     };
-    
+
     const result = evaluateSkillPolicy(overlay, "Bash");
     expect(result.allowed).toBe(true);
   });
@@ -217,7 +217,7 @@ describe("Skill Overlays - Policy Evaluation", () => {
     const overlay: SkillOverlay = {
       skillName: "basic-skill",
     };
-    
+
     const result = evaluateSkillPolicy(overlay, "View");
     expect(result.allowed).toBe(true);
   });
@@ -229,10 +229,10 @@ describe("Skill Overlays - Required Tools Validation", () => {
       skillName: "code-review",
       requiredTools: ["View", "GlobTool", "GrepTool"],
     };
-    
+
     const availableTools = ["View", "GlobTool", "GrepTool", "Bash"];
     const result = validateRequiredTools(overlay, availableTools);
-    
+
     expect(result.valid).toBe(true);
     expect(result.missingTools).toHaveLength(0);
   });
@@ -242,10 +242,10 @@ describe("Skill Overlays - Required Tools Validation", () => {
       skillName: "code-review",
       requiredTools: ["View", "GlobTool", "GrepTool"],
     };
-    
+
     const availableTools = ["View", "Bash"];
     const result = validateRequiredTools(overlay, availableTools);
-    
+
     expect(result.valid).toBe(false);
     expect(result.missingTools).toContain("GlobTool");
     expect(result.missingTools).toContain("GrepTool");
@@ -256,7 +256,7 @@ describe("Skill Overlays - Required Tools Validation", () => {
       skillName: "basic-skill",
       requiredTools: [],
     };
-    
+
     const result = validateRequiredTools(overlay, []);
     expect(result.valid).toBe(true);
   });
@@ -265,7 +265,7 @@ describe("Skill Overlays - Required Tools Validation", () => {
     const overlay: SkillOverlay = {
       skillName: "basic-skill",
     };
-    
+
     const result = validateRequiredTools(overlay, []);
     expect(result.valid).toBe(true);
   });
@@ -274,19 +274,19 @@ describe("Skill Overlays - Required Tools Validation", () => {
 describe("Skill Overlays - Example Configurations", () => {
   it("should provide valid example overlays", () => {
     const examples = getExampleSkillOverlays();
-    
+
     // Code review should be read-only
     const codeReview = examples["code-review"];
     expect(codeReview.deniedTools).toContain("Bash");
     expect(codeReview.deniedTools).toContain("Edit");
     expect(codeReview.deniedTools).toContain("Write");
     expect(codeReview.requiredTools).toContain("View");
-    
+
     // Admin should have full access
     const admin = examples["admin"];
     expect(admin.deniedTools).toHaveLength(0);
     expect(admin.requiredTools).toContain("Bash");
-    
+
     // Web scrape needs network
     const webScrape = examples["web-scrape"];
     expect(webScrape.requiredTools).toContain("WebFetch");

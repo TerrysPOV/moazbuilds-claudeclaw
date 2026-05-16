@@ -203,9 +203,7 @@ describe("createAgent", () => {
   it("rejects duplicate creation", async () => {
     const name = uniq("dup2");
     await createAgent({ name, role: "x", personality: "y" });
-    await expect(
-      createAgent({ name, role: "x", personality: "y" })
-    ).rejects.toThrow();
+    await expect(createAgent({ name, role: "x", personality: "y" })).rejects.toThrow();
   });
 });
 
@@ -241,7 +239,8 @@ describe("integration: full agent lifecycle", () => {
   it("creates an agent end-to-end with all files, job, and listing", async () => {
     const name = uniq("suzy");
     const role = "Daily content sourcer for the team";
-    const personality = "Sharp and curious. Loves weird internet corners. Skeptical of hype, allergic to filler.";
+    const personality =
+      "Sharp and curious. Loves weird internet corners. Skeptical of hype, allergic to filler.";
     const ctx = await createAgent({
       name,
       role,
@@ -791,11 +790,7 @@ describe("Phase 17: updateAgent + MEMORY invariant", () => {
     const name = await makeAgent("legacy");
     // Overwrite SOUL.md with legacy format (no markers)
     const soulPath = join(AGENTS_DIR, name, "SOUL.md");
-    await writeFile(
-      soulPath,
-      `## Personality\n\ncalm\n\n## Core Truths\n\nbe helpful\n`,
-      "utf8"
-    );
+    await writeFile(soulPath, `## Personality\n\ncalm\n\n## Core Truths\n\nbe helpful\n`, "utf8");
     await updateAgent(name, { workflow: "fresh workflow" });
     const soul = await readFile(soulPath, "utf8");
     expect(soul).toContain("## Workflow");
@@ -977,7 +972,7 @@ describe("Phase 17 gap-03: append mode for updateAgent", () => {
     await writeFile(
       cmdPath,
       `# Agent: ${name}\n\n## Role\n\ntester\n\n## Discord Channels\n<!-- claudeclaw:discord:start -->\n_none specified_\n<!-- claudeclaw:discord:end -->\n`,
-      "utf8"
+      "utf8",
     );
     await updateAgent(name, {
       dataSources: { value: "vault://first", mode: "append" },
@@ -1153,9 +1148,9 @@ describe("Phase 18: updateAgent defaultModel", () => {
   it("rejects invalid model string at updateAgent", async () => {
     const name = uniq("dm-up6");
     await createAgent({ name, role: "tester", personality: "calm" });
-    await expect(
-      updateAgent(name, { defaultModel: "opuz" } as any),
-    ).rejects.toThrow(/Invalid model/);
+    await expect(updateAgent(name, { defaultModel: "opuz" } as any)).rejects.toThrow(
+      /Invalid model/,
+    );
   });
 });
 

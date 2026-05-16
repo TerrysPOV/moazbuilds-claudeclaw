@@ -7,16 +7,26 @@ import { ensureUserSymlinks } from "../install";
 
 // Each test gets an isolated fake CLAUDECLAW_ROOT plus a fake HOME directory
 // so we never touch the developer's real ~/.claude/.
-async function makeFakeInstall(): Promise<{ root: string; home: string; cleanup: () => Promise<void> }> {
+async function makeFakeInstall(): Promise<{
+  root: string;
+  home: string;
+  cleanup: () => Promise<void>;
+}> {
   const stamp = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const root = join(tmpdir(), `claudeclaw-install-test-root-${stamp}`);
   const home = join(tmpdir(), `claudeclaw-install-test-home-${stamp}`);
 
   // Fake claudeclaw install layout
   await mkdir(join(root, "skills", "create-agent"), { recursive: true });
-  await writeFile(join(root, "skills", "create-agent", "SKILL.md"), "---\nname: create-agent\n---\n");
+  await writeFile(
+    join(root, "skills", "create-agent", "SKILL.md"),
+    "---\nname: create-agent\n---\n",
+  );
   await mkdir(join(root, "skills", "update-agent"), { recursive: true });
-  await writeFile(join(root, "skills", "update-agent", "SKILL.md"), "---\nname: update-agent\n---\n");
+  await writeFile(
+    join(root, "skills", "update-agent", "SKILL.md"),
+    "---\nname: update-agent\n---\n",
+  );
   await mkdir(join(root, "commands", "claudeclaw"), { recursive: true });
   await writeFile(join(root, "commands", "claudeclaw", "create-agent.md"), "cmd");
 
@@ -42,7 +52,10 @@ describe("ensureUserSymlinks", () => {
   });
 
   test("no-op when CLAUDECLAW_ROOT equals cwd (dev running from repo root)", async () => {
-    const result = await ensureUserSymlinks({ claudeclawRoot: process.cwd(), homeDir: "/nonexistent" });
+    const result = await ensureUserSymlinks({
+      claudeclawRoot: process.cwd(),
+      homeDir: "/nonexistent",
+    });
     expect(result.created).toEqual([]);
     expect(result.skipped).toEqual([]);
   });

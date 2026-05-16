@@ -135,19 +135,32 @@ export function parseMemorySearchSettings(raw: unknown): MemorySearchSettings {
   if (typeof r.enabled === "boolean") out.enabled = r.enabled;
   if (typeof r.binPath === "string" && r.binPath.trim()) out.binPath = r.binPath.trim();
   if (typeof r.dbPath === "string" && r.dbPath.trim()) out.dbPath = r.dbPath.trim();
-  if (typeof r.sessionsDir === "string" && r.sessionsDir.trim()) out.sessionsDir = r.sessionsDir.trim();
+  if (typeof r.sessionsDir === "string" && r.sessionsDir.trim())
+    out.sessionsDir = r.sessionsDir.trim();
   if (typeof r.model === "string" && r.model.trim()) out.model = r.model.trim();
 
   if (typeof r.alpha === "number" && Number.isFinite(r.alpha) && r.alpha >= 0 && r.alpha <= 1) {
     out.alpha = r.alpha;
   }
-  if (typeof r.reindexEveryNTurns === "number" && Number.isInteger(r.reindexEveryNTurns) && r.reindexEveryNTurns >= 0) {
+  if (
+    typeof r.reindexEveryNTurns === "number" &&
+    Number.isInteger(r.reindexEveryNTurns) &&
+    r.reindexEveryNTurns >= 0
+  ) {
     out.reindexEveryNTurns = r.reindexEveryNTurns;
   }
-  if (typeof r.searchTimeoutSec === "number" && Number.isFinite(r.searchTimeoutSec) && r.searchTimeoutSec > 0) {
+  if (
+    typeof r.searchTimeoutSec === "number" &&
+    Number.isFinite(r.searchTimeoutSec) &&
+    r.searchTimeoutSec > 0
+  ) {
     out.searchTimeoutSec = r.searchTimeoutSec;
   }
-  if (typeof r.indexTimeoutSec === "number" && Number.isFinite(r.indexTimeoutSec) && r.indexTimeoutSec > 0) {
+  if (
+    typeof r.indexTimeoutSec === "number" &&
+    Number.isFinite(r.indexTimeoutSec) &&
+    r.indexTimeoutSec > 0
+  ) {
     out.indexTimeoutSec = r.indexTimeoutSec;
   }
 
@@ -174,12 +187,9 @@ export interface IndexResult {
   skipped: number;
 }
 
-const SETUP_HINT =
-  "Run: cd tools/memory-search && uv pip install -e .";
+const SETUP_HINT = "Run: cd tools/memory-search && uv pip install -e .";
 
-type BinCheck =
-  | { ok: true; bin: string }
-  | { ok: false; reason: string };
+type BinCheck = { ok: true; bin: string } | { ok: false; reason: string };
 
 /**
  * Locate the memory-search binary, with a clear setup hint when missing.
@@ -274,8 +284,12 @@ export function indexSessionsBackground(opts?: MemorySearchSettings): void {
   });
   let stdout = "";
   let stderr = "";
-  proc.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
-  proc.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+  proc.stdout?.on("data", (chunk: Buffer) => {
+    stdout += chunk.toString();
+  });
+  proc.stderr?.on("data", (chunk: Buffer) => {
+    stderr += chunk.toString();
+  });
   proc.on("close", (code: number | null) => {
     if (code === 0) {
       const indexed = parseInt(stdout.match(/indexed:\s*(\d+)/)?.[1] ?? "0", 10);
@@ -307,18 +321,12 @@ export function indexSessionsBackground(opts?: MemorySearchSettings): void {
  */
 export function searchSessions(
   query: string,
-  opts?: MemorySearchSettings & { topK?: number; withSummary?: boolean }
+  opts?: MemorySearchSettings & { topK?: number; withSummary?: boolean },
 ): SessionSearchResult {
   if (opts?.enabled === false) {
     return { query, hits: [], summary: null };
   }
-  const args = [
-    "recall",
-    query,
-    "--top",
-    String(opts?.topK ?? 5),
-    "--json",
-  ];
+  const args = ["recall", query, "--top", String(opts?.topK ?? 5), "--json"];
   if (opts?.alpha !== undefined) {
     args.push("--alpha", String(opts.alpha));
   }

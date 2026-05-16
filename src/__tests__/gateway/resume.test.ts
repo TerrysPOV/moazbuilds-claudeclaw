@@ -87,7 +87,7 @@ describe("resume.ts", () => {
 
       // Create first time
       const first = await getOrCreateSessionMapping(channelId, threadId);
-      
+
       // Get again - should return same mapping
       const second = await getOrCreateSessionMapping(channelId, threadId);
 
@@ -221,7 +221,7 @@ describe("resume.ts", () => {
 
       await getOrCreateSessionMapping(channelId, threadId);
       await recordClaudeSessionId(channelId, threadId, "first-session");
-      
+
       // Use internal attachClaudeSessionId with force
       const { attachClaudeSessionId } = await import("../../gateway/session-map");
       await attachClaudeSessionId(channelId, threadId, "second-session", true);
@@ -259,7 +259,7 @@ describe("resume.ts", () => {
       const threadId = "default";
 
       await getOrCreateSessionMapping(channelId, threadId);
-      
+
       // Process multiple turns
       await updateSessionAfterProcessing(channelId, threadId, 1);
       await updateSessionAfterProcessing(channelId, threadId, 2);
@@ -348,7 +348,7 @@ describe("resume.ts", () => {
       const threadId = "default";
 
       await getOrCreateSessionMapping(channelId, threadId);
-      
+
       // Manually set lastActiveAt to past threshold
       const oldDate = new Date(Date.now() - DEFAULT_STALE_THRESHOLD_MS - 1000).toISOString();
       const { update } = await import("../../gateway/session-map");
@@ -412,7 +412,7 @@ describe("resume.ts", () => {
       const threadId = "default";
 
       await getOrCreateSessionMapping(channelId, threadId);
-      
+
       // Set lastActiveAt to 30 minutes ago
       const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
       const { update } = await import("../../gateway/session-map");
@@ -449,7 +449,7 @@ describe("resume.ts", () => {
       const threadId = "default";
 
       await getOrCreateSessionMapping(channelId, threadId);
-      
+
       // Set high turn count but keep active (within compact warning threshold)
       const { update } = await import("../../gateway/session-map");
       await update(channelId, threadId, { turnCount: 100 });
@@ -463,7 +463,7 @@ describe("resume.ts", () => {
       const threadId = "default";
 
       await getOrCreateSessionMapping(channelId, threadId);
-      
+
       // Set low turn count
       const { update } = await import("../../gateway/session-map");
       await update(channelId, threadId, { turnCount: 10 });

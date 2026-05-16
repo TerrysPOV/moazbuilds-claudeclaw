@@ -41,7 +41,8 @@ export function normalizeTimezoneName(value: unknown): string {
 }
 
 export function resolveTimezoneOffsetMinutes(value: unknown, timezoneFallback?: string): number {
-  const n = typeof value === "number" ? value : typeof value === "string" ? Number(value.trim()) : NaN;
+  const n =
+    typeof value === "number" ? value : typeof value === "string" ? Number(value.trim()) : NaN;
   if (Number.isFinite(n)) return clampTimezoneOffsetMinutes(n);
   const parsedFallback = parseUtcOffsetMinutes(timezoneFallback);
   if (parsedFallback != null) return parsedFallback;
@@ -59,9 +60,7 @@ export function formatUtcOffsetLabel(timezoneOffsetMinutes: number): string {
   const abs = Math.abs(clamped);
   const hours = Math.floor(abs / 60);
   const minutes = abs % 60;
-  return minutes === 0
-    ? `UTC${sign}${hours}`
-    : `UTC${sign}${hours}:${pad2(minutes)}`;
+  return minutes === 0 ? `UTC${sign}${hours}` : `UTC${sign}${hours}:${pad2(minutes)}`;
 }
 
 export function buildClockPromptPrefix(date: Date, timezoneOffsetMinutes: number): string {
@@ -75,7 +74,10 @@ export function buildClockPromptPrefix(date: Date, timezoneOffsetMinutes: number
   return `[${timestamp} ${offsetLabel}]`;
 }
 
-export function getDayAndMinuteAtOffset(date: Date, timezoneOffsetMinutes: number): { day: number; minute: number } {
+export function getDayAndMinuteAtOffset(
+  date: Date,
+  timezoneOffsetMinutes: number,
+): { day: number; minute: number } {
   const shifted = shiftDateToOffset(date, timezoneOffsetMinutes);
   return {
     day: shifted.getUTCDay(),

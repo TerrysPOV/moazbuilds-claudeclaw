@@ -2,15 +2,17 @@
 // Usage: node install.mjs <owner/repo> <skill-name> [target-dir]
 // Works with Node 18+, Bun, Deno
 
-import { mkdirSync, writeFileSync } from "fs";
-import { join } from "path";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 const repo = process.argv[2];
 const skillName = process.argv[3];
 const targetDir = process.argv[4] || join(process.cwd(), "skills");
 
 if (!repo || !skillName) {
-  console.log(JSON.stringify({ error: "Usage: node install.mjs <owner/repo> <skill-name> [target-dir]" }));
+  console.log(
+    JSON.stringify({ error: "Usage: node install.mjs <owner/repo> <skill-name> [target-dir]" }),
+  );
   process.exit(1);
 }
 
@@ -21,18 +23,23 @@ try {
     headers: { "User-Agent": "claudeclaw-skill-installer" },
   });
 
+  let files;
   if (!res.ok) {
     // Try root-level skill (some repos put SKILL.md at root)
     const rootRes = await fetch(`https://api.github.com/repos/${repo}/contents/${skillName}`, {
       headers: { "User-Agent": "claudeclaw-skill-installer" },
     });
     if (!rootRes.ok) {
-      console.log(JSON.stringify({ error: `Skill not found at skills/${skillName} or ${skillName} in ${repo}` }));
+      console.log(
+        JSON.stringify({
+          error: `Skill not found at skills/${skillName} or ${skillName} in ${repo}`,
+        }),
+      );
       process.exit(1);
     }
-    var files = await rootRes.json();
+    files = await rootRes.json();
   } else {
-    var files = await res.json();
+    files = await res.json();
   }
 
   if (!Array.isArray(files)) files = [files];
@@ -50,13 +57,19 @@ try {
     downloaded.push(file.name);
   }
 
-  console.log(JSON.stringify({
-    ok: true,
-    skill: skillName,
-    source: repo,
-    path: destDir,
-    files: downloaded,
-  }, null, 2));
+  console.log(
+    JSON.stringify(
+      {
+        ok: true,
+        skill: skillName,
+        source: repo,
+        path: destDir,
+        files: downloaded,
+      },
+      null,
+      2,
+    ),
+  );
 } catch (e) {
   console.log(JSON.stringify({ error: e.message }));
   process.exit(1);

@@ -1,8 +1,8 @@
 /**
  * Pricing & Budget Engine
- * 
+ *
  * Evaluates spend/usage against configured budget policies and returns governance actions.
- * 
+ *
  * BUDGET MODEL:
  * - Budgets are scoped (session, daily, monthly)
  * - Thresholds: warn, degrade, reroute, block
@@ -13,11 +13,7 @@
 import { join } from "path";
 import { existsSync } from "fs";
 import { randomUUID } from "crypto";
-import { 
-  getAggregates, 
-  getSessionUsage, 
-  type UsageFilters 
-} from "./usage-tracker";
+import { getAggregates, getSessionUsage, type UsageFilters } from "./usage-tracker";
 
 const CLAUDECLAW_DIR = join(process.cwd(), ".claude", "claudeclaw");
 const BUDGET_POLICIES_FILE = join(CLAUDECLAW_DIR, "budget-policies.json");
@@ -235,7 +231,8 @@ async function saveBudgetPolicies(): Promise<void> {
   if (!budgetPolicies) return;
   await Bun.write(
     BUDGET_POLICIES_FILE,
-    JSON.stringify({ policies: budgetPolicies, updatedAt: new Date().toISOString() }, null, 2) + "\n"
+    JSON.stringify({ policies: budgetPolicies, updatedAt: new Date().toISOString() }, null, 2) +
+      "\n",
   );
 }
 
@@ -259,16 +256,16 @@ export async function loadPolicies(): Promise<BudgetPolicy[]> {
  * Add or update a budget policy.
  */
 export async function upsertBudgetPolicy(
-  policyData: Omit<BudgetPolicy, "id" | "createdAt" | "updatedAt"> & { id?: string }
+  policyData: Omit<BudgetPolicy, "id" | "createdAt" | "updatedAt"> & { id?: string },
 ): Promise<BudgetPolicy> {
   await initBudgetEngine();
 
   const now = new Date().toISOString();
   const policyId = policyData.id;
-  
+
   if (policyId) {
     // Update existing
-    const index = budgetPolicies!.findIndex(p => p.id === policyId);
+    const index = budgetPolicies!.findIndex((p) => p.id === policyId);
     if (index >= 0) {
       budgetPolicies![index] = {
         ...budgetPolicies![index],
@@ -300,7 +297,7 @@ export async function upsertBudgetPolicy(
 export async function deleteBudgetPolicy(policyId: string): Promise<boolean> {
   await initBudgetEngine();
 
-  const index = budgetPolicies!.findIndex(p => p.id === policyId);
+  const index = budgetPolicies!.findIndex((p) => p.id === policyId);
   if (index < 0) {
     return false;
   }
@@ -321,29 +318,33 @@ export function calculateEstimatedCost(
     cacheReadInputTokens?: number;
   },
   provider: string,
-  model: string
-): { totalCost: number; breakdown: { inputCost: number; outputCost: number; cacheCost: number } } | null {
+  model: string,
+): {
+  totalCost: number;
+  breakdown: { inputCost: number; outputCost: number; cacheCost: number };
+} | null {
   if (!pricingConfig) {
     return null;
   }
 
-  const tier = pricingConfig.tiers.find(t => t.provider === provider && t.model === model);
+  const tier = pricingConfig.tiers.find((t) => t.provider === provider && t.model === model);
   if (!tier) {
     // Try just provider-level default
-    const providerTier = pricingConfig.tiers.find(t => t.provider === provider);
+    const providerTier = pricingConfig.tiers.find((t) => t.provider === provider);
     if (!providerTier) {
       return null;
     }
   }
 
-  const selectedTier = tier || pricingConfig.tiers.find(t => t.provider === provider)!;
+  const selectedTier = tier || pricingConfig.tiers.find((t) => t.provider === provider)!;
 
   const inputCost = ((usage.inputTokens ?? 0) / 1_000_000) * selectedTier.inputCostPerMillion;
   const outputCost = ((usage.outputTokens ?? 0) / 1_000_000) * selectedTier.outputCostPerMillion;
-  
+
   let cacheCost = 0;
   if (selectedTier.cacheCreationCostPerMillion && usage.cacheCreationInputTokens) {
-    cacheCost += (usage.cacheCreationInputTokens / 1_000_000) * selectedTier.cacheCreationCostPerMillion;
+    cacheCost +=
+      (usage.cacheCreationInputTokens / 1_000_000) * selectedTier.cacheCreationCostPerMillion;
   }
   if (selectedTier.cacheReadCostPerMillion && usage.cacheReadInputTokens) {
     cacheCost += (usage.cacheReadInputTokens / 1_000_000) * selectedTier.cacheReadCostPerMillion;
@@ -361,7 +362,16 @@ export function calculateEstimatedCost(
   };
 }
 
-function matchesScope(record: { source?: string; channelId?: string; sessionId?: string; provider?: string; model?: string }, scope: BudgetScope): boolean {
+function matchesScope(
+  record: {
+    source?: string;
+    channelId?: string;
+    sessionId?: string;
+    provider?: string;
+    model?: string;
+  },
+  scope: BudgetScope,
+): boolean {
   // Check source
   if (scope.source) {
     const sources = Array.isArray(scope.source) ? scope.source : [scope.source];
@@ -438,16 +448,14 @@ function getPeriodBounds(period: BudgetPeriod): { startDate: string; endDate: st
 /**
  * Evaluate budget for a given context.
  */
-export async function evaluateBudget(
-  context: {
-    sessionId?: string;
-    channelId?: string;
-    source?: string;
-    userId?: string;
-    provider?: string;
-    model?: string;
-  }
-): Promise<BudgetEvaluation[]> {
+export async function evaluateBudget(context: {
+  sessionId?: string;
+  channelId?: string;
+  source?: string;
+  userId?: string;
+  provider?: string;
+  model?: string;
+}): Promise<BudgetEvaluation[]> {
   await initBudgetEngine();
 
   const evaluations: BudgetEvaluation[] = [];
@@ -534,9 +542,7 @@ export async function evaluateBudget(
 /**
  * Get current budget state for a scope.
  */
-export async function getBudgetState(
-  scope: BudgetScope
-): Promise<BudgetStateSummary[]> {
+export async function getBudgetState(scope: BudgetScope): Promise<BudgetStateSummary[]> {
   await initBudgetEngine();
 
   const summaries: BudgetStateSummary[] = [];
@@ -547,7 +553,18 @@ export async function getBudgetState(
     }
 
     // Check if policy matches the requested scope
-    if (!matchesScope(scope as { source?: string; channelId?: string; sessionId?: string; provider?: string; model?: string }, policy.scope)) {
+    if (
+      !matchesScope(
+        scope as {
+          source?: string;
+          channelId?: string;
+          sessionId?: string;
+          provider?: string;
+          model?: string;
+        },
+        policy.scope,
+      )
+    ) {
       continue;
     }
 
@@ -611,7 +628,7 @@ export async function createDefaultPoliciesForChannel(
   options: {
     dailyLimit?: number;
     monthlyLimit?: number;
-  } = {}
+  } = {},
 ): Promise<BudgetPolicy[]> {
   const policies: BudgetPolicy[] = [];
 

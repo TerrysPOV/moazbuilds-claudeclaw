@@ -88,7 +88,7 @@ async function findExecutable(dir: string, names: string[]): Promise<string | nu
   const targets = names.flatMap((n) => (suffix ? [n + suffix, n] : [n]));
 
   async function search(current: string): Promise<string | null> {
-    let entries;
+    let entries: Awaited<ReturnType<typeof readdir>>;
     try {
       entries = await readdir(current, { withFileTypes: true });
     } catch {
@@ -114,7 +114,11 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
 }
 
-async function downloadFile(url: string, destPath: string, headers?: Record<string, string>): Promise<void> {
+async function downloadFile(
+  url: string,
+  destPath: string,
+  headers?: Record<string, string>,
+): Promise<void> {
   const tmpPath = destPath + ".tmp";
   let existingBytes = 0;
 
@@ -157,7 +161,9 @@ async function downloadFile(url: string, destPath: string, headers?: Record<stri
       received += chunk.byteLength;
       if (totalSize > 0 && Date.now() - lastLog > 2000) {
         const pct = Math.round((received / totalSize) * 100);
-        console.log(`whisper: downloading ${formatBytes(received)} / ${formatBytes(totalSize)} (${pct}%)`);
+        console.log(
+          `whisper: downloading ${formatBytes(received)} / ${formatBytes(totalSize)} (${pct}%)`,
+        );
         lastLog = Date.now();
       }
     }
@@ -173,7 +179,7 @@ async function downloadAndExtractBinary(): Promise<void> {
   const source = BINARY_SOURCES[platformKey];
   if (!source) {
     throw new Error(
-      `No pre-built whisper binary for ${platformKey}. Supported: ${Object.keys(BINARY_SOURCES).join(", ")}`
+      `No pre-built whisper binary for ${platformKey}. Supported: ${Object.keys(BINARY_SOURCES).join(", ")}`,
     );
   }
 
@@ -213,11 +219,16 @@ async function downloadAndExtractBinary(): Promise<void> {
   await chmod(destBinary, 0o755);
 
   // Copy any shared libraries (for Homebrew bottles)
-  const entries = await readdir(extractDir, { withFileTypes: true, recursive: true }).catch(() => []);
+  const entries = await readdir(extractDir, { withFileTypes: true, recursive: true }).catch(
+    () => [],
+  );
   for (const entry of entries) {
     if (!entry.isFile()) continue;
     const name = entry.name;
-    if (name.includes("whisper") && (name.endsWith(".so") || name.endsWith(".dylib") || name.match(/\.so\.\d/))) {
+    if (
+      name.includes("whisper") &&
+      (name.endsWith(".so") || name.endsWith(".dylib") || name.match(/\.so\.\d/))
+    ) {
       const parentPath = entry.parentPath ?? entry.path ?? "";
       const srcPath = join(parentPath, name);
       const destPath = join(LIB_DIR, name);
@@ -266,7 +277,10 @@ function ensureOggDeps(): void {
   } catch {
     console.log("whisper: installing ogg-opus-decoder...");
     const pkgMgr = (() => {
-      try { execSync("bun --version", { stdio: "ignore" }); return "bun"; } catch {}
+      try {
+        execSync("bun --version", { stdio: "ignore" });
+        return "bun";
+      } catch {}
       return "npm";
     })();
     execSync(`${pkgMgr} install`, { cwd: PLUGIN_ROOT, stdio: "inherit" });
@@ -284,7 +298,7 @@ function decodeOggOpusToWavViaNode(inputPath: string, wavPath: string, log: Whis
     const stderr = result.stderr?.trim() || "";
     const stdout = result.stdout?.trim() || "";
     throw new Error(
-      `node decode failed (exit ${result.status ?? "unknown"})${stderr ? `: ${stderr}` : stdout ? `: ${stdout}` : ""}`
+      `node decode failed (exit ${result.status ?? "unknown"})${stderr ? `: ${stderr}` : stdout ? `: ${stdout}` : ""}`,
     );
   }
 
@@ -298,7 +312,9 @@ async function ensureWavInput(inputPath: string, log: WhisperDebugLog): Promise<
   if (ext === ".wav") return inputPath;
 
   if (ext !== ".ogg" && ext !== ".oga") {
-    throw new Error(`unsupported audio format "${ext || "(none)"}" without ffmpeg; supported: .oga, .ogg, .wav`);
+    throw new Error(
+      `unsupported audio format "${ext || "(none)"}" without ffmpeg; supported: .oga, .ogg, .wav`,
+    );
   }
 
   const wavPath = join(TMP_FOLDER, `${basename(inputPath, extname(inputPath))}-${Date.now()}.wav`);
@@ -325,7 +341,7 @@ async function transcribeViaApi(
   inputPath: string,
   baseUrl: string,
   model: string,
-  log: WhisperDebugLog
+  log: WhisperDebugLog,
 ): Promise<string> {
   const apiModel = model || "Systran/faster-whisper-large-v3";
   const url = `${baseUrl}/v1/audio/transcriptions`;
@@ -334,8 +350,12 @@ async function transcribeViaApi(
   const audioBytes = await readFile(inputPath);
   const ext = extname(inputPath).toLowerCase().replace(".", "") || "ogg";
   const mimeMap: Record<string, string> = {
-    ogg: "audio/ogg", oga: "audio/ogg", wav: "audio/wav",
-    mp3: "audio/mpeg", m4a: "audio/mp4", webm: "audio/webm",
+    ogg: "audio/ogg",
+    oga: "audio/ogg",
+    wav: "audio/wav",
+    mp3: "audio/mpeg",
+    m4a: "audio/mp4",
+    webm: "audio/webm",
   };
   const mimeType = mimeMap[ext] ?? "audio/ogg";
 
@@ -357,7 +377,7 @@ async function transcribeViaApi(
 
 export async function transcribeAudioToText(
   inputPath: string,
-  options?: { debug?: boolean; log?: WhisperDebugLog }
+  options?: { debug?: boolean; log?: WhisperDebugLog },
 ): Promise<string> {
   const log = options?.debug ? (options?.log ?? console.log) : noopLog;
 
@@ -371,7 +391,9 @@ export async function transcribeAudioToText(
     const inputStat = await stat(inputPath);
     log(`voice transcribe: input size=${inputStat.size} bytes`);
   } catch (err) {
-    log(`voice transcribe: failed to stat input - ${err instanceof Error ? err.message : String(err)}`);
+    log(
+      `voice transcribe: failed to stat input - ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 
   const wavPath = await ensureWavInput(inputPath, log);
@@ -382,18 +404,15 @@ export async function transcribeAudioToText(
   const modelPath = getModelPath();
 
   const runTranscription = () => {
-    const proc = Bun.spawnSync(
-      [binaryPath, "-m", modelPath, "-f", wavPath, "--no-timestamps"],
-      {
-        stdout: "pipe",
-        stderr: "pipe",
-        env: {
-          ...process.env,
-          LD_LIBRARY_PATH: [LIB_DIR, process.env.LD_LIBRARY_PATH].filter(Boolean).join(":"),
-          DYLD_LIBRARY_PATH: [LIB_DIR, process.env.DYLD_LIBRARY_PATH].filter(Boolean).join(":"),
-        },
-      }
-    );
+    const proc = Bun.spawnSync([binaryPath, "-m", modelPath, "-f", wavPath, "--no-timestamps"], {
+      stdout: "pipe",
+      stderr: "pipe",
+      env: {
+        ...process.env,
+        LD_LIBRARY_PATH: [LIB_DIR, process.env.LD_LIBRARY_PATH].filter(Boolean).join(":"),
+        DYLD_LIBRARY_PATH: [LIB_DIR, process.env.DYLD_LIBRARY_PATH].filter(Boolean).join(":"),
+      },
+    });
 
     if (proc.exitCode !== 0) {
       const stderr = proc.stderr.toString().trim();

@@ -90,9 +90,7 @@ async function showStatus(): Promise<boolean> {
         ? settings.timezone.trim()
         : Intl.DateTimeFormat().resolvedOptions().timeZone || "system";
     const windows = Array.isArray(hb?.excludeWindows) ? hb.excludeWindows : [];
-    console.log(
-      `  Heartbeat: ${hb.enabled ? `every ${hb.interval}m` : "disabled"}`
-    );
+    console.log(`  Heartbeat: ${hb.enabled ? `every ${hb.interval}m` : "disabled"}`);
     if (hb.enabled) {
       console.log(`  Heartbeat timezone: ${timezone}`);
       console.log(`  Quiet windows: ${windows.length > 0 ? windows.length : "none"}`);
@@ -139,13 +137,11 @@ async function showStatus(): Promise<boolean> {
     console.log("");
     if (state.heartbeat) {
       console.log(
-        `  \x1b[31m♥\x1b[0m Next heartbeat: ${formatCountdown(state.heartbeat.nextAt - now)}`
+        `  \x1b[31m♥\x1b[0m Next heartbeat: ${formatCountdown(state.heartbeat.nextAt - now)}`,
       );
     }
     for (const job of state.jobs || []) {
-      console.log(
-        `  → ${job.name}: ${formatCountdown(job.nextAt - now)}`
-      );
+      console.log(`  → ${job.name}: ${formatCountdown(job.nextAt - now)}`);
     }
   } catch {}
 
@@ -155,7 +151,9 @@ async function showStatus(): Promise<boolean> {
 export async function status(args: string[]) {
   // Populate the settings cache so runtime-resolved helpers (e.g. getJobsDir())
   // return configured values rather than compile-time defaults.
-  try { await loadSettings(); } catch {}
+  try {
+    await loadSettings();
+  } catch {}
 
   if (args.includes("--all")) {
     await showAll();

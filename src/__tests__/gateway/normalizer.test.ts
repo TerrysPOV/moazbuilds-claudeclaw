@@ -6,7 +6,7 @@ import {
   normalizeCronEvent,
   normalizeWebhookEvent,
   Channel,
-  NormalizedEvent,
+  type NormalizedEvent,
 } from "../../gateway/normalizer";
 
 // --- Type guard tests ---

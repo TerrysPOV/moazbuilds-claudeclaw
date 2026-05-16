@@ -169,10 +169,10 @@ describe("skills-tuner config — standard discovery paths (issue #52)", () => {
   });
 });
 
-import { SkillsSubject } from '../skills-tuner/subjects/skills';
+import { SkillsSubject } from "../skills-tuner/subjects/skills";
 
-describe('SkillsSubject constructor — uses standard default', () => {
-  it('falls back to DEFAULT_SKILLS_DIR when scanDirs omitted', () => {
+describe("SkillsSubject constructor — uses standard default", () => {
+  it("falls back to DEFAULT_SKILLS_DIR when scanDirs omitted", () => {
     const subject = new SkillsSubject({});
     // Reach into the instance via type assertion — constructor default is the
     // observable contract here. If the field is renamed or made private+inaccessible,

@@ -23,12 +23,7 @@
  */
 import { spawn as ptySpawn, type IPty } from "bun-pty";
 import type { SecurityConfig } from "../config";
-import {
-  createParser,
-  feed,
-  decodeTurn,
-  type Parser,
-} from "./pty-output-parser";
+import { createParser, feed, decodeTurn, type Parser } from "./pty-output-parser";
 
 // ─── Public types (FROZEN per SPEC §3.1) ────────────────────────────────────
 
@@ -133,7 +128,7 @@ export interface PtyProcess {
       timeoutMs: number;
       onChunk?: (text: string) => void;
       onToolEvent?: (line: string) => void;
-    }
+    },
   ): Promise<PtyTurnResult>;
   dispose(): Promise<void>;
 }
@@ -155,7 +150,7 @@ export type SpawnPty = (opts: PtyProcessOptions) => Promise<PtyProcess>;
 export class PtyTurnTimeoutError extends Error {
   constructor(
     public readonly label: string,
-    public readonly elapsedMs: number
+    public readonly elapsedMs: number,
   ) {
     super(`PTY turn timed out for ${label} after ${elapsedMs}ms`);
     this.name = "PtyTurnTimeoutError";
@@ -166,11 +161,9 @@ export class PtyClosedError extends Error {
   constructor(
     public readonly label: string,
     public readonly exitCode: number | null,
-    public readonly signal: string | null
+    public readonly signal: string | null,
   ) {
-    super(
-      `PTY closed during turn for ${label} (exit=${exitCode} signal=${signal})`
-    );
+    super(`PTY closed during turn for ${label} (exit=${exitCode} signal=${signal})`);
     this.name = "PtyClosedError";
   }
 }
@@ -275,13 +268,8 @@ class PtyProcessImpl implements PtyProcess {
   private _pty: IPty;
   private readonly _idleTimeoutMs: number;
   private readonly _now: () => number;
-  private readonly _setTimeout: (
-    cb: () => void,
-    ms: number
-  ) => ReturnType<typeof setTimeout>;
-  private readonly _clearTimeout: (
-    handle: ReturnType<typeof setTimeout>
-  ) => void;
+  private readonly _setTimeout: (cb: () => void, ms: number) => ReturnType<typeof setTimeout>;
+  private readonly _clearTimeout: (handle: ReturnType<typeof setTimeout>) => void;
 
   /** Accumulated bytes for the in-flight turn, OR all bytes when no turn
    *  is in flight (kept so idle-fallback can produce a defensible response). */
@@ -294,16 +282,10 @@ class PtyProcessImpl implements PtyProcess {
   /** Whether we are currently inside a runTurn call. */
   private _turnInProgress = false;
   /** Resolver for the current runTurn promise. */
-  private _turnResolve:
-    | ((result: PtyTurnResult) => void)
-    | null = null;
+  private _turnResolve: ((result: PtyTurnResult) => void) | null = null;
   private _turnReject: ((err: Error) => void) | null = null;
-  private _turnHardTimeoutHandle:
-    | ReturnType<typeof setTimeout>
-    | null = null;
-  private _turnIdleTimerHandle:
-    | ReturnType<typeof setTimeout>
-    | null = null;
+  private _turnHardTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
+  private _turnIdleTimerHandle: ReturnType<typeof setTimeout> | null = null;
   private _turnStartedAt = 0;
   private _disposed = false;
   /** Listener disposables from bun-pty. */
@@ -318,16 +300,14 @@ class PtyProcessImpl implements PtyProcess {
   constructor(pty: IPty, opts: PtyProcessOptions) {
     this._pty = pty;
     this._pid = pty.pid;
-    this._sessionId = (opts.sessionId && opts.sessionId.length > 0)
-      ? opts.sessionId
-      : (opts.newSessionId ?? "");
+    this._sessionId =
+      opts.sessionId && opts.sessionId.length > 0 ? opts.sessionId : (opts.newSessionId ?? "");
     this.cwd = opts.cwd;
     this.label = `${opts.agentName ?? "pty"}:${pty.pid}`;
     this._idleTimeoutMs = opts.turnIdleTimeoutMs ?? DEFAULT_TURN_IDLE_TIMEOUT_MS;
     this._now = opts._now ?? (() => Date.now());
     this._setTimeout = opts._setTimeout ?? ((cb, ms) => setTimeout(cb, ms));
-    this._clearTimeout =
-      opts._clearTimeout ?? ((h) => clearTimeout(h));
+    this._clearTimeout = opts._clearTimeout ?? ((h) => clearTimeout(h));
     this._parser = createParser();
 
     this._onDataDisposable = pty.onData((data) => this._handleData(data));
@@ -368,8 +348,11 @@ class PtyProcessImpl implements PtyProcess {
       const decoded = this._streamDecoder.decode(bytes, { stream: true });
       // Strip ANSI inline so the callback sees plain text.
       const stripped = decoded
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI/OSC escape sequences require control bytes.
         .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI CSI escape stripper.
         .replace(/\x1b\[[?0-9;]*[ -/]*[@-~]/g, "")
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: catch-all ESC byte stripper.
         .replace(/\x1b/g, "");
       if (stripped.length > 0) {
         try {
@@ -386,8 +369,11 @@ class PtyProcessImpl implements PtyProcess {
     if (this._turnInProgress && this._onToolEvent) {
       const text = new TextDecoder().decode(bytes);
       const stripped = text
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI/OSC escape sequences require control bytes.
         .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI CSI escape stripper.
         .replace(/\x1b\[[?0-9;]*[ -/]*[@-~]/g, "")
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: catch-all ESC byte stripper.
         .replace(/\x1b/g, "")
         .replace(/\r\n/g, "\n")
         .replace(/\r/g, "");
@@ -429,7 +415,7 @@ class PtyProcessImpl implements PtyProcess {
       const err = new PtyClosedError(
         this.label,
         info.exitCode ?? null,
-        info.signal != null ? String(info.signal) : null
+        info.signal != null ? String(info.signal) : null,
       );
       this._rejectTurn(err);
     }
@@ -443,23 +429,17 @@ class PtyProcessImpl implements PtyProcess {
       timeoutMs: number;
       onChunk?: (text: string) => void;
       onToolEvent?: (line: string) => void;
-    }
+    },
   ): Promise<PtyTurnResult> {
     if (this._disposed) {
-      return Promise.reject(
-        new PtyClosedError(this.label, null, null)
-      );
+      return Promise.reject(new PtyClosedError(this.label, null, null));
     }
     if (!this._alive) {
-      return Promise.reject(
-        new PtyClosedError(this.label, null, null)
-      );
+      return Promise.reject(new PtyClosedError(this.label, null, null));
     }
     if (this._turnInProgress) {
       return Promise.reject(
-        new Error(
-          `runTurn called concurrently on ${this.label}; supervisor must serialise`
-        )
+        new Error(`runTurn called concurrently on ${this.label}; supervisor must serialise`),
       );
     }
 
@@ -477,9 +457,7 @@ class PtyProcessImpl implements PtyProcess {
       this._pty.write(prompt + "\r");
     } catch (err) {
       this._turnInProgress = false;
-      return Promise.reject(
-        err instanceof Error ? err : new Error(String(err))
-      );
+      return Promise.reject(err instanceof Error ? err : new Error(String(err)));
     }
 
     return new Promise<PtyTurnResult>((resolve, reject) => {
@@ -588,7 +566,9 @@ class PtyProcessImpl implements PtyProcess {
         // Defensive: if exit somehow already happened in the gap, resolve.
         if (!this._alive) {
           resolve();
-          try { sub.dispose(); } catch {}
+          try {
+            sub.dispose();
+          } catch {}
         }
       });
 
@@ -599,7 +579,9 @@ class PtyProcessImpl implements PtyProcess {
       }
 
       const killTimer = this._setTimeout(() => {
-        try { this._pty.kill("SIGKILL"); } catch {}
+        try {
+          this._pty.kill("SIGKILL");
+        } catch {}
       }, 2000);
 
       await exited;
@@ -607,8 +589,12 @@ class PtyProcessImpl implements PtyProcess {
     }
 
     // Now safe to clean up listeners — process is gone, no fire() in flight.
-    try { this._onDataDisposable?.dispose(); } catch {}
-    try { this._onExitDisposable?.dispose(); } catch {}
+    try {
+      this._onDataDisposable?.dispose();
+    } catch {}
+    try {
+      this._onExitDisposable?.dispose();
+    } catch {}
     this._onDataDisposable = null;
     this._onExitDisposable = null;
   }
@@ -694,8 +680,8 @@ export function spawnPty(opts: PtyProcessOptions): Promise<PtyProcess> {
     } catch (err) {
       reject(
         new Error(
-          `Failed to spawn PTY for ${cmd}: ${err instanceof Error ? err.message : String(err)}`
-        )
+          `Failed to spawn PTY for ${cmd}: ${err instanceof Error ? err.message : String(err)}`,
+        ),
       );
       return;
     }
@@ -711,11 +697,7 @@ export function spawnPty(opts: PtyProcessOptions): Promise<PtyProcess> {
     // Wait up to 3s for the TUI to paint, OR the first progress-END marker.
     proc._waitForReadySettle(3000).then(() => {
       if (!proc.isAlive()) {
-        reject(
-          new Error(
-            `PTY for ${cmd} exited before TUI settled (pid=${pty.pid})`
-          )
-        );
+        reject(new Error(`PTY for ${cmd} exited before TUI settled (pid=${pty.pid})`));
         return;
       }
       resolve(proc);
