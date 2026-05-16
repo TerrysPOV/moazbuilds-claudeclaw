@@ -166,6 +166,8 @@ const DEFAULT_SETTINGS: Settings = {
     cols: 100,
     rows: 30,
     maxConcurrent: 32,
+    quietWindowMs: 500,
+    sentinelMaxWaitMs: 30_000,
   },
   mcp: {
     // Default empty — the multiplexer is dormant out of the box. Operators
@@ -370,6 +372,23 @@ export interface PtyConfig {
    * idle-reaper can clear them. Default: 32.
    */
   maxConcurrent: number;
+  /**
+   * Quiet window before the supervisor writes the turn-end sentinel into the
+   * PTY (issue #81 — claude 2.1.89 dropped OSC 9;4 progress markers, so we
+   * detect turn completion via a sentinel-echo round-trip instead). When the
+   * byte stream has been silent for this many ms, the supervisor writes the
+   * sentinel and waits for claude's TUI to echo it back. Lower values reduce
+   * per-turn latency overhead but risk false-positives during legitimate
+   * mid-turn pauses (model thinking, slow streaming, etc.). Default: 500.
+   */
+  quietWindowMs: number;
+  /**
+   * Hard cap on how long the supervisor waits for the sentinel echo after
+   * writing it. If the sentinel never echoes back (claude crashed, TUI
+   * stalled), the turn completes with `cleanBoundary=false` and whatever
+   * bytes have been captured so far. Default: 30000 (30s).
+   */
+  sentinelMaxWaitMs: number;
 }
 
 export interface Settings {
@@ -678,6 +697,14 @@ function parseSettings(raw: Record<string, any>, discordUserIds?: string[]): Set
         Number.isFinite(raw.pty?.maxConcurrent) && Number(raw.pty.maxConcurrent) > 0
           ? Number(raw.pty.maxConcurrent)
           : 32,
+      quietWindowMs:
+        Number.isFinite(raw.pty?.quietWindowMs) && Number(raw.pty.quietWindowMs) > 0
+          ? Number(raw.pty.quietWindowMs)
+          : 500,
+      sentinelMaxWaitMs:
+        Number.isFinite(raw.pty?.sentinelMaxWaitMs) && Number(raw.pty.sentinelMaxWaitMs) > 0
+          ? Number(raw.pty.sentinelMaxWaitMs)
+          : 30_000,
     },
     mcp: parseMcpConfig(raw.mcp, raw.web?.enabled),
     watchdog: parseWatchdogConfig(raw.watchdog),

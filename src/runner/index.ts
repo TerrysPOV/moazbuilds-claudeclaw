@@ -1,15 +1,12 @@
 /**
  * Public entry point for the runner subdirectory.
  *
- * Re-exports the PtyProcess wrapper and the OSC turn-boundary parser so the
- * supervisor (engineer-pty-supervisor's work, parallel) can import as
+ * Re-exports the PtyProcess wrapper and the sentinel-echo turn-boundary
+ * parser so the supervisor can import as
  *
  *     import { spawnPty, PtyProcess } from "../runner";
  *
  * without reaching into the implementation files.
- *
- * DO NOT add imports from pty-supervisor.ts here — that file lives in the
- * sibling worktree and is owned by a different engineer.
  */
 
 export {
@@ -23,12 +20,19 @@ export {
 
 export {
   createParser,
+  startTurn,
   feed,
+  tick,
+  markSentinelWritten,
+  resetTurn,
+  buildSentinel,
+  encodeSentinel,
   stripAnsi,
   normaliseNewlines,
   extractResponseText,
   decodeTurn,
-  PROGRESS_MARKERS,
+  DEFAULT_QUIET_WINDOW_MS,
   type Parser,
   type ParserEvent,
+  type ParserState,
 } from "./pty-output-parser";

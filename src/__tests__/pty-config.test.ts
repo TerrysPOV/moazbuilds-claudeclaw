@@ -57,6 +57,22 @@ describe("parseSettings — pty defaults", () => {
     expect(pty.turnIdleTimeoutMs).toBe(5000);
     expect(pty.cols).toBe(100);
     expect(pty.rows).toBe(30);
+    expect(pty.quietWindowMs).toBe(500);
+    expect(pty.sentinelMaxWaitMs).toBe(30_000);
+  });
+
+  it("accepts custom quietWindowMs / sentinelMaxWaitMs (issue #81 sentinel-echo)", async () => {
+    await writeRawSettings({ pty: { quietWindowMs: 250, sentinelMaxWaitMs: 60_000 } });
+    await reloadSettings();
+    expect(getSettings().pty.quietWindowMs).toBe(250);
+    expect(getSettings().pty.sentinelMaxWaitMs).toBe(60_000);
+  });
+
+  it("rejects non-positive quietWindowMs / sentinelMaxWaitMs", async () => {
+    await writeRawSettings({ pty: { quietWindowMs: 0, sentinelMaxWaitMs: -1 } });
+    await reloadSettings();
+    expect(getSettings().pty.quietWindowMs).toBe(500);
+    expect(getSettings().pty.sentinelMaxWaitMs).toBe(30_000);
   });
 
   it("respects an explicit pty.enabled = true", async () => {
@@ -162,6 +178,8 @@ describe("parseSettings — pty defaults", () => {
         cols: 100,
         rows: 30,
         maxConcurrent: 32,
+        quietWindowMs: 500,
+        sentinelMaxWaitMs: 30_000,
       },
     };
     await writeRawSettings(explicitDefaults);
