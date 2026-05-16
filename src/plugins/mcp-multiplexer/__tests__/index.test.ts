@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -723,6 +723,50 @@ describe("McpMultiplexerPlugin — session persistence wiring", () => {
       await plugin.releaseIdentity("suzy");
       expect(store.records.has("alpha::suzy")).toBe(false);
       expect(store.calls.some((c) => c.op === "drop" && c.ptyId === "suzy")).toBe(true);
+    } finally {
+      await plugin.stop();
+    }
+  });
+
+  // Codex PR #78 P1 regression — production calls
+  // `getMcpMultiplexerPlugin()` with NO options, so `persistenceFactory`
+  // is undefined. Pre-fix, this short-circuited persistence activation
+  // and the feature was silently dead. The fix defaults to constructing
+  // a real SessionPersistenceStore when no factory is provided.
+  it("activates persistence in production wiring (no factory injected)", async () => {
+    const cfgPath = writeProxyConfig(tmpDir, ["alpha"]);
+    const storageRoot = join(tmpDir, "default-store-root");
+
+    const plugin = new McpMultiplexerPlugin({
+      configPath: cfgPath,
+      // INTENTIONALLY no persistenceFactory — simulates production
+      // wiring at `commands/start.ts` calling `getMcpMultiplexerPlugin()`
+      // with no options.
+      settingsView: makeSettingsView({
+        webEnabled: true,
+        shared: ["alpha"],
+        sessionPersistenceEnabled: true,
+        sessionPersistencePath: storageRoot,
+        sessionMaxAgeSeconds: 3600,
+      }),
+    });
+
+    await plugin.start();
+
+    try {
+      expect(plugin.isActive()).toBe(true);
+      // The store should have been constructed and assigned. Use a
+      // test-seam getter; alternatively assert by behavioural side
+      // effect — the storage root dir gets created lazily on first
+      // mutation, so issue a fake bucket-record flow.
+      const persistence = (plugin as unknown as {
+        persistence: { record: (...a: unknown[]) => Promise<void> } | null;
+      }).persistence;
+      expect(persistence).not.toBeNull();
+      // Smoke test: the real store accepts a record without throwing.
+      await persistence!.record("alpha", "suzy", "sess-default");
+      // File should now exist under storageRoot.
+      expect(existsSync(join(storageRoot, "alpha.json"))).toBe(true);
     } finally {
       await plugin.stop();
     }

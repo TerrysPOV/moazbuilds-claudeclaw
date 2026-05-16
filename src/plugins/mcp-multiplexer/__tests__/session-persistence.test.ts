@@ -438,4 +438,49 @@ describe("SessionPersistenceStore", () => {
     expect(await store.loadAll("graphiti")).toHaveLength(0);
     expect(await store.loadAll("mempress")).toHaveLength(1);
   });
+
+  // Codex PR #78 P2 regression — a rejected mutation in the write queue
+  // must NOT brick subsequent mutations for that server. Pre-fix, a
+  // transient filesystem error would poison the chain and every
+  // subsequent record/drop/touch for that server would reject without
+  // running its mutator.
+  it("write queue self-heals after a rejected mutation", async () => {
+    await store.record("graphiti", "suzy", "sess-A");
+    expect(await store.loadAll("graphiti")).toHaveLength(1);
+
+    // Force a single mutation to fail by patching the atomic-write path
+    // to throw once. We can't easily monkey-patch a private method, so
+    // simulate via a synthetic mutator that throws — same shape since
+    // the `_mutate` wrapper handles both the I/O reject AND a mutator
+    // reject the same way.
+    const originalRecord = store.record.bind(store);
+    let injected = false;
+    // @ts-expect-error — test-only monkey-patch
+    store.record = async (server: string, pty: string, sid: string) => {
+      if (!injected && server === "graphiti") {
+        injected = true;
+        // Manually push a rejecting mutation through the queue.
+        const fakeRejection = Promise.reject(new Error("simulated FS error"));
+        // @ts-expect-error — test-only access to private field
+        const prev = store.writeQueue.get("graphiti") ?? Promise.resolve();
+        // @ts-expect-error — test-only access to private field
+        store.writeQueue.set("graphiti", prev.then(() => fakeRejection));
+        try {
+          // @ts-expect-error — await the rejection so subsequent calls
+          // see a poisoned chain (without the fix).
+          await store.writeQueue.get("graphiti");
+        } catch {}
+      }
+      return originalRecord(server, pty, sid);
+    };
+
+    // First call: triggers the injected rejection. With the P2 fix, the
+    // subsequent record() still succeeds.
+    await store.record("graphiti", "reg", "sess-B");
+
+    // Verify the second record's mutation actually landed on disk.
+    const entries = await store.loadAll("graphiti");
+    expect(entries.length).toBeGreaterThanOrEqual(1);
+    expect(entries.some((e) => e.ptyId === "reg" && e.sessionId === "sess-B")).toBe(true);
+  });
 });

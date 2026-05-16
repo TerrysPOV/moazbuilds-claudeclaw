@@ -280,16 +280,26 @@ export class McpMultiplexerPlugin {
     }
 
     // Construct the persistence layer BEFORE the spawn loop so handlers
-    // get the store reference at construction time. The factory comes
-    // from W1 (`session-persistence.ts`); until that lands, production
-    // wiring leaves `persistenceFactory` undefined and the store stays
-    // null. Operator-disabled (`sessionPersistenceEnabled: false`) also
-    // skips construction — that's the kill-switch escape hatch.
-    if (settings.sessionPersistenceEnabled && this.persistenceFactory) {
+    // get the store reference at construction time. Production wiring
+    // typically calls `getMcpMultiplexerPlugin()` with no options, so
+    // `persistenceFactory` is undefined — in that case we default to the
+    // real `SessionPersistenceStore`. Tests pass a factory (e.g.
+    // FakeStore) to override. Operator-disabled
+    // (`sessionPersistenceEnabled: false`) skips construction entirely
+    // — that's the kill-switch escape hatch.
+    //
+    // Codex PR #78 P1: previously gated on `&& this.persistenceFactory`,
+    // which meant production never activated the layer. Fixed by
+    // defaulting to the real store when the factory is absent.
+    if (settings.sessionPersistenceEnabled) {
       const storageRoot =
         settings.sessionPersistencePath || join(homedir(), ".config", "claudeclaw", "mcp-sessions");
+      const factory =
+        this.persistenceFactory ??
+        ((opts: { storageRoot: string; maxAgeMs: number }) =>
+          new SessionPersistenceStore(opts));
       try {
-        this.persistence = this.persistenceFactory({
+        this.persistence = factory({
           storageRoot,
           maxAgeMs: settings.sessionMaxAgeSeconds * 1000,
         });

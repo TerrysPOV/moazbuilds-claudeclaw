@@ -480,8 +480,14 @@ export class SessionPersistenceStore {
     serverName: string,
     mutator: (current: PersistedFile) => PersistedFile,
   ): Promise<void> {
+    // Codex PR #78 P2: chain `prev.catch(() => undefined).then(...)` so a
+    // previously-rejected write doesn't permanently poison the chain. The
+    // current caller still sees their own write's success/failure via
+    // `await next` below; future callers continue to make progress.
+    // Without this, one transient filesystem error bricks persistence for
+    // this server until daemon restart.
     const prev = this.writeQueue.get(serverName) ?? Promise.resolve();
-    const next = prev.then(async () => {
+    const next = prev.catch(() => undefined).then(async () => {
       const current = (await this._readFile(serverName)) ?? {
         version: CURRENT_VERSION,
         serverName,
@@ -498,8 +504,8 @@ export class SessionPersistenceStore {
       await this._atomicWrite(this._filePath(serverName), JSON.stringify(normalised));
     });
     // Store the next-link so concurrent callers chain onto it; await it so the
-    // current caller sees any error. Resolved promises stay in the map — they
-    // act as a "last completed write" anchor for the next mutation chain.
+    // current caller sees any error from THEIR mutation (the .catch above
+    // swallows the predecessor's error so it can't leak into ours).
     this.writeQueue.set(serverName, next);
     await next;
   }
