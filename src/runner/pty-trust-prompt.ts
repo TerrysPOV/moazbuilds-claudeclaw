@@ -56,6 +56,24 @@ function defaultProjectEntry(): Record<string, unknown> {
  * Idempotent: if the flag is already true, returns `{ ok: true, changed:
  * false }`.
  */
+/**
+ * Per-config-path serialisation queue. Multiple `ensureTrustAccepted`
+ * calls for different cwds against the SAME `~/.claude.json` would race
+ * the read-modify-write pattern below — concurrent PTY spawns for
+ * different session keys can run in parallel, and last-writer-wins
+ * silently drops one cwd's trust flag, re-triggering the interactive
+ * trust prompt stall the self-heal exists to prevent. Codex PR #82 P1.
+ *
+ * Queue is keyed on the absolute config path so tests with separate
+ * tmpdirs don't serialise against each other, and production callers
+ * all collapse to one chain against the operator's real `~/.claude.json`.
+ *
+ * The queue chains via `.catch(() => undefined).then(...)` so a single
+ * failed write doesn't poison the chain — same defensive pattern used
+ * in `SessionPersistenceStore._mutate`.
+ */
+const _writeQueues = new Map<string, Promise<TrustHealResult | void>>();
+
 export async function ensureTrustAccepted(
   cwd: string,
   opts?: {
@@ -69,6 +87,18 @@ export async function ensureTrustAccepted(
   const configPath = opts?.configPath ?? resolvePath(home, ".claude.json");
   const absoluteCwd = resolvePath(cwd);
 
+  const prev = _writeQueues.get(configPath) ?? Promise.resolve();
+  const next = prev
+    .catch(() => undefined)
+    .then(() => _doEnsureTrustAccepted(configPath, absoluteCwd));
+  _writeQueues.set(configPath, next);
+  return next;
+}
+
+async function _doEnsureTrustAccepted(
+  configPath: string,
+  absoluteCwd: string,
+): Promise<TrustHealResult> {
   try {
     let raw: Record<string, unknown> = {};
     if (existsSync(configPath)) {

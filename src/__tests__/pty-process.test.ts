@@ -181,6 +181,40 @@ describe("PtyProcess — runTurn sentinel max-wait fallback", () => {
     expect(result.cleanBoundary).toBe(false);
     await proc.dispose();
   });
+
+  // Codex PR #82 P1 regression — when the sentinel max-wait expires, the
+  // fallback must use the ABSOLUTE end-of-stream offset, not the relative
+  // buffer length. Pre-fix, `_completeTurn` was passed `_turnBufLen`
+  // (relative); paired with the slice math that subtracts
+  // `parser.totalBytes - allBytes.length`, any pre-turn bytes (like
+  // claude's startup banner) would push `responseEndOffset` below
+  // `sliceStart` and the response would clamp to empty. Production
+  // symptom: `(empty response)` on every sentinel-echo failure.
+  test("sentinel-timeout fallback returns captured bytes even after pre-turn banner", async () => {
+    // BANNER emits BEFORE we send our prompt — advances parser.totalBytes
+    // without contributing to the turn buffer (turn hasn't started). Then
+    // stty -echo disables kernel cooked-mode echo (so our prompt + sentinel
+    // writes don't trivially come back). `printf 'response-bytes'` emits
+    // bytes that the parser accumulates AFTER the turn starts. Then sleep
+    // burns time until sentinelMaxWaitMs fires.
+    const proc = await spawnPty(
+      baseOpts({
+        _commandOverride: "/bin/sh",
+        _argsOverride: [
+          "-c",
+          "echo BANNER_BANNER_BANNER_PRETURN; stty -echo; printf 'response-bytes-during-turn'; sleep 5",
+        ],
+        quietWindowMs: 100,
+        sentinelMaxWaitMs: 400,
+      }),
+    );
+    const result = await proc.runTurn("trigger", { timeoutMs: 5000 });
+    expect(result.cleanBoundary).toBe(false);
+    // Without the absolute-offset fix, result.text would be empty (slice
+    // clamped to zero). With the fix, the captured bytes survive.
+    expect(result.text).toContain("response-bytes-during-turn");
+    await proc.dispose();
+  });
 });
 
 // ─── runTurn: hard timeout (timeoutMs) ──────────────────────────────────────

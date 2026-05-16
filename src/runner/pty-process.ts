@@ -522,7 +522,16 @@ class PtyProcessImpl implements PtyProcess {
     this._sentinelDeadlineHandle = this._setTimeout(() => {
       if (this._turnInProgress) {
         // Sentinel never came back — emit whatever we've got.
-        this._completeTurn(false, this._turnBufLen);
+        // Codex PR #82 P1: `_completeTurn` treats `responseEndOffset` as an
+        // ABSOLUTE stream offset (matching the units used by
+        // sentinel-found events on the parser). Passing `_turnBufLen` here
+        // (which is the LENGTH of the accumulated turn buffer, not an
+        // absolute offset) made the slice arithmetic clamp `sliceEnd` to
+        // `sliceStart` whenever any pre-turn bytes existed in
+        // `parser.totalBytes` (e.g. claude's startup banner), producing
+        // an empty fallback response. The current end of the stream IS
+        // `this._parser.totalBytes` — that's the absolute offset we want.
+        this._completeTurn(false, this._parser.totalBytes);
       }
     }, this._sentinelMaxWaitMs);
   }

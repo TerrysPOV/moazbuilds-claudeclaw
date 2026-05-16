@@ -159,4 +159,42 @@ describe("ensureTrustAccepted", () => {
     expect(raw.someOtherTopLevel.keep).toBe("me");
     expect(raw.projects["/home/test/project"]?.hasTrustDialogAccepted).toBe(true);
   });
+
+  // Codex PR #82 P1 regression — concurrent ensureTrustAccepted calls for
+  // different cwds against the same ~/.claude.json must NOT race the
+  // read-modify-write. Pre-fix, last-writer-wins silently dropped one
+  // cwd's trust flag. Production trigger: multiple PTY spawns for
+  // different session keys run in parallel and all hit the same config
+  // path.
+  test("serialises concurrent writes for different cwds — no lost updates", async () => {
+    writeFileSync(configPath, JSON.stringify({ userId: "concurrent-test", projects: {} }, null, 2));
+
+    const cwds = [
+      "/home/test/project-a",
+      "/home/test/project-b",
+      "/home/test/project-c",
+      "/home/test/project-d",
+      "/home/test/project-e",
+    ];
+
+    // Fire all five concurrently. Without the mutex, at least one of the
+    // five updates would be lost (last-writer-wins on the read-modify-write).
+    const results = await Promise.all(
+      cwds.map((cwd) => ensureTrustAccepted(cwd, { homedir: () => tmpHome })),
+    );
+
+    // Every call should succeed.
+    for (const r of results) expect(r.ok).toBe(true);
+
+    // Final file MUST contain all five cwds with the flag set, plus the
+    // seeded top-level field preserved.
+    const raw = JSON.parse(readFileSync(configPath, "utf-8")) as {
+      userId: string;
+      projects: Record<string, { hasTrustDialogAccepted: boolean }>;
+    };
+    expect(raw.userId).toBe("concurrent-test");
+    for (const cwd of cwds) {
+      expect(raw.projects[cwd]?.hasTrustDialogAccepted).toBe(true);
+    }
+  });
 });
