@@ -112,4 +112,53 @@ describe("sessions agent-scoped", () => {
     expect(existsSync(sessionPath)).toBe(false);
     expect(existsSync(join(AGENTS_DIR, name, backupName!))).toBe(true);
   });
+
+  // Production hotfix 2026-05-16 — heartbeat-path writer left
+  // `{ sessionId: null, ... }` in the global session.json, and the next
+  // Discord message crashed with `null is not an object (evaluating
+  // 'existing.sessionId.slice')`. The loader now normalises null/missing
+  // sessionId to "no session" so the runner falls through to the fresh-
+  // session path instead of crashing.
+  it("getSession returns null for a record with sessionId: null", async () => {
+    const name = uniq("null-sid");
+    const dir = join(AGENTS_DIR, name);
+    await mkdir(dir, { recursive: true });
+    const sessionPath = join(dir, "session.json");
+    await Bun.write(
+      sessionPath,
+      JSON.stringify(
+        {
+          sessionId: null,
+          createdAt: null,
+          lastUsedAt: "2026-05-16T07:57:38.250Z",
+          turnCount: 0,
+          compactWarned: false,
+        },
+        null,
+        2,
+      ),
+    );
+    expect(await getSession(name)).toBeNull();
+  });
+
+  it("getSession returns null for a record missing sessionId entirely", async () => {
+    const name = uniq("no-sid");
+    const dir = join(AGENTS_DIR, name);
+    await mkdir(dir, { recursive: true });
+    const sessionPath = join(dir, "session.json");
+    await Bun.write(
+      sessionPath,
+      JSON.stringify({ createdAt: "2026-05-16T07:00:00.000Z", turnCount: 0 }, null, 2),
+    );
+    expect(await getSession(name)).toBeNull();
+  });
+
+  it("getSession returns null for a record with empty-string sessionId", async () => {
+    const name = uniq("empty-sid");
+    const dir = join(AGENTS_DIR, name);
+    await mkdir(dir, { recursive: true });
+    const sessionPath = join(dir, "session.json");
+    await Bun.write(sessionPath, JSON.stringify({ sessionId: "", turnCount: 0 }, null, 2));
+    expect(await getSession(name)).toBeNull();
+  });
 });

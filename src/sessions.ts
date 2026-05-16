@@ -29,18 +29,40 @@ function sessionPathFor(agentName?: string): string {
   return SESSION_FILE;
 }
 
+/** Validate that a loaded session record has a usable `sessionId`. A
+ *  truthy record with `sessionId: null` (or missing / non-string) is
+ *  treated as no session — callers like `runner.ts` derive
+ *  `isNew = !existing` and then unconditionally dereference
+ *  `existing.sessionId.slice(...)`, so a partially-written record on
+ *  disk would crash the daemon at first use. Seen in production
+ *  2026-05-16: a heartbeat-path writer left
+ *  `{ sessionId: null, createdAt: null, lastUsedAt: "...", turnCount: 0, ... }`
+ *  in the global session.json, and the next Discord message crashed
+ *  with "null is not an object (evaluating 'existing.sessionId.slice')".
+ *  Until the writer is hardened (separate issue), the loader normalises
+ *  any null/missing sessionId to "no session" so callers fall through
+ *  to the fresh-session path instead of crashing. */
+function _isUsableSession(record: unknown): record is GlobalSession {
+  if (!record || typeof record !== "object") return false;
+  const sid = (record as { sessionId?: unknown }).sessionId;
+  return typeof sid === "string" && sid.length > 0;
+}
+
 async function loadSession(agentName?: string): Promise<GlobalSession | null> {
   // Agent sessions bypass the module-level cache (cache is global-only).
   if (agentName) {
     try {
-      return await Bun.file(sessionPathFor(agentName)).json();
+      const raw = await Bun.file(sessionPathFor(agentName)).json();
+      return _isUsableSession(raw) ? raw : null;
     } catch {
       return null;
     }
   }
   if (current) return current;
   try {
-    current = await Bun.file(SESSION_FILE).json();
+    const raw = await Bun.file(SESSION_FILE).json();
+    if (!_isUsableSession(raw)) return null;
+    current = raw;
     return current;
   } catch {
     return null;
@@ -144,7 +166,8 @@ async function loadFallbackSession(
   threadId?: string,
 ): Promise<GlobalSession | null> {
   try {
-    return await Bun.file(fallbackSessionPathFor(agentName, threadId)).json();
+    const raw = await Bun.file(fallbackSessionPathFor(agentName, threadId)).json();
+    return _isUsableSession(raw) ? raw : null;
   } catch {
     return null;
   }
