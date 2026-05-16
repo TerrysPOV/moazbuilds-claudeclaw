@@ -40,12 +40,7 @@ import {
   _resetIdentityStore,
   type PtyIdentity,
 } from "./pty-identity.js";
-// TODO(coord): replace with real import after W1 merges
-// `session-persistence.ts`. Until then, the stub re-exports the same
-// interface shape (only types — no runtime). The real class will be
-// constructed via the same `new SessionPersistenceStore({ storageRoot,
-// maxAgeMs })` shape.
-import type { SessionPersistenceStore } from "./session-persistence-stub.js";
+import { SessionPersistenceStore } from "./session-persistence.js";
 
 /** Same plugin id used for audit + bridge-callback registration.
  *  Must satisfy `PluginMcpBridge._validatePluginId` (lowercase kebab). */
@@ -170,9 +165,8 @@ export interface McpMultiplexerPluginOpts {
    *  constructs a `SessionPersistenceStore` rooted at the configured
    *  path. Tests pass an in-memory or tmpdir-rooted fake.
    *
-   *  TODO(coord): the real `SessionPersistenceStore` constructor comes
-   *  from W1; until that merges, production wiring leaves this
-   *  undefined and persistence stays inert (no store constructed). */
+   *  When undefined, production wiring constructs a real
+   *  `SessionPersistenceStore` rooted at `settings.mcp.sessionPersistencePath`. */
   persistenceFactory?: (opts: {
     storageRoot: string;
     maxAgeMs: number;

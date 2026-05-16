@@ -26,10 +26,7 @@ import { randomUUID } from "node:crypto";
 import { getMcpBridge } from "../mcp-bridge.js";
 import type { McpServerProcess } from "../mcp-proxy/server-process.js";
 import { AUTH_HEADER, PTY_ID_HEADER, verifyBearer } from "./pty-identity.js";
-// TODO(coord): replace with real import after W1 merges
-// `session-persistence.ts`. The interface is published verbatim below; W1's
-// concrete class will satisfy it (record/drop/touch/loadAll/garbageCollect).
-import type { SessionPersistenceStore } from "./session-persistence-stub.js";
+import type { SessionPersistenceStore } from "./session-persistence.js";
 
 /** Sentinel used when a server is declared stateless: all PTYs collapse
  *  to a single (server, *) bucket so they share one upstream session.
