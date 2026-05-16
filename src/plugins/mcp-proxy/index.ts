@@ -13,13 +13,13 @@ const MAX_RESULT_BYTES = Number(process.env.MCP_PROXY_MAX_RESULT_BYTES ?? 1_048_
 const ServerConfigSchema = z.object({
   command: z.string(),
   args: z.array(z.string()).optional(),
-  env: z.record(z.string()).optional(),
+  env: z.record(z.string(), z.string()).optional(),
   enabled: z.boolean().default(true),
   allowedTools: z.array(z.string()).optional(),
 });
 
 const ProxyConfigSchema = z.object({
-  servers: z.record(ServerConfigSchema),
+  servers: z.record(z.string(), ServerConfigSchema),
 });
 
 type ProxyConfig = z.infer<typeof ProxyConfigSchema>;
@@ -122,7 +122,7 @@ export class McpProxyPlugin {
                 name: fqn,
                 description: tool.description,
                 schema: z.object({
-                  arguments: z.record(z.unknown()).optional().default({}),
+                  arguments: z.record(z.string(), z.unknown()).optional().default({}),
                   mode: z.enum(["direct", "reasoned"]).optional().default("direct"),
                 }),
                 handler: async (input) => {

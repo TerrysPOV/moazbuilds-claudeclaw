@@ -63,12 +63,12 @@ function _toBridgeToolName(serverName: string, toolName: string): string {
 const ServerConfigSchema = z.object({
   command: z.string(),
   args: z.array(z.string()).optional(),
-  env: z.record(z.string()).optional(),
+  env: z.record(z.string(), z.string()).optional(),
   enabled: z.boolean().default(true),
   allowedTools: z.array(z.string()).optional(),
 });
 const ProxyConfigSchema = z.object({
-  servers: z.record(ServerConfigSchema),
+  servers: z.record(z.string(), ServerConfigSchema),
 });
 
 /** Subset of `Settings` that the multiplexer cares about. Read defensively
@@ -504,7 +504,7 @@ export class McpMultiplexerPlugin {
           name: fqn,
           description: tool.description,
           schema: z.object({
-            arguments: z.record(z.unknown()).optional().default({}),
+            arguments: z.record(z.string(), z.unknown()).optional().default({}),
           }),
           handler: async (input) => {
             const args = input.arguments ?? {};

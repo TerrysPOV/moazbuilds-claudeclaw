@@ -15,7 +15,7 @@ const PluginManifestSchema = z.object({
     z.object({
       name: z.string(),
       description: z.string(),
-      schema: z.record(z.unknown()),
+      schema: z.record(z.string(), z.unknown()),
     }),
   ),
   capabilities: z.array(z.string()).default(["tools"]),
@@ -204,7 +204,7 @@ export class PluginHttpGateway {
         bridge.registerPluginTool(manifest.name, {
           name: toolDef.name,
           description: toolDef.description,
-          schema: z.record(z.unknown()),
+          schema: z.record(z.string(), z.unknown()),
           handler: async (args) => {
             const invokeRequestId = randomBytes(8).toString("hex");
             return this.invokeViaCallback(
