@@ -415,7 +415,7 @@ describe("extractResponseText", () => {
       "● Pong 🏓",
       "",
       "─".repeat(50),
-      "❯ Try \"how do I log an error?\"",
+      '❯ Try "how do I log an error?"',
       "─".repeat(50),
       "⏵⏵ bypass permissions on (shift+tab to cycle)",
       "╭────── 🦞 ClaudeClaw+ 🦞 ──────╮",
@@ -458,7 +458,7 @@ describe("extractResponseText", () => {
   // TUI splash, prompt-echo, and footer into the response shown to the
   // user (Discord/Telegram).
   test("recognises `●` (U+25CF) as the assistant marker (claude 2.1.89)", () => {
-    const text = "garbage\n● Pong 🏓\n────────────\n❯ Try \"...\"";
+    const text = 'garbage\n● Pong 🏓\n────────────\n❯ Try "..."';
     expect(extractResponseText(text)).toBe("Pong 🏓");
   });
 
@@ -478,7 +478,7 @@ describe("extractResponseText", () => {
       "● Pong 🏓",
       "",
       "─".repeat(100),
-      "❯ Try \"how do I log an error?\"",
+      '❯ Try "how do I log an error?"',
       "─".repeat(100),
       "⏵⏵ bypass permissions on (shift+tab to cycle)",
     ].join("\n");
@@ -537,7 +537,7 @@ describe("extractResponseText", () => {
     const footer = [
       "",
       "─".repeat(100),
-      "❯ Try \"write a test for reprocess-clippings.py\"",
+      '❯ Try "write a test for reprocess-clippings.py"',
       "─".repeat(100),
       "⏵⏵ bypass permissions on (shift+tab to cycle) /buddy",
       "╭────── 🦞 ClaudeClaw+ 🦞 ──────╮",
