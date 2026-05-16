@@ -679,6 +679,28 @@ export class McpMultiplexerPlugin {
     this._sampleHealth();
   }
 
+  /**
+   * Test-only seam to pin the baseline of `lastObservedStatus[name]`
+   * before driving `_sampleHealthForTests` (#72 item 8). Prior to this,
+   * tests reached into the private field via `as unknown as {...}` casts
+   * — that breaks every time the private field shape changes and makes
+   * the contract between tests and prod unclear. This method is the
+   * single supported way for tests to seed the health-probe baseline.
+   *
+   * Throws if `name` isn't a known shared server — protects tests from
+   * silently writing to a Map slot that's never read.
+   */
+  _seedHealthStatusForTests(name: string, status: string): void {
+    if (!this.servers.has(name)) {
+      throw new Error(
+        `_seedHealthStatusForTests: '${name}' is not a known shared server (claimed: ${Array.from(
+          this.servers.keys(),
+        ).join(", ")})`,
+      );
+    }
+    this.lastObservedStatus.set(name, status);
+  }
+
   private _sampleHealth(): void {
     for (const [name, proc] of this.servers) {
       const prev = this.lastObservedStatus.get(name);

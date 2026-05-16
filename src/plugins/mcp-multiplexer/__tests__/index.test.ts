@@ -379,17 +379,12 @@ describe("McpMultiplexerPlugin — active path", () => {
 
       // Seed the baseline so the first sample is meaningful even though
       // the probe wasn't started by the plugin (probe disabled in tests).
-      const proc = (
-        plugin as unknown as {
-          servers: Map<string, { status: string }>;
-          lastObservedStatus: Map<string, string>;
-        }
-      ).servers.get("alpha")!;
-      (
-        plugin as unknown as {
-          lastObservedStatus: Map<string, string>;
-        }
-      ).lastObservedStatus.set("alpha", proc.status);
+      // #72 item 8: use the supported `_seedHealthStatusForTests` seam
+      // instead of reaching into private `lastObservedStatus`.
+      const proc = (plugin as unknown as { servers: Map<string, { status: string }> }).servers.get(
+        "alpha",
+      )!;
+      plugin._seedHealthStatusForTests("alpha", proc.status);
 
       // Force a transition: simulate the upstream child crashing.
       const initial = proc.status;
@@ -437,17 +432,11 @@ describe("McpMultiplexerPlugin — active path", () => {
       await plugin.start();
 
       // Seed the baseline so a status flip would otherwise register as a
-      // transition under the health probe.
-      const proc = (
-        plugin as unknown as {
-          servers: Map<string, { status: string }>;
-          lastObservedStatus: Map<string, string>;
-        }
-      ).servers.get("alpha")!;
-      (plugin as unknown as { lastObservedStatus: Map<string, string> }).lastObservedStatus.set(
+      // transition under the health probe. #72 item 8: seam, not grey-box.
+      const proc = (plugin as unknown as { servers: Map<string, { status: string }> }).servers.get(
         "alpha",
-        proc.status,
-      );
+      )!;
+      plugin._seedHealthStatusForTests("alpha", proc.status);
 
       // Simulate the upstream subprocess crashing — what
       // McpServerProcess does when its child closes unexpectedly.
@@ -495,16 +484,10 @@ describe("McpMultiplexerPlugin — active path", () => {
       });
       await plugin.start();
 
-      const proc = (
-        plugin as unknown as {
-          servers: Map<string, { status: string }>;
-          lastObservedStatus: Map<string, string>;
-        }
-      ).servers.get("alpha")!;
-      (plugin as unknown as { lastObservedStatus: Map<string, string> }).lastObservedStatus.set(
+      const proc = (plugin as unknown as { servers: Map<string, { status: string }> }).servers.get(
         "alpha",
-        proc.status,
-      );
+      )!;
+      plugin._seedHealthStatusForTests("alpha", proc.status);
       (proc as { status: string }).status = "failed";
 
       const audited: string[] = [];
@@ -544,17 +527,10 @@ describe("McpMultiplexerPlugin — active path", () => {
       });
       await plugin.start();
 
-      const proc = (
-        plugin as unknown as {
-          servers: Map<string, { status: string }>;
-          lastObservedStatus: Map<string, string>;
-        }
-      ).servers.get("alpha")!;
-      (
-        plugin as unknown as {
-          lastObservedStatus: Map<string, string>;
-        }
-      ).lastObservedStatus.set("alpha", proc.status);
+      const proc = (plugin as unknown as { servers: Map<string, { status: string }> }).servers.get(
+        "alpha",
+      )!;
+      plugin._seedHealthStatusForTests("alpha", proc.status);
 
       const audited: string[] = [];
       const origAudit = getMcpBridge().audit.bind(getMcpBridge());

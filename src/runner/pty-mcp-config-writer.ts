@@ -20,7 +20,8 @@
 import { chmodSync, existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import type { PtyIdentity } from "../plugins/mcp-multiplexer/pty-identity";
+// #72 item 9: ESM `.js` extension consistency with the multiplexer side.
+import type { PtyIdentity } from "../plugins/mcp-multiplexer/pty-identity.js";
 
 // Re-export so callers can import the type from a single neighbour module.
 export type { PtyIdentity };

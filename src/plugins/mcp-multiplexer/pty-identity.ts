@@ -60,6 +60,16 @@ interface InternalIdentity {
   ptyId: string;
   issuedAt: number;
   secret: Buffer;
+  /**
+   * Cached `_toPublic(record)` result (#72 item 14). The headers/bearer
+   * are fully determined by `(ptyId, issuedAt, secret)` — all immutable
+   * for the lifetime of the record — so we build the public projection
+   * once at issuance and reuse it on every `getIdentity()` call. Without
+   * this, every `getIdentity()` rebuilt the headers object + re-hex'd
+   * the secret. Microsecond-scale on the hot path; effectively free
+   * caching since the record itself is the lifetime anchor.
+   */
+  public: PtyIdentity;
 }
 
 // Singleton in-memory store. Module-scope on purpose: only one daemon
@@ -67,17 +77,35 @@ interface InternalIdentity {
 const identities = new Map<string, InternalIdentity>();
 
 /**
- * Validate that a `ptyId` is safe to use as a map key and as a path/header
- * component. The shape is intentionally restrictive — `pty-supervisor`
- * sessionKeys are either named-agent names (`/^[a-z][a-z0-9-]*$/`), thread
- * IDs (alphanumeric), or `"global"` — none of which need separators.
+ * Allowed shape for `ptyId`. Mirrors the supervisor's sessionKey grammar:
+ *   - Named-agent names matching `/^[a-z][a-z0-9-]*$/` (alphanumeric +
+ *     hyphen, lowercase, must start with a letter).
+ *   - Thread IDs (Discord/Telegram-issued numeric/alphanumeric strings).
+ *   - The literal `"global"` for the daemon's default session.
+ *   - The qualified shapes `agent:<name>`, `thread:<id>` prefixed by the
+ *     supervisor in some callsites (hence `:` is allowed).
+ *
+ * Codepoints permitted: ASCII letters + digits + `_`, `.`, `:`, `-`.
+ * Anything else (path separators, whitespace, unicode) is rejected so
+ * the ptyId can be used unescaped as a header value AND as the basename
+ * of `${cwd}/.claudeclaw/mcp-pty-${ptyId}.json` (see
+ * `pty-mcp-config-writer.ts:configPathFor`).
+ *
+ * Length ≤ 128 to bound memory + match what HTTP header parsers tolerate
+ * comfortably. Empty rejected — there's no legitimate empty PTY.
+ *
+ * Filed as #72 item 10. See `src/runner/pty-supervisor.ts` for the
+ * sessionKey grammar that feeds this regex.
  */
+const PTY_ID_REGEX = /^[A-Za-z0-9_.:-]+$/;
+const PTY_ID_MAX_LEN = 128;
+
 function _validatePtyId(ptyId: string): void {
-  if (typeof ptyId !== "string" || ptyId.length === 0 || ptyId.length > 128) {
-    throw new Error(`invalid ptyId: ${JSON.stringify(ptyId)} (must be 1-128 chars)`);
+  if (typeof ptyId !== "string" || ptyId.length === 0 || ptyId.length > PTY_ID_MAX_LEN) {
+    throw new Error(`invalid ptyId: ${JSON.stringify(ptyId)} (must be 1-${PTY_ID_MAX_LEN} chars)`);
   }
-  if (!/^[A-Za-z0-9_.:-]+$/.test(ptyId)) {
-    throw new Error(`invalid ptyId: ${JSON.stringify(ptyId)} (must match /^[A-Za-z0-9_.:-]+$/)`);
+  if (!PTY_ID_REGEX.test(ptyId)) {
+    throw new Error(`invalid ptyId: ${JSON.stringify(ptyId)} (must match ${PTY_ID_REGEX})`);
   }
 }
 
@@ -105,13 +133,17 @@ function _toPublic(record: InternalIdentity): PtyIdentity {
  */
 export function issueIdentity(ptyId: string): PtyIdentity {
   _validatePtyId(ptyId);
-  const record: InternalIdentity = {
-    ptyId,
-    issuedAt: Date.now(),
-    secret: randomBytes(PTY_SECRET_BYTES),
-  };
+  const issuedAt = Date.now();
+  const secret = randomBytes(PTY_SECRET_BYTES);
+  // Build the public projection ONCE and cache on the record (#72 item
+  // 14). The projection is immutable for the record's lifetime — secret,
+  // issuedAt, and ptyId never change after issuance. revokeIdentity()
+  // discards the whole record, so the cache lifetime tracks the record.
+  const partial: Omit<InternalIdentity, "public"> = { ptyId, issuedAt, secret };
+  const publicProjection = _toPublic(partial as InternalIdentity);
+  const record: InternalIdentity = { ...partial, public: publicProjection };
   identities.set(ptyId, record);
-  return _toPublic(record);
+  return record.public;
 }
 
 /**
@@ -120,7 +152,7 @@ export function issueIdentity(ptyId: string): PtyIdentity {
  */
 export function getIdentity(ptyId: string): PtyIdentity | undefined {
   const record = identities.get(ptyId);
-  return record ? _toPublic(record) : undefined;
+  return record?.public;
 }
 
 /**

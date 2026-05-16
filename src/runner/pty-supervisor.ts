@@ -44,19 +44,24 @@
  *     on disk via the Claude Code JSONL; the next event for the same key
  *     re-spawns and `--resume`s.
  */
-import type { PtyProcess, PtyProcessOptions, SpawnPty } from "./pty-process";
-import { PtyClosedError, PtyTurnTimeoutError } from "./pty-process";
-import { ensureTrustAccepted } from "./pty-trust-prompt";
-import { getSettings, type SecurityConfig } from "../config";
-import { getSession, createSession } from "../sessions";
-import { getThreadSession, createThreadSession } from "../sessionManager";
+// #72 item 9: normalise ESM `.js` extensions on every relative import.
+// The mcp-multiplexer/* files use them; pre-cleanup the runner/* files
+// used bare specifiers. Both work under `moduleResolution: bundler`, but
+// mixing forms makes greps lie and risks breakage if we ever flip to
+// `moduleResolution: nodenext` (which requires the extension).
+import type { PtyProcess, PtyProcessOptions, SpawnPty } from "./pty-process.js";
+import { PtyClosedError, PtyTurnTimeoutError } from "./pty-process.js";
+import { ensureTrustAccepted } from "./pty-trust-prompt.js";
+import { getSettings, type SecurityConfig } from "../config.js";
+import { getSession, createSession } from "../sessions.js";
+import { getThreadSession, createThreadSession } from "../sessionManager.js";
 import {
   writeConfigForPty,
   deleteConfigForPty,
   type PtyIdentity,
   type SharedServerEntry,
   type PerPtyServerEntry,
-} from "./pty-mcp-config-writer";
+} from "./pty-mcp-config-writer.js";
 
 // Lazy import for `ensureAgentDir` to avoid the circular-import hazard
 // (runner.ts imports this module to route into the supervisor; importing
