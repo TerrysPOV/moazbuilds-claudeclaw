@@ -174,6 +174,12 @@ const DEFAULT_SETTINGS: Settings = {
     perPtyOnly: [],
     stateless: [],
     healthProbeIntervalMs: 30000,
+    // Always-resume default per SPEC-DELTA-2026-05-16. Persistence layer
+    // is dormant in practice when `shared` is empty (the multiplexer
+    // never starts), so this default is cost-free for non-MCP users.
+    sessionPersistenceEnabled: true,
+    sessionMaxAgeSeconds: 3600,
+    sessionPersistencePath: "",
   },
   watchdog: { maxConsecutiveTimeouts: null, maxRuntimeSeconds: null },
   session: { autoRotate: false, maxMessages: 50, maxAgeHours: 24, summaryPath: "" },
@@ -294,6 +300,37 @@ export interface McpConfig {
    * needs an operator-visible signal before `pty.enabled: true` ships.
    */
   healthProbeIntervalMs: number;
+  /**
+   * Master switch for bridge-side session-map persistence. When true (the
+   * always-resume default per SPEC-DELTA-2026-05-16), the multiplexer
+   * persists (server, ptyId, sessionId) tuples to disk on every mutation
+   * and replays them on `start()`. Flip to false as a kill-switch escape
+   * hatch if the persistence layer itself misbehaves in production; the
+   * multiplexer then reverts to PR #71 behaviour (buckets in memory only,
+   * daemon restart loses stateful sessions).
+   *
+   * Default: true.
+   */
+  sessionPersistenceEnabled: boolean;
+  /**
+   * Maximum age (seconds) of a persisted (server, pty) entry. Entries older
+   * than this on load are dropped with audit
+   * `mcp_session_lost_on_restart reason=ttl_expired`. Should be ≥
+   * `pty.idleReapMinutes * 60` — entries older than the PTY reap window
+   * correspond to PTYs that have been idle-reaped and would be
+   * re-initialised on next message anyway.
+   *
+   * Default: 3600 (1 hour). Clamped to a minimum of 60.
+   */
+  sessionMaxAgeSeconds: number;
+  /**
+   * Directory holding the session store. Empty string (default) means
+   * "compute from homedir at start time" — the multiplexer resolves to
+   * `~/.config/claudeclaw/mcp-sessions/`. Operator-overridable to an
+   * absolute path. Non-absolute paths are ignored with a warning and the
+   * default is used.
+   */
+  sessionPersistencePath: string;
 }
 
 export interface PtyConfig {
@@ -731,11 +768,50 @@ function parseMcpConfig(raw: any, webEnabled: unknown): McpConfig {
       ? Math.floor(rawProbeMs)
       : 30000;
 
+  // Rule 5: sessionPersistenceEnabled — strict boolean. Default true
+  // (SPEC-DELTA-2026-05-16 always-resume). Anything other than an
+  // explicit `false` keeps the default — protects against typos like
+  // `"false"` (string) silently disabling persistence.
+  const sessionPersistenceEnabled = raw?.sessionPersistenceEnabled === false ? false : true;
+
+  // Rule 6: sessionMaxAgeSeconds — positive integer, clamp to 60. Anything
+  // sub-minute is operator error (TTL eviction would fire faster than a
+  // typical tool invocation cycle).
+  const rawMaxAge = raw?.sessionMaxAgeSeconds;
+  let sessionMaxAgeSeconds = 3600;
+  if (typeof rawMaxAge === "number" && Number.isFinite(rawMaxAge) && rawMaxAge > 0) {
+    sessionMaxAgeSeconds = Math.max(60, Math.floor(rawMaxAge));
+    if (Math.floor(rawMaxAge) < 60) {
+      console.warn(
+        `[mcp] sessionMaxAgeSeconds=${Math.floor(rawMaxAge)} is below the 60s minimum; clamping to 60`,
+      );
+    }
+  }
+
+  // Rule 7: sessionPersistencePath — empty default ("compute at start").
+  // If supplied, must be absolute; otherwise warn and revert to empty.
+  let sessionPersistencePath = "";
+  if (typeof raw?.sessionPersistencePath === "string" && raw.sessionPersistencePath.length > 0) {
+    if (
+      raw.sessionPersistencePath.startsWith("/") ||
+      /^[A-Za-z]:[\\/]/.test(raw.sessionPersistencePath)
+    ) {
+      sessionPersistencePath = raw.sessionPersistencePath;
+    } else {
+      console.warn(
+        `[mcp] sessionPersistencePath '${raw.sessionPersistencePath}' is not absolute; ignoring and using default`,
+      );
+    }
+  }
+
   return {
     shared: filteredShared,
     perPtyOnly,
     stateless: filteredStateless,
     healthProbeIntervalMs,
+    sessionPersistenceEnabled,
+    sessionMaxAgeSeconds,
+    sessionPersistencePath,
   };
 }
 

@@ -43,6 +43,13 @@ function makeSettingsView(partial: Partial<MuxSettingsView>): () => MuxSettingsV
     // timer flakiness; the probe is exercised directly via
     // `_sampleHealthForTests` in dedicated tests below.
     healthProbeIntervalMs: 0,
+    // Default to false in tests so the persistence-layer tests can opt
+    // in explicitly. Backward-compat tests then prove that
+    // `sessionPersistenceEnabled: false` keeps the plugin byte-identical
+    // to PR #71.
+    sessionPersistenceEnabled: false,
+    sessionMaxAgeSeconds: 3600,
+    sessionPersistencePath: "",
     ...partial,
   };
   return () => view;
@@ -455,5 +462,269 @@ describe("McpMultiplexerPlugin — active path", () => {
 
       await plugin.stop();
     });
+  });
+});
+
+// ── Session-map persistence (SPEC §4 + SPEC-DELTA-2026-05-16) ─────────────────
+//
+// These tests use an in-memory `FakeStore` that satisfies the structural
+// shape of W1's `SessionPersistenceStore`. The plugin doesn't import the
+// concrete class — it consumes the published interface and we inject the
+// fake via `persistenceFactory`. Once W1 merges, these tests still pass
+// against the real class because the contract is identical.
+
+interface FakeRecord {
+  serverName: string;
+  ptyId: string;
+  sessionId: string;
+  issuedAt: number;
+  lastUsedAt: number;
+}
+
+class FakeStore {
+  records = new Map<string, FakeRecord>(); // key = `${serverName}::${ptyId}`
+  calls: Array<{ op: string; serverName: string; ptyId?: string; sessionId?: string }> = [];
+  gcCalls = 0;
+  maxAgeMs: number;
+  seedRecords: FakeRecord[] = [];
+
+  constructor(opts: { maxAgeMs?: number } = {}) {
+    this.maxAgeMs = opts.maxAgeMs ?? 3_600_000;
+  }
+
+  // Test helper: pre-populate records before start() runs replay.
+  seed(records: FakeRecord[]): void {
+    for (const r of records) {
+      this.seedRecords.push(r);
+      this.records.set(`${r.serverName}::${r.ptyId}`, { ...r });
+    }
+  }
+
+  async record(serverName: string, ptyId: string, sessionId: string): Promise<void> {
+    this.calls.push({ op: "record", serverName, ptyId, sessionId });
+    const now = Date.now();
+    const existing = this.records.get(`${serverName}::${ptyId}`);
+    this.records.set(`${serverName}::${ptyId}`, {
+      serverName,
+      ptyId,
+      sessionId,
+      issuedAt: existing?.issuedAt ?? now,
+      lastUsedAt: now,
+    });
+  }
+
+  async drop(serverName: string, ptyId: string): Promise<void> {
+    this.calls.push({ op: "drop", serverName, ptyId });
+    this.records.delete(`${serverName}::${ptyId}`);
+  }
+
+  async touch(serverName: string, ptyId: string): Promise<void> {
+    this.calls.push({ op: "touch", serverName, ptyId });
+    const r = this.records.get(`${serverName}::${ptyId}`);
+    if (r) r.lastUsedAt = Date.now();
+  }
+
+  async loadAll(serverName: string): Promise<FakeRecord[]> {
+    return [...this.records.values()].filter((r) => r.serverName === serverName);
+  }
+
+  async garbageCollect(): Promise<{ scanned: number; kept: number; dropped: number }> {
+    this.gcCalls += 1;
+    const now = Date.now();
+    let scanned = 0;
+    let dropped = 0;
+    for (const [key, r] of this.records) {
+      scanned += 1;
+      if (now - r.issuedAt > this.maxAgeMs) {
+        this.records.delete(key);
+        dropped += 1;
+      }
+    }
+    return { scanned, kept: this.records.size, dropped };
+  }
+}
+
+describe("McpMultiplexerPlugin — session persistence wiring", () => {
+  it("backward compat: sessionPersistenceEnabled=false skips store construction", async () => {
+    // The factory must NEVER be called when the operator has disabled
+    // persistence (kill-switch). Behaviour is byte-identical to PR #71.
+    const cfgPath = writeProxyConfig(tmpDir, ["alpha"]);
+    let factoryCalls = 0;
+    const plugin = new McpMultiplexerPlugin({
+      configPath: cfgPath,
+      settingsView: makeSettingsView({
+        shared: ["alpha"],
+        sessionPersistenceEnabled: false,
+      }),
+      persistenceFactory: () => {
+        factoryCalls += 1;
+        return new FakeStore() as unknown as ReturnType<NonNullable<unknown>>;
+      },
+      gcTickMs: 0,
+    });
+
+    await plugin.start();
+    try {
+      expect(plugin.isActive()).toBe(true);
+      expect(factoryCalls).toBe(0);
+    } finally {
+      await plugin.stop();
+    }
+  });
+
+  it("replay on start() with empty store: no audit events, no buckets", async () => {
+    const cfgPath = writeProxyConfig(tmpDir, ["alpha"]);
+    const store = new FakeStore();
+    const audited: string[] = [];
+    const origAudit = getMcpBridge().audit.bind(getMcpBridge());
+    getMcpBridge().audit = (event: string, payload: Record<string, unknown>) => {
+      audited.push(event);
+      origAudit(event, payload);
+    };
+
+    const plugin = new McpMultiplexerPlugin({
+      configPath: cfgPath,
+      settingsView: makeSettingsView({
+        shared: ["alpha"],
+        sessionPersistenceEnabled: true,
+      }),
+      persistenceFactory: () => store as unknown as never,
+      gcTickMs: 0,
+    });
+
+    try {
+      await plugin.start();
+      expect(plugin.isActive()).toBe(true);
+      const replayEvents = audited.filter(
+        (e) =>
+          e === "mcp_session_resume_attempted" ||
+          e === "mcp_session_resumed" ||
+          e === "mcp_session_lost_on_restart",
+      );
+      expect(replayEvents).toHaveLength(0);
+    } finally {
+      getMcpBridge().audit = origAudit;
+      await plugin.stop();
+    }
+  });
+
+  it("replay on start() with persisted state installs buckets + emits audit", async () => {
+    const cfgPath = writeProxyConfig(tmpDir, ["alpha"]);
+    const store = new FakeStore();
+    const now = Date.now();
+    store.seed([
+      {
+        serverName: "alpha",
+        ptyId: "suzy",
+        sessionId: "sess-1",
+        issuedAt: now - 1000,
+        lastUsedAt: now - 500,
+      },
+      {
+        serverName: "alpha",
+        ptyId: "bob",
+        sessionId: "sess-2",
+        issuedAt: now - 2000,
+        lastUsedAt: now - 1500,
+      },
+    ]);
+
+    const audited: Array<{ event: string; payload: Record<string, unknown> }> = [];
+    const origAudit = getMcpBridge().audit.bind(getMcpBridge());
+    getMcpBridge().audit = (event: string, payload: Record<string, unknown>) => {
+      audited.push({ event, payload });
+      origAudit(event, payload);
+    };
+
+    const plugin = new McpMultiplexerPlugin({
+      configPath: cfgPath,
+      settingsView: makeSettingsView({
+        shared: ["alpha"],
+        sessionPersistenceEnabled: true,
+      }),
+      persistenceFactory: () => store as unknown as never,
+      gcTickMs: 0,
+    });
+
+    try {
+      await plugin.start();
+      const resumed = audited.filter((a) => a.event === "mcp_session_resumed");
+      expect(resumed).toHaveLength(2);
+      const ptyIds = resumed.map((r) => r.payload.pty_id).sort();
+      expect(ptyIds).toEqual(["bob", "suzy"]);
+
+      const attempted = audited.filter((a) => a.event === "mcp_session_resume_attempted");
+      expect(attempted).toHaveLength(2);
+
+      // Buckets are now installed on the handler.
+      const handler = plugin._getHandler("alpha");
+      const health = handler?.health() as { bucket_keys: string[] };
+      expect(health.bucket_keys.sort()).toEqual(["bob", "suzy"]);
+    } finally {
+      getMcpBridge().audit = origAudit;
+      await plugin.stop();
+    }
+  });
+
+  it("GC tick runs garbageCollect on the store", async () => {
+    const cfgPath = writeProxyConfig(tmpDir, ["alpha"]);
+    const store = new FakeStore({ maxAgeMs: 1 }); // tiny window so seed records are stale
+    store.seed([
+      {
+        serverName: "alpha",
+        ptyId: "old",
+        sessionId: "sess-old",
+        issuedAt: Date.now() - 10_000,
+        lastUsedAt: Date.now() - 10_000,
+      },
+    ]);
+
+    const plugin = new McpMultiplexerPlugin({
+      configPath: cfgPath,
+      settingsView: makeSettingsView({
+        shared: ["alpha"],
+        sessionPersistenceEnabled: true,
+      }),
+      persistenceFactory: () => store as unknown as never,
+      gcTickMs: 0, // disable automatic tick; we drive it via the test seam
+    });
+
+    try {
+      await plugin.start();
+      expect(store.gcCalls).toBe(0);
+      await (plugin as unknown as { _runGCTickForTests: () => Promise<void> })._runGCTickForTests();
+      expect(store.gcCalls).toBe(1);
+      // The stale seed record was evicted by the store.
+      expect(store.records.size).toBe(0);
+    } finally {
+      await plugin.stop();
+    }
+  });
+
+  it("releaseIdentity drops the persisted record", async () => {
+    const cfgPath = writeProxyConfig(tmpDir, ["alpha"]);
+    const store = new FakeStore();
+    const plugin = new McpMultiplexerPlugin({
+      configPath: cfgPath,
+      settingsView: makeSettingsView({
+        shared: ["alpha"],
+        sessionPersistenceEnabled: true,
+      }),
+      persistenceFactory: () => store as unknown as never,
+      gcTickMs: 0,
+    });
+
+    try {
+      await plugin.start();
+      // Seed a record as if a bucket had already been initialised for "suzy".
+      await store.record("alpha", "suzy", "sess-suzy");
+      expect(store.records.has("alpha::suzy")).toBe(true);
+
+      await plugin.releaseIdentity("suzy");
+      expect(store.records.has("alpha::suzy")).toBe(false);
+      expect(store.calls.some((c) => c.op === "drop" && c.ptyId === "suzy")).toBe(true);
+    } finally {
+      await plugin.stop();
+    }
   });
 });
