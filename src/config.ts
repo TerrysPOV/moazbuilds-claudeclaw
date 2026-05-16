@@ -333,6 +333,23 @@ export interface McpConfig {
    * default is used.
    */
   sessionPersistencePath: string;
+  /**
+   * Per-bearer (i.e. per-PTY) rate limit on `/mcp/<server>` requests
+   * (#72 item 1). The `/mcp/<server>` route is bearer-only: a leaked
+   * bearer would otherwise allow full replay of MCP calls against the
+   * shared upstream until the issuing PTY respawns. Defense-in-depth
+   * cap on requests per PTY per sliding window.
+   *
+   * Default: 600 requests per 60s (10/sec sustained — generous for
+   * tool-call traffic, tight enough to limit damage from a leaked
+   * bearer). Set `maxRequestsPerWindow: 0` to disable.
+   */
+  rateLimit: {
+    /** Cap on requests per `windowMs` per `ptyId`. 0 = disabled. */
+    maxRequestsPerWindow: number;
+    /** Sliding-window length in milliseconds. */
+    windowMs: number;
+  };
 }
 
 export interface PtyConfig {
@@ -831,6 +848,23 @@ function parseMcpConfig(raw: any, webEnabled: unknown): McpConfig {
     }
   }
 
+  // Rule 8: per-bearer rate limit (#72 item 1). Sensible defaults; allow
+  // operators to tune via settings.mcp.rateLimit. `maxRequestsPerWindow: 0`
+  // (or any non-positive integer) disables the cap entirely.
+  const DEFAULT_RATE_MAX = 600;
+  const DEFAULT_RATE_WINDOW_MS = 60_000;
+  const rawRateMax = raw?.rateLimit?.maxRequestsPerWindow;
+  const rawRateWin = raw?.rateLimit?.windowMs;
+  let rateMaxRequestsPerWindow = DEFAULT_RATE_MAX;
+  if (typeof rawRateMax === "number" && Number.isFinite(rawRateMax)) {
+    rateMaxRequestsPerWindow = Math.max(0, Math.floor(rawRateMax));
+  }
+  let rateWindowMs = DEFAULT_RATE_WINDOW_MS;
+  if (typeof rawRateWin === "number" && Number.isFinite(rawRateWin) && rawRateWin > 0) {
+    // Floor at 100ms so accidentally tiny windows can't pin the CPU.
+    rateWindowMs = Math.max(100, Math.floor(rawRateWin));
+  }
+
   return {
     shared: filteredShared,
     perPtyOnly,
@@ -839,6 +873,10 @@ function parseMcpConfig(raw: any, webEnabled: unknown): McpConfig {
     sessionPersistenceEnabled,
     sessionMaxAgeSeconds,
     sessionPersistencePath,
+    rateLimit: {
+      maxRequestsPerWindow: rateMaxRequestsPerWindow,
+      windowMs: rateWindowMs,
+    },
   };
 }
 

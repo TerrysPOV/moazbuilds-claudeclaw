@@ -58,6 +58,14 @@ export interface McpHttpHandlerOpts {
    *  (no per-PTY identity to bind to). When undefined, the handler is
    *  byte-identical to PR #71. */
   persistence?: SessionPersistenceStore;
+  /** Optional per-bearer rate limit config (#72 item 1). When omitted or
+   *  `maxRequestsPerWindow <= 0`, no limit is enforced. */
+  rateLimit?: {
+    maxRequestsPerWindow: number;
+    windowMs: number;
+  };
+  /** Injectable clock for tests. Default: `Date.now`. */
+  _now?: () => number;
 }
 
 /** Maximum request body size accepted by the multiplexer. Matches the
@@ -135,6 +143,21 @@ export class McpHttpHandler {
   private readonly buckets = new Map<string, ServerBucket>();
   private readonly persistence: SessionPersistenceStore | undefined;
   private closed = false;
+  /**
+   * Per-bearer (= per-`ptyId`) sliding-window request timestamps. Each
+   * entry is the list of request-receipt epoch-ms values within the
+   * current `windowMs`. `_checkRateLimit` evicts entries older than
+   * `now - windowMs` and rejects when the remaining count would exceed
+   * `maxRequestsPerWindow`. #72 item 1.
+   *
+   * Memory is bounded by `maxRequestsPerWindow * ptyCount` numbers. At
+   * default 600/PTY and 32 PTYs (settings.pty.maxConcurrent default),
+   * that's ~150KB worst case. Acceptable.
+   */
+  private readonly _rlWindows = new Map<string, number[]>();
+  private readonly _rlMax: number;
+  private readonly _rlWindowMs: number;
+  private readonly _now: () => number;
 
   constructor(opts: McpHttpHandlerOpts) {
     this.serverName = opts.serverName;
@@ -144,6 +167,41 @@ export class McpHttpHandler {
     // stateless bucket has no per-PTY identity to bind to. Even if the
     // operator wires a store, we skip it for stateless servers.
     this.persistence = this.stateless ? undefined : opts.persistence;
+    this._rlMax = opts.rateLimit?.maxRequestsPerWindow ?? 0;
+    this._rlWindowMs = opts.rateLimit?.windowMs ?? 60_000;
+    this._now = opts._now ?? (() => Date.now());
+  }
+
+  /**
+   * Sliding-window check for `/mcp/<server>` requests under a given
+   * bearer (`ptyId`). Returns `null` when the request is allowed and
+   * records its timestamp; returns a `Retry-After` value (in seconds,
+   * rounded up, minimum 1) when the request must be rejected.
+   *
+   * When `_rlMax <= 0` the limit is disabled and every request is
+   * allowed without touching the window state. #72 item 1.
+   */
+  _checkRateLimit(ptyId: string): { rejected: false } | { rejected: true; retryAfterSec: number } {
+    if (this._rlMax <= 0) return { rejected: false };
+    const now = this._now();
+    const cutoff = now - this._rlWindowMs;
+    let win = this._rlWindows.get(ptyId);
+    if (!win) {
+      win = [];
+      this._rlWindows.set(ptyId, win);
+    }
+    // Evict timestamps outside the window. Cheap on a sorted list.
+    while (win.length > 0 && win[0]! < cutoff) win.shift();
+    if (win.length >= this._rlMax) {
+      // Retry-After = milliseconds until the oldest in-window request
+      // ages out, rounded up to seconds and floored at 1.
+      const oldest = win[0]!;
+      const waitMs = oldest + this._rlWindowMs - now;
+      const retryAfterSec = Math.max(1, Math.ceil(waitMs / 1000));
+      return { rejected: true, retryAfterSec };
+    }
+    win.push(now);
+    return { rejected: false };
   }
 
   /**
@@ -182,6 +240,36 @@ export class McpHttpHandler {
         });
       } catch {}
       return _errResponse(401, "invalid_bearer", "HMAC verification failed");
+    }
+
+    // ── Per-bearer rate limit (#72 item 1) ────────────────────────────
+    // Defense-in-depth: a leaked bearer is bounded by the rate limit
+    // even before the issuing PTY respawns and rotates the secret.
+    const rl = this._checkRateLimit(ptyId);
+    if (rl.rejected) {
+      try {
+        getMcpBridge().audit("multiplexer_rate_limited", {
+          server: this.serverName,
+          pty_id: ptyId,
+          max_per_window: this._rlMax,
+          window_ms: this._rlWindowMs,
+          retry_after_sec: rl.retryAfterSec,
+        });
+      } catch {}
+      return new Response(
+        JSON.stringify({
+          error: "rate_limited",
+          message: `request limit exceeded for pty ${ptyId} on /mcp/${this.serverName}`,
+          retry_after_seconds: rl.retryAfterSec,
+        }),
+        {
+          status: 429,
+          headers: {
+            "content-type": "application/json",
+            "retry-after": String(rl.retryAfterSec),
+          },
+        },
+      );
     }
 
     // ── Upstream readiness ────────────────────────────────────────────

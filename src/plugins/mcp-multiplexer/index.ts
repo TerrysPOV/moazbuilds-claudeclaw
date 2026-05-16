@@ -342,6 +342,7 @@ export class McpMultiplexerPlugin {
             persistence: settings.stateless.includes(name)
               ? undefined
               : (this.persistence ?? undefined),
+            rateLimit: settings.rateLimit,
           });
           this.handlers.set(name, handler);
 

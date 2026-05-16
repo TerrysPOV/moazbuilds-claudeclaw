@@ -222,3 +222,183 @@ describe("McpHttpHandler — closed state", () => {
     revokeIdentity("suzy");
   });
 });
+
+// ─── Per-bearer rate limit (#72 item 1) ──────────────────────────────────────
+//
+// The /mcp/<server> route is bearer-only — no HMAC + replay window like the
+// /api/plugin/* routes. A leaked bearer could permit unlimited replay against
+// the shared upstream until the issuing PTY respawns. Defense-in-depth: cap
+// requests per (server, ptyId) per sliding window.
+
+describe("McpHttpHandler — per-bearer rate limit (#72 item 1)", () => {
+  let proc: McpServerProcess | null = null;
+  let handler: McpHttpHandler | null = null;
+
+  beforeEach(async () => {
+    _resetIdentityStore();
+    proc = new McpServerProcess("test", makeServerConfig());
+    await proc.start();
+  });
+
+  afterEach(async () => {
+    if (handler) await handler.stop();
+    if (proc) await proc.stop();
+    proc = null;
+    handler = null;
+    _resetIdentityStore();
+  });
+
+  it("disabled by default (no rateLimit opt → no cap)", async () => {
+    handler = new McpHttpHandler({ serverName: "test", proc: proc! });
+    // 50 calls in a tight loop — none should be rate-limited.
+    issueIdentity("suzy");
+    const id = issueIdentity("suzy");
+    for (let i = 0; i < 50; i++) {
+      const resp = await handler.handle(
+        rpcRequest(
+          { jsonrpc: "2.0", id: i, method: "tools/list" },
+          { [PTY_ID_HEADER]: "suzy", [AUTH_HEADER]: id.headers[AUTH_HEADER] },
+        ),
+      );
+      // Pass through to upstream (not 429); status could be 200 or 4xx from
+      // the transport, but MUST NOT be 429.
+      expect(resp.status).not.toBe(429);
+    }
+  });
+
+  it("returns 429 + Retry-After once the per-window cap is exceeded", async () => {
+    // Inject a fixed clock so the window timing is deterministic.
+    let t = 1_000_000;
+    handler = new McpHttpHandler({
+      serverName: "test",
+      proc: proc!,
+      rateLimit: { maxRequestsPerWindow: 3, windowMs: 10_000 },
+      _now: () => t,
+    });
+    const id = issueIdentity("suzy");
+    const send = () =>
+      handler!.handle(
+        rpcRequest(
+          { jsonrpc: "2.0", id: 1, method: "tools/list" },
+          { [PTY_ID_HEADER]: "suzy", [AUTH_HEADER]: id.headers[AUTH_HEADER] },
+        ),
+      );
+
+    // First 3 requests within the window: allowed (not 429).
+    for (let i = 0; i < 3; i++) {
+      const resp = await send();
+      expect(resp.status).not.toBe(429);
+    }
+    // 4th request: rejected with 429 + Retry-After header.
+    const blocked = await send();
+    expect(blocked.status).toBe(429);
+    expect(blocked.headers.get("retry-after")).toBeTruthy();
+    const body = (await blocked.json()) as {
+      error: string;
+      retry_after_seconds: number;
+    };
+    expect(body.error).toBe("rate_limited");
+    expect(body.retry_after_seconds).toBeGreaterThanOrEqual(1);
+    expect(body.retry_after_seconds).toBeLessThanOrEqual(10);
+  });
+
+  it("does not consume upstream when rate-limited", async () => {
+    let t = 1_000_000;
+    handler = new McpHttpHandler({
+      serverName: "test",
+      proc: proc!,
+      rateLimit: { maxRequestsPerWindow: 1, windowMs: 10_000 },
+      _now: () => t,
+    });
+    const id = issueIdentity("suzy");
+    const send = () =>
+      handler!.handle(
+        rpcRequest(
+          { jsonrpc: "2.0", id: 1, method: "tools/list" },
+          { [PTY_ID_HEADER]: "suzy", [AUTH_HEADER]: id.headers[AUTH_HEADER] },
+        ),
+      );
+    await send();
+    const before = proc!.lastInvocationAt;
+    const blocked = await send();
+    expect(blocked.status).toBe(429);
+    // Upstream MUST NOT have been hit by the rejected request.
+    expect(proc!.lastInvocationAt).toBe(before);
+  });
+
+  it("window slides — old requests age out and new ones are allowed", async () => {
+    let t = 1_000_000;
+    handler = new McpHttpHandler({
+      serverName: "test",
+      proc: proc!,
+      rateLimit: { maxRequestsPerWindow: 2, windowMs: 1_000 },
+      _now: () => t,
+    });
+    const id = issueIdentity("suzy");
+    const send = () =>
+      handler!.handle(
+        rpcRequest(
+          { jsonrpc: "2.0", id: 1, method: "tools/list" },
+          { [PTY_ID_HEADER]: "suzy", [AUTH_HEADER]: id.headers[AUTH_HEADER] },
+        ),
+      );
+
+    await send(); // t=1_000_000
+    await send(); // t=1_000_000
+    const blocked = await send(); // exceeds cap
+    expect(blocked.status).toBe(429);
+
+    // Advance past the window.
+    t += 1_500;
+    const allowed = await send();
+    expect(allowed.status).not.toBe(429);
+  });
+
+  it("rate limit is per-ptyId (a leaked bearer for `suzy` doesn't starve `reg`)", async () => {
+    let t = 1_000_000;
+    handler = new McpHttpHandler({
+      serverName: "test",
+      proc: proc!,
+      rateLimit: { maxRequestsPerWindow: 2, windowMs: 10_000 },
+      _now: () => t,
+    });
+    const idSuzy = issueIdentity("suzy");
+    const idReg = issueIdentity("reg");
+    const sendAs = (pty: string, bearer: string) =>
+      handler!.handle(
+        rpcRequest(
+          { jsonrpc: "2.0", id: 1, method: "tools/list" },
+          { [PTY_ID_HEADER]: pty, [AUTH_HEADER]: bearer },
+        ),
+      );
+
+    // Exhaust suzy's window.
+    await sendAs("suzy", idSuzy.headers[AUTH_HEADER]);
+    await sendAs("suzy", idSuzy.headers[AUTH_HEADER]);
+    const suzyBlocked = await sendAs("suzy", idSuzy.headers[AUTH_HEADER]);
+    expect(suzyBlocked.status).toBe(429);
+
+    // reg's window is independent — should still pass.
+    const regAllowed = await sendAs("reg", idReg.headers[AUTH_HEADER]);
+    expect(regAllowed.status).not.toBe(429);
+  });
+
+  it("rate-limit check runs AFTER bearer verification (bad bearer → 401, not 429)", async () => {
+    let t = 1_000_000;
+    handler = new McpHttpHandler({
+      serverName: "test",
+      proc: proc!,
+      rateLimit: { maxRequestsPerWindow: 1, windowMs: 10_000 },
+      _now: () => t,
+    });
+    issueIdentity("suzy");
+    // Bad bearer — should be 401 even though we're below the rate limit.
+    const resp = await handler.handle(
+      rpcRequest(
+        { jsonrpc: "2.0", id: 1, method: "tools/list" },
+        { [PTY_ID_HEADER]: "suzy", [AUTH_HEADER]: `Bearer ${"00".repeat(32)}` },
+      ),
+    );
+    expect(resp.status).toBe(401);
+  });
+});
