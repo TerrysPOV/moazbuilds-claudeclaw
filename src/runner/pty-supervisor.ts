@@ -46,6 +46,7 @@
  */
 import type { PtyProcess, PtyProcessOptions, SpawnPty } from "./pty-process";
 import { PtyClosedError, PtyTurnTimeoutError } from "./pty-process";
+import { ensureTrustAccepted } from "./pty-trust-prompt";
 import { getSettings, type SecurityConfig } from "../config";
 import { getSession, createSession } from "../sessions";
 import { getThreadSession, createThreadSession } from "../sessionManager";
@@ -788,6 +789,8 @@ async function buildSpawnOptions(
     cols: settings.pty.cols,
     rows: settings.pty.rows,
     turnIdleTimeoutMs: settings.pty.turnIdleTimeoutMs,
+    quietWindowMs: settings.pty.quietWindowMs,
+    sentinelMaxWaitMs: settings.pty.sentinelMaxWaitMs,
     ...(mcpConfigPath ? { mcpConfigPath } : {}),
   };
 }
@@ -945,6 +948,24 @@ async function spawnEntry(
     appendSystemPrompt,
   );
   entry.spawnOpts = spawnOpts;
+
+  // Issue #81 self-heal: claude 2.1.89 blocks on an interactive trust prompt
+  // the first time it's invoked in a cwd. We pre-write `hasTrustDialogAccepted
+  // = true` to ~/.claude.json so the prompt is skipped. Best-effort — a
+  // failure here doesn't block spawn; if trust isn't acked, the supervisor's
+  // existing idle-timeout / sentinel-max-wait paths will surface the stall.
+  try {
+    const heal = await ensureTrustAccepted(spawnOpts.cwd);
+    if (!heal.ok && heal.reason) {
+      // Surface to stderr-equivalent for operator visibility. Don't fail the
+      // spawn — the user can still recover by manually accepting the prompt.
+      console.warn(`[pty-supervisor] trust self-heal failed: ${heal.reason}`);
+    }
+  } catch {
+    // Defensive — the function is meant to never throw, but if it does we
+    // proceed anyway.
+  }
+
   try {
     entry.pty = await spawn(spawnOpts);
   } catch (err) {
