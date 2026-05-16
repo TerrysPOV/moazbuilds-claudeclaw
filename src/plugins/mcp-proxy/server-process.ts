@@ -43,6 +43,22 @@ export class McpServerProcess {
   private restartTimer: ReturnType<typeof setTimeout> | null = null;
   // Generation counter: stale onclose/onerror handlers from old transports are discarded
   private generation = 0;
+  /**
+   * Defense-in-depth allowlist used by `call()` to gate tool dispatch
+   * (#72 item 3). The multiplexer layer already enforces this against
+   * the per-server `allowedTools` config, but `proc.call(...)` is
+   * exported and could be reached by future in-process callers that
+   * skip the multiplexer-level gate. The proxy must be hermetic without
+   * trusting upstream behaviour OR upstream callers.
+   *
+   * Populated at the end of `start()` from `this.tools` (which itself
+   * is already filtered against `config.allowedTools`). When
+   * `config.allowedTools` is undefined the set contains every tool the
+   * upstream advertised — `call()` still rejects bare typos and unknown
+   * names but doesn't restrict beyond what the operator allowed at
+   * startup.
+   */
+  private _allowedToolNames = new Set<string>();
 
   constructor(
     name: string,
@@ -128,6 +144,11 @@ export class McpServerProcess {
         description: t.description ?? "",
         inputSchema: (t.inputSchema as Record<string, unknown>) ?? {},
       }));
+    // #72 item 3: rebuild the per-call allowlist from the just-filtered
+    // tools. Restart paths re-enter `start()` so the set always reflects
+    // the upstream's CURRENT tool list intersected with the operator's
+    // configured allowlist.
+    this._allowedToolNames = new Set(this.tools.map((t) => t.name));
 
     this.status = "up";
     this.startedAt = new Date();
@@ -136,6 +157,18 @@ export class McpServerProcess {
   async call(tool: string, args: unknown, timeoutMs = DEFAULT_CALL_TIMEOUT_MS): Promise<unknown> {
     if (!this.client || this.status !== "up") {
       throw new Error(`Server ${this.name} is not ready (status: ${this.status})`);
+    }
+    // #72 item 3: defense-in-depth allowlist check. The multiplexer
+    // layer already gates against `config.allowedTools` before reaching
+    // here, but the proxy must be hermetic without trusting upstream
+    // callers. Reject before invocation so a future caller bypassing
+    // the multiplexer gate can't reach a disallowed tool — and the
+    // upstream child never sees the request.
+    if (!this._allowedToolNames.has(tool)) {
+      throw new Error(
+        `Tool '${tool}' is not in allowedTools for server '${this.name}' ` +
+          `(allowlist size=${this._allowedToolNames.size})`,
+      );
     }
     this.lastInvocationAt = new Date();
 

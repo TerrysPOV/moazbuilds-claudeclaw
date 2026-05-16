@@ -183,6 +183,90 @@ describe("McpServerProcess", () => {
   });
 });
 
+// #72 item 3: defense-in-depth allowlist check inside `McpServerProcess.call`.
+// The multiplexer layer already gates against `config.allowedTools`, but the
+// proxy must be hermetic without trusting upstream callers. A future caller
+// that reaches `proc.call(...)` bypassing the multiplexer gate must NOT be
+// able to invoke a disallowed tool.
+describe("McpServerProcess — allowedTools enforcement at call() (#72 item 3)", () => {
+  it("rejects a tool that's not in allowedTools without touching upstream", async () => {
+    const proc = new McpServerProcess("test", makeServerConfig());
+    try {
+      await proc.start();
+      // `secret_tool` is advertised by the upstream mock but excluded by
+      // `allowedTools: ["echo", "slow_tool"]`.
+      expect(proc.tools.map((t) => t.name)).not.toContain("secret_tool");
+      const before = proc.lastInvocationAt;
+      let err: Error | null = null;
+      try {
+        await proc.call("secret_tool", {});
+      } catch (e) {
+        err = e as Error;
+      }
+      expect(err).not.toBeNull();
+      expect(err!.message).toContain("secret_tool");
+      expect(err!.message).toContain("not in allowedTools");
+      // The proxy never reached the upstream child for the rejected call.
+      expect(proc.lastInvocationAt).toBe(before);
+    } finally {
+      await proc.stop();
+    }
+  });
+
+  it("rejects a tool name that the upstream never advertised", async () => {
+    const proc = new McpServerProcess("test", makeServerConfig());
+    try {
+      await proc.start();
+      const before = proc.lastInvocationAt;
+      let err: Error | null = null;
+      try {
+        await proc.call("totally_made_up_tool", {});
+      } catch (e) {
+        err = e as Error;
+      }
+      expect(err).not.toBeNull();
+      expect(err!.message).toContain("totally_made_up_tool");
+      expect(proc.lastInvocationAt).toBe(before);
+    } finally {
+      await proc.stop();
+    }
+  });
+
+  it("allows tools that ARE in the configured allowlist (no regression)", async () => {
+    const proc = new McpServerProcess("test", makeServerConfig());
+    try {
+      await proc.start();
+      const result = (await proc.call("echo", { message: "ok" })) as { echo: string };
+      expect(result.echo).toBe("ok");
+    } finally {
+      await proc.stop();
+    }
+  });
+
+  it("when allowedTools is undefined, the set is populated from upstream advertisement (still catches typos)", async () => {
+    // No allowedTools → upstream's full tool list is the allowlist.
+    const proc = new McpServerProcess("test", {
+      command: BUN_BIN,
+      args: ["run", MOCK_SERVER],
+    });
+    try {
+      await proc.start();
+      const advertised = proc.tools.map((t) => t.name);
+      expect(advertised.length).toBeGreaterThan(0);
+      // A name not in the advertisement must still be rejected.
+      let err: Error | null = null;
+      try {
+        await proc.call("definitely_not_an_advertised_tool", {});
+      } catch (e) {
+        err = e as Error;
+      }
+      expect(err).not.toBeNull();
+    } finally {
+      await proc.stop();
+    }
+  });
+});
+
 describe("McpServerProcess — startup failure cleanup (zombie prevention)", () => {
   it("closes transport when listTools throws during start()", async () => {
     // Spawn a server that exits immediately so client.connect/listTools will fail
