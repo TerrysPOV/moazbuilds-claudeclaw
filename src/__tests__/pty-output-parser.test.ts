@@ -32,6 +32,52 @@ const FIXTURE_MARKERS = join(FIXTURE_DIR, "sentinel-turn-sample.markers.json");
 // ─── Synthetic flow tests (single + multi turn) ──────────────────────────────
 
 describe("pty-output-parser — sentinel flow (synthetic)", () => {
+  // Issue #87 regression: pre-fix, `quiet` could fire after `startTurn` even
+  // though zero response bytes had arrived. The 500ms quiet window expired
+  // between the prompt write and claude's first ack-echo (~500–800ms on
+  // claude 2.1.89). The supervisor wrote the sentinel prematurely; claude's
+  // TUI echoed the sentinel keystrokes back fast; sentinel-found fired;
+  // runTurn returned with only the TUI splash + prompt-echo bytes as the
+  // "response" — model output never had a chance to arrive.
+  test("issue #87: quiet does NOT fire until at least one byte has arrived since startTurn", () => {
+    const parser = createParser({ quietWindowMs: 100 });
+    const uuid = "uuid-87";
+    const sentinelBytes = encodeSentinel(buildSentinel(uuid));
+
+    let now = 1000;
+    // Pre-turn data exists in the stream (e.g. TUI banner from spawn).
+    feed(parser, new TextEncoder().encode("pre-turn banner bytes"), now);
+    expect(parser.state).toBe("idle");
+
+    startTurn(parser, uuid, sentinelBytes, now);
+    expect(parser.state).toBe("accumulating");
+    expect(parser.sawByteSinceTurnStart).toBe(false);
+
+    // The quiet window elapses with ZERO bytes since startTurn (claude has
+    // received the prompt but hasn't started emitting its response yet).
+    // Pre-fix this would emit `quiet`; post-fix it must not.
+    now += 200;
+    expect(tick(parser, now)).toEqual([]);
+
+    // Even after several elapsed quiet windows, still no `quiet` — we need
+    // an actual response byte before the parser will conclude "claude is
+    // silent because it's done responding".
+    now += 5000;
+    expect(tick(parser, now)).toEqual([]);
+
+    // First response byte arrives. Now the quiet window can be counted.
+    feed(parser, new TextEncoder().encode("a"), now);
+    expect(parser.sawByteSinceTurnStart).toBe(true);
+
+    // Within the quiet window after that byte → still no quiet.
+    expect(tick(parser, now + 50)).toEqual([]);
+
+    // After the quiet window → quiet fires.
+    const qEvs = tick(parser, now + 200);
+    expect(qEvs.length).toBe(1);
+    expect(qEvs[0]!.type).toBe("quiet");
+  });
+
   test("happy path: prompt → response → quiet → sentinel echo → complete", () => {
     const enc = new TextEncoder();
     const parser = createParser({ quietWindowMs: 100 });

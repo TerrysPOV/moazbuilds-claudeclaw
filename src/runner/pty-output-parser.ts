@@ -97,6 +97,14 @@ export interface Parser {
    *  every new byte so the supervisor only writes the sentinel once per
    *  quiet period. */
   quietEmitted: boolean;
+  /** Whether at least one byte has been seen SINCE the current turn started.
+   *  Issue #87: pre-fix, `quiet` could fire 500ms after `startTurn` even
+   *  though claude hadn't emitted a single byte of response yet — the
+   *  initial "silence" was just claude's latency between receiving the
+   *  prompt and starting to echo. We now only emit `quiet` once we've
+   *  observed at least one byte after turn start, so quiet truly means
+   *  "claude was responding and has stopped." */
+  sawByteSinceTurnStart: boolean;
   /** Carry-over from previous chunks needed to detect a sentinel that
    *  straddles a chunk boundary. At most `sentinelBytes.length - 1` bytes. */
   pending: Uint8Array;
@@ -116,6 +124,7 @@ export function createParser(opts?: { quietWindowMs?: number }): Parser {
     lastByteAt: 0,
     quietWindowMs: opts?.quietWindowMs ?? DEFAULT_QUIET_WINDOW_MS,
     quietEmitted: false,
+    sawByteSinceTurnStart: false,
     pending: new Uint8Array(0),
     pendingBaseOffset: 0,
   };
@@ -143,6 +152,7 @@ export function startTurn(
   parser.sentinelOffset = 0;
   parser.lastByteAt = now;
   parser.quietEmitted = false;
+  parser.sawByteSinceTurnStart = false;
   parser.pending = new Uint8Array(0);
   parser.pendingBaseOffset = parser.totalBytes;
   return { type: "turn-start", offset: parser.turnStartOffset };
@@ -164,6 +174,9 @@ export function feed(parser: Parser, chunk: Uint8Array, now: number): ParserEven
   parser.totalBytes += chunk.length;
   parser.lastByteAt = now;
   parser.quietEmitted = false; // any new byte resets the quiet emitter
+  if (parser.state === "accumulating" || parser.state === "awaiting-sentinel") {
+    parser.sawByteSinceTurnStart = true;
+  }
 
   // We only scan for the sentinel after the supervisor has actually written
   // it (state === "awaiting-sentinel"). Until then there's nothing to find,
@@ -216,6 +229,14 @@ export function feed(parser: Parser, chunk: Uint8Array, now: number): ParserEven
 export function tick(parser: Parser, now: number): ParserEvent[] {
   if (parser.state !== "accumulating") return [];
   if (parser.quietEmitted) return [];
+  // Issue #87: don't fire `quiet` until claude has emitted at least one byte
+  // of response. Otherwise the initial silence between prompt write and
+  // claude's first ack-echo (often ~500–800ms on claude 2.1.89) gets
+  // interpreted as "claude is done", the sentinel is written prematurely
+  // into claude's input buffer, claude echoes it back, the parser sees
+  // sentinel-found, and the turn returns with only the TUI splash + prompt
+  // echo as the "response" — model output never had a chance to arrive.
+  if (!parser.sawByteSinceTurnStart) return [];
   if (now - parser.lastByteAt < parser.quietWindowMs) return [];
   parser.quietEmitted = true;
   return [{ type: "quiet", offset: parser.totalBytes }];
