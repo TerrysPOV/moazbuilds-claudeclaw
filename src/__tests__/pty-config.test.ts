@@ -304,6 +304,88 @@ describe("parseSettings — mcp block (MCP multiplexer, SPEC §5)", () => {
       perPtyOnly: [],
       stateless: [],
       healthProbeIntervalMs: 30000,
+      // SPEC-DELTA-2026-05-16 always-resume defaults.
+      sessionPersistenceEnabled: true,
+      sessionMaxAgeSeconds: 3600,
+      sessionPersistencePath: "",
     });
+  });
+});
+
+describe("parseSettings — mcp session persistence (SPEC-DELTA-2026-05-16)", () => {
+  it("defaults sessionPersistenceEnabled to true (always-resume)", async () => {
+    await writeRawSettings({});
+    await reloadSettings();
+    expect(getSettings().mcp.sessionPersistenceEnabled).toBe(true);
+  });
+
+  it("respects an explicit sessionPersistenceEnabled = false (kill-switch)", async () => {
+    await writeRawSettings({ mcp: { sessionPersistenceEnabled: false } });
+    await reloadSettings();
+    expect(getSettings().mcp.sessionPersistenceEnabled).toBe(false);
+  });
+
+  it("ignores non-boolean sessionPersistenceEnabled (defaults to true)", async () => {
+    // Operator typo like `"false"` (string) shouldn't silently disable
+    // persistence — strict boolean check, default to true.
+    await writeRawSettings({ mcp: { sessionPersistenceEnabled: "false" } });
+    await reloadSettings();
+    expect(getSettings().mcp.sessionPersistenceEnabled).toBe(true);
+  });
+
+  it("defaults sessionMaxAgeSeconds to 3600", async () => {
+    await writeRawSettings({});
+    await reloadSettings();
+    expect(getSettings().mcp.sessionMaxAgeSeconds).toBe(3600);
+  });
+
+  it("accepts a custom sessionMaxAgeSeconds", async () => {
+    await writeRawSettings({ mcp: { sessionMaxAgeSeconds: 7200 } });
+    await reloadSettings();
+    expect(getSettings().mcp.sessionMaxAgeSeconds).toBe(7200);
+  });
+
+  it("clamps a sub-60 sessionMaxAgeSeconds to 60", async () => {
+    await writeRawSettings({ mcp: { sessionMaxAgeSeconds: 5 } });
+    await reloadSettings();
+    expect(getSettings().mcp.sessionMaxAgeSeconds).toBe(60);
+  });
+
+  it("falls back to default for negative / zero / non-numeric sessionMaxAgeSeconds", async () => {
+    await writeRawSettings({ mcp: { sessionMaxAgeSeconds: -1 } });
+    await reloadSettings();
+    expect(getSettings().mcp.sessionMaxAgeSeconds).toBe(3600);
+
+    await writeRawSettings({ mcp: { sessionMaxAgeSeconds: 0 } });
+    await reloadSettings();
+    expect(getSettings().mcp.sessionMaxAgeSeconds).toBe(3600);
+
+    await writeRawSettings({ mcp: { sessionMaxAgeSeconds: "9999" } });
+    await reloadSettings();
+    expect(getSettings().mcp.sessionMaxAgeSeconds).toBe(3600);
+  });
+
+  it("defaults sessionPersistencePath to empty (compute at start)", async () => {
+    await writeRawSettings({});
+    await reloadSettings();
+    expect(getSettings().mcp.sessionPersistencePath).toBe("");
+  });
+
+  it("accepts an absolute sessionPersistencePath", async () => {
+    await writeRawSettings({ mcp: { sessionPersistencePath: "/custom/path/sessions" } });
+    await reloadSettings();
+    expect(getSettings().mcp.sessionPersistencePath).toBe("/custom/path/sessions");
+  });
+
+  it("rejects a non-absolute sessionPersistencePath with a warn (reverts to default)", async () => {
+    await writeRawSettings({ mcp: { sessionPersistencePath: "relative/path" } });
+    await reloadSettings();
+    expect(getSettings().mcp.sessionPersistencePath).toBe("");
+  });
+
+  it("ignores non-string sessionPersistencePath", async () => {
+    await writeRawSettings({ mcp: { sessionPersistencePath: 42 } });
+    await reloadSettings();
+    expect(getSettings().mcp.sessionPersistencePath).toBe("");
   });
 });
