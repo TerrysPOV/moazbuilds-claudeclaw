@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { McpServerProcess } from "../plugins/mcp-proxy/server-process.js";
 import { McpProxyPlugin, _resetMcpProxy } from "../plugins/mcp-proxy/index.js";
-import { PluginMcpBridge, _resetMcpBridge } from "../plugins/mcp-bridge.js";
+import { PluginMcpBridge, _resetMcpBridge, _setMcpBridge } from "../plugins/mcp-bridge.js";
 import { _resetHttpGateway } from "../plugins/http-gateway.js";
 
 const MOCK_SERVER = fileURLToPath(new URL("./fixtures/mock-mcp-server.ts", import.meta.url));
@@ -263,6 +263,143 @@ describe("McpServerProcess — allowedTools enforcement at call() (#72 item 3)",
       expect(err).not.toBeNull();
     } finally {
       await proc.stop();
+    }
+  });
+});
+
+// #72 item 4: split crash + permanently-failed audit events so operators
+// don't have to inspect the `status` field of a single conflated event to
+// tell a transient (auto-recovering) crash apart from a terminal failure.
+describe("McpProxyPlugin — crash vs permanently-failed audit event split (#72 item 4)", () => {
+  // Capture every audit event the plugin emits during the test.
+  function captureAudits(events: Array<{ name: string; payload: unknown }>) {
+    _setMcpBridge({
+      // Minimal fake: only `audit` is exercised by `_onServerCrash`. Other
+      // bridge methods aren't called during this test path.
+      audit: (name: string, payload: unknown) => {
+        events.push({ name, payload });
+      },
+      // No-op the rest of the surface so TypeScript is happy and any
+      // accidental call doesn't break the test.
+      registerPluginTool: () => {},
+      unregisterPluginTool: () => {},
+      listTools: () => [],
+      invoke: async () => {
+        throw new Error("not implemented in test bridge");
+      },
+      // biome-ignore lint/suspicious/noExplicitAny: minimal test bridge
+    } as any);
+  }
+
+  type PluginPrivate = {
+    servers: Map<string, McpServerProcess>;
+    _onServerCrash(name: string, reason: string): void;
+  };
+
+  it("emits ONLY mcp_proxy_server_crashed when status is transient (e.g. 'restarting')", async () => {
+    const tokenPath = join(tmpDir, "split-test-1.token");
+    const configPath = join(tmpDir, "split-test-1.json");
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        servers: { "test-server": { ...makeServerConfig(), enabled: true } },
+      }),
+      { mode: 0o600 },
+    );
+    const plugin = new McpProxyPlugin({ configPath, tokenPath });
+    await plugin.start();
+    try {
+      const events: Array<{ name: string; payload: unknown }> = [];
+      captureAudits(events);
+
+      const priv = plugin as unknown as PluginPrivate;
+      const proc = priv.servers.get("test-server");
+      expect(proc).toBeDefined();
+      // Simulate the auto-recovery loop still running.
+      (proc as unknown as { status: string }).status = "restarting";
+      priv._onServerCrash("test-server", "subprocess closed");
+
+      const names = events.map((e) => e.name);
+      expect(names).toContain("mcp_proxy_server_crashed");
+      expect(names).not.toContain("mcp_proxy_server_permanently_failed");
+    } finally {
+      await plugin.stop();
+    }
+  });
+
+  it("emits ONLY mcp_proxy_server_permanently_failed when status is 'failed'", async () => {
+    const tokenPath = join(tmpDir, "split-test-2.token");
+    const configPath = join(tmpDir, "split-test-2.json");
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        servers: { "test-server": { ...makeServerConfig(), enabled: true } },
+      }),
+      { mode: 0o600 },
+    );
+    const plugin = new McpProxyPlugin({ configPath, tokenPath });
+    await plugin.start();
+    try {
+      const events: Array<{ name: string; payload: unknown }> = [];
+      captureAudits(events);
+
+      const priv = plugin as unknown as PluginPrivate;
+      const proc = priv.servers.get("test-server");
+      expect(proc).toBeDefined();
+      // Simulate the supervisor giving up.
+      (proc as unknown as { status: string }).status = "failed";
+      priv._onServerCrash("test-server", "exceeded max crashes in window");
+
+      const names = events.map((e) => e.name);
+      expect(names).toContain("mcp_proxy_server_permanently_failed");
+      // Pre-fix this test would fail: the old code emitted BOTH events
+      // for a permanent failure (the `mcp_proxy_server_crashed` event
+      // was always emitted, then `mcp_proxy_server_permanently_failed`
+      // was emitted in addition when status === "failed"). Operators
+      // had to dedup.
+      expect(names).not.toContain("mcp_proxy_server_crashed");
+    } finally {
+      await plugin.stop();
+    }
+  });
+
+  it("payload preserves {server, reason, status} on both event variants", async () => {
+    const tokenPath = join(tmpDir, "split-test-3.token");
+    const configPath = join(tmpDir, "split-test-3.json");
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        servers: { "test-server": { ...makeServerConfig(), enabled: true } },
+      }),
+      { mode: 0o600 },
+    );
+    const plugin = new McpProxyPlugin({ configPath, tokenPath });
+    await plugin.start();
+    try {
+      const events: Array<{ name: string; payload: unknown }> = [];
+      captureAudits(events);
+
+      const priv = plugin as unknown as PluginPrivate;
+      const proc = priv.servers.get("test-server");
+      expect(proc).toBeDefined();
+      (proc as unknown as { status: string }).status = "crashed";
+      priv._onServerCrash("test-server", "first crash");
+      (proc as unknown as { status: string }).status = "failed";
+      priv._onServerCrash("test-server", "final crash");
+
+      expect(events.length).toBe(2);
+      expect(events[0]!.payload).toEqual({
+        server: "test-server",
+        reason: "first crash",
+        status: "crashed",
+      });
+      expect(events[1]!.payload).toEqual({
+        server: "test-server",
+        reason: "final crash",
+        status: "failed",
+      });
+    } finally {
+      await plugin.stop();
     }
   });
 });

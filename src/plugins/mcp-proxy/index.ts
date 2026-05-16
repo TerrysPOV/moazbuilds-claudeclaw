@@ -217,13 +217,34 @@ export class McpProxyPlugin {
     const proc = this.servers.get(name);
     if (!proc) return;
 
-    getMcpBridge().audit("mcp_proxy_server_crashed", { server: name, reason, status: proc.status });
-    console.error(`[mcp-proxy] Server '${name}' crashed: ${reason} — status: ${proc.status}`);
-
+    // #72 item 4: emit distinct events for transient crashes vs terminal
+    // failures so operators don't have to inspect the `status` field to
+    // differentiate. The two are MUTUALLY EXCLUSIVE per incident:
+    //   - `status === "failed"` → only `mcp_proxy_server_permanently_failed`
+    //   - otherwise              → only `mcp_proxy_server_crashed` (auto-recovery
+    //                              loop is still running)
+    // Both payloads keep the legacy `{server, reason, status}` shape so
+    // downstream dashboards / alert rules can keep filtering on
+    // either name without a payload-shape migration.
     if (proc.status === "failed") {
-      console.error(`[mcp-proxy] Server '${name}' permanently failed after too many crashes`);
-      getMcpBridge().audit("mcp_proxy_server_permanently_failed", { server: name });
+      console.error(`[mcp-proxy] Server '${name}' permanently failed: ${reason}`);
+      try {
+        getMcpBridge().audit("mcp_proxy_server_permanently_failed", {
+          server: name,
+          reason,
+          status: proc.status,
+        });
+      } catch {}
+      return;
     }
+    console.error(`[mcp-proxy] Server '${name}' crashed: ${reason} — status: ${proc.status}`);
+    try {
+      getMcpBridge().audit("mcp_proxy_server_crashed", {
+        server: name,
+        reason,
+        status: proc.status,
+      });
+    } catch {}
   }
 
   private async _invokeReasoned(fqn: string, args: unknown): Promise<unknown> {

@@ -719,16 +719,32 @@ export class McpMultiplexerPlugin {
 
   private _onServerCrash(name: string, reason: string): void {
     const proc = this.servers.get(name);
+    const status = proc?.status ?? "unknown";
+    // #72 item 4: distinct events for transient crashes vs terminal
+    // failures so operators don't have to inspect the `status` field to
+    // differentiate. Mutually exclusive per incident:
+    //   - `status === "failed"` → `multiplexer_server_permanently_failed`
+    //   - otherwise              → `multiplexer_server_crashed` (auto-recovery
+    //                              loop is still running)
+    if (status === "failed") {
+      console.error(`[mcp-multiplexer] server '${name}' permanently failed: ${reason}`);
+      try {
+        getMcpBridge().audit("multiplexer_server_permanently_failed", {
+          server: name,
+          reason,
+          status,
+        });
+      } catch {}
+      return;
+    }
+    console.error(`[mcp-multiplexer] server '${name}' crashed: ${reason} — status: ${status}`);
     try {
       getMcpBridge().audit("multiplexer_server_crashed", {
         server: name,
         reason,
-        status: proc?.status ?? "unknown",
+        status,
       });
     } catch {}
-    console.error(
-      `[mcp-multiplexer] server '${name}' crashed: ${reason} — status: ${proc?.status ?? "unknown"}`,
-    );
   }
 
   private _registerBridgeCallbacks(serverName: string, proc: McpServerProcess): void {
