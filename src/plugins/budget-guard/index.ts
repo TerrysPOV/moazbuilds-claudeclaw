@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { getMcpBridge } from "../mcp-bridge.js";
@@ -124,17 +124,32 @@ export class BudgetGuardPlugin {
 
     const dailyUsed = db.getUsedInWindow(scope, "daily");
     const weeklyUsed = db.getUsedInWindow(scope, "weekly");
+    const monthlyUsed = db.getUsedInWindow(scope, "monthly");
     const dailyCap = scopeRow.daily_cap_usd;
+    const weeklyCap = scopeRow.weekly_cap_usd;
+    const monthlyCap = scopeRow.monthly_cap_usd;
     const remaining = dailyCap - dailyUsed;
-    const exceeded = dailyUsed >= dailyCap;
+
+    // Check daily, weekly, and monthly caps
+    let exceededWindow: "daily" | "weekly" | "monthly" | null = null;
+    if (dailyUsed >= dailyCap) {
+      exceededWindow = "daily";
+    } else if (weeklyCap != null && weeklyUsed >= weeklyCap) {
+      exceededWindow = "weekly";
+    } else if (monthlyCap != null && monthlyUsed >= monthlyCap) {
+      exceededWindow = "monthly";
+    }
 
     this._fireThresholdEvents(scope, dailyUsed, dailyCap);
 
-    if (exceeded) {
+    if (exceededWindow) {
       getMcpBridge().audit("budget_guard_denied", {
         scope,
+        window: exceededWindow,
         daily_used: dailyUsed,
         daily_cap: dailyCap,
+        ...(weeklyCap != null ? { weekly_used: weeklyUsed, weekly_cap: weeklyCap } : {}),
+        ...(monthlyCap != null ? { monthly_used: monthlyUsed, monthly_cap: monthlyCap } : {}),
       });
     } else {
       getMcpBridge().audit("budget_guard_allowed", {
@@ -146,7 +161,7 @@ export class BudgetGuardPlugin {
     }
 
     return {
-      allow: exceeded ? !scopeRow.deny_when_exceeded : true,
+      allow: exceededWindow ? !scopeRow.deny_when_exceeded : true,
       remaining_usd: Math.max(0, remaining),
       daily_used: dailyUsed,
       weekly_used: weeklyUsed,
@@ -157,7 +172,7 @@ export class BudgetGuardPlugin {
   private _fireThresholdEvents(scope: string, used: number, cap: number): void {
     if (cap <= 0) return;
     const fraction = used / cap;
-    const thresholds = this.settings.default_warning_thresholds ?? WARNING_THRESHOLDS_DEFAULT;
+    const thresholds = [...(this.settings.default_warning_thresholds ?? WARNING_THRESHOLDS_DEFAULT)].sort((a, b) => a - b);
 
     if (!this.firedThresholds.has(scope)) {
       this.firedThresholds.set(scope, new Set());
@@ -279,8 +294,7 @@ export class BudgetGuardPlugin {
     });
 
     mkdirSync(join(this.tokenPath, ".."), { recursive: true });
-    writeFileSync(this.tokenPath, this.pluginToken.toString("hex"), { encoding: "utf8" });
-    chmodSync(this.tokenPath, 0o600);
+    writeFileSync(this.tokenPath, this.pluginToken.toString("hex"), { encoding: "utf8", mode: 0o600 });
   }
 
   private _requireDb(): BudgetGuardDb {

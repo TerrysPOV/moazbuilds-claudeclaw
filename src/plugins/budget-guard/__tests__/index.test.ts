@@ -340,6 +340,124 @@ describe("audit events", () => {
   });
 });
 
+// ── weekly/monthly cap enforcement ───────────────────────────────────────────
+
+describe("weekly/monthly cap enforcement", () => {
+  let plugin: BudgetGuardPlugin;
+  const handler = () => (registeredTools.get("check_budget") as { handler: Function }).handler;
+  const record = () => (registeredTools.get("record_usage") as { handler: Function }).handler;
+
+  beforeEach(async () => {
+    auditEvents.length = 0;
+    registeredTools.clear();
+    // daily=100, weekly=20, monthly=50 — weekly cap is tighter than daily to test isolation
+    plugin = new BudgetGuardPlugin({
+      configOverride: {
+        enabled: true,
+        database_path: `/tmp/budget-guard-test-${randomUUID()}.db`,
+        scopes: [
+          { name: "capped", daily_cap_usd: 100.0, weekly_cap_usd: 20.0, monthly_cap_usd: 50.0, deny_when_exceeded: true },
+        ],
+      },
+    });
+    await plugin.start();
+  });
+  afterEach(async () => { await plugin.stop(); _resetBudgetGuard(); });
+
+  it("denies when weekly cap exceeded", async () => {
+    await record()({ scope: "capped", cost_usd: 20.01, model: "m", tokens_in: 1, tokens_out: 1, call_id: randomUUID() });
+    const result = await handler()({ scope: "capped" });
+    expect(result.allow).toBe(false);
+    const denial = auditEvents.find((e) => e.event === "budget_guard_denied");
+    expect(denial).toBeDefined();
+    expect((denial!.payload as Record<string, unknown>).window).toBe("weekly");
+  });
+
+  it("denies when monthly cap exceeded", async () => {
+    // Use a scope where weekly is high but monthly is low
+    await plugin.stop();
+    _resetBudgetGuard();
+    registeredTools.clear();
+    plugin = new BudgetGuardPlugin({
+      configOverride: {
+        enabled: true,
+        database_path: `/tmp/budget-guard-test-${randomUUID()}.db`,
+        scopes: [
+          { name: "monthly-test", daily_cap_usd: 100.0, weekly_cap_usd: 100.0, monthly_cap_usd: 15.0, deny_when_exceeded: true },
+        ],
+      },
+    });
+    await plugin.start();
+    await record()({ scope: "monthly-test", cost_usd: 15.01, model: "m", tokens_in: 1, tokens_out: 1, call_id: randomUUID() });
+    const result = await handler()({ scope: "monthly-test" });
+    expect(result.allow).toBe(false);
+    const denial = auditEvents.find((e) => e.event === "budget_guard_denied");
+    expect(denial).toBeDefined();
+    expect((denial!.payload as Record<string, unknown>).window).toBe("monthly");
+  });
+});
+
+// ── token file mode ──────────────────────────────────────────────────────────
+
+describe("token file permissions", () => {
+  it("token file is created with mode 0600", async () => {
+    const { statSync } = await import("node:fs");
+    const tokenPath = `/tmp/budget-guard-token-test-${randomUUID()}/budget-guard.token`;
+    const plugin = new BudgetGuardPlugin({
+      configOverride: {
+        enabled: true,
+        database_path: `/tmp/budget-guard-test-${randomUUID()}.db`,
+        scopes: [{ name: "default", daily_cap_usd: 10.0, deny_when_exceeded: true }],
+      },
+      tokenPath,
+    });
+    registeredTools.clear();
+    await plugin.start();
+
+    const mode = statSync(tokenPath).mode & 0o777;
+    expect(mode).toBe(0o600);
+
+    await plugin.stop();
+    _resetBudgetGuard();
+  });
+});
+
+// ── threshold sort defensiveness ─────────────────────────────────────────────
+
+describe("threshold sort defensiveness", () => {
+  let plugin: BudgetGuardPlugin;
+
+  beforeEach(async () => {
+    auditEvents.length = 0;
+    registeredTools.clear();
+    plugin = new BudgetGuardPlugin({
+      configOverride: {
+        enabled: true,
+        database_path: `/tmp/budget-guard-test-${randomUUID()}.db`,
+        default_warning_thresholds: [0.95, 0.5, 0.8],
+        scopes: [{ name: "sort-test", daily_cap_usd: 10.0, deny_when_exceeded: true }],
+      },
+    });
+    await plugin.start();
+  });
+  afterEach(async () => { await plugin.stop(); _resetBudgetGuard(); });
+
+  it("unsorted thresholds [0.95, 0.5, 0.8] fire 0.5 first at 60% usage", async () => {
+    const record = (registeredTools.get("record_usage") as { handler: Function }).handler;
+
+    // Record 60% usage — record_usage calls _checkBudget internally which fires thresholds
+    auditEvents.length = 0;
+    await record({ scope: "sort-test", cost_usd: 6.0, model: "m", tokens_in: 1, tokens_out: 1, call_id: randomUUID() });
+
+    const crossings = auditEvents.filter((e) => e.event === "budget_guard_threshold_crossed");
+    const thresholdValues = crossings.map((e) => (e.payload as Record<string, unknown>).threshold);
+    // 0.5 should fire (60% >= 50%)
+    expect(thresholdValues).toContain(0.5);
+    // 0.95 should NOT have fired (60% < 95%)
+    expect(thresholdValues).not.toContain(0.95);
+  });
+});
+
 // ── health ────────────────────────────────────────────────────────────────────
 
 describe("health endpoint", () => {
