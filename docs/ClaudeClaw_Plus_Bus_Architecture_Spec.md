@@ -1,7 +1,7 @@
 # ClaudeClaw+ Bus Architecture — Engineering Spec
 
-**Status:** Draft v2.1 — incorporates community review feedback
-**Author:** Claude (POVIEW.AI engineering assist) — v1: 2 May 2026 — v2: 17 May 2026 — v2.1: 17 May 2026 (Nibbler review)
+**Status:** Draft v2.2 — incorporates Sprint 0 empirical findings
+**Author:** Claude (POVIEW.AI engineering assist) — v1: 2 May 2026 — v2: 17 May 2026 — v2.1: 17 May 2026 (Nibbler review) — v2.2: 17 May 2026 (Sprint 0 spikes complete)
 **Target audience:** Coding agent / engineer implementing the refactor; ClaudeClaw+ maintainers and contributors
 **Supersedes:** PTY stdin/stdout runner (`src/runner.ts` PTY codepath, `src/runner/pty-*.ts` helpers)
 
@@ -13,6 +13,22 @@
 - **Plugin API migration formalised** (§11.7, §12.5 new): translation shim spec, deprecation timeline, plugin-author migration guide as a Sprint 4 deliverable.
 - **Sprint estimate revised** (§10, §13): ~3 weeks full-time / ~8–10 weeks at part-time cadence (was 5 sprints/5 weeks part-time — under-estimated Sprint 3 reality).
 - **Empirical motivation** added (§2): three PTY-parser regressions in two months (issues #81, #84, #105), with #105 explicitly traceable to TUI markdown-code-fence rendering — the structural class the Bus eliminates.
+
+### What changed in v2.2 (Sprint 0 spike findings — see PR #109)
+
+All five Sprint 0 spikes complete. Each produced a finding doc + supporting probe scripts + JSONL/log fixtures. Cross-cutting empirical corrections:
+
+- **§5.3 supervision default flips back to PTY-stdin.** `claude` gates the REPL on `process.stdin.isTTY` and `process.stdout.isTTY` (binary-confirmed via `strings` on 2.1.143). Plain `Bun.spawn({stdin:'pipe'})` auto-downshifts to `--print` mode in ~3 s with exit code 1 and discards the slash command. `bun-pty` works as expected. The default supervision uses `bun-pty` for stdin TTY emulation; `stdout: 'ignore'` ensures we never look at TUI bytes — reads still come from JSONL. The Bus's "no TUI byte parsing" claim survives intact; the PTY layer here is *control input only*.
+- **§5.2 lifecycle markers don't exist as named JSONL types.** Empirically: `/compact` → `{type:'system', subtype:'compact_boundary', compactMetadata:{trigger, preTokens, postTokens, durationMs}}`. `/clear` is **rotation** (new session UUID, new JSONL, old file frozen with no marker) — detect via `fs.watch('add')` on project dir. `/quit` → `<command-name>/exit</command-name>` envelope + farewell. Drop `session.init`/`session.end`/`session.compact` line types; use the fallback inference logic per Spike 0.5.
+- **§5.2 system is a container; subtype is the discriminator.** 9 subtypes captured: `compact_boundary`, `turn_duration`, `stop_hook_summary`, `away_summary`, `informational`, `local_command`, `scheduled_task_fire`, `bridge_status`, `api_error`. Tailer dispatches on `system.<subtype>`, not `system` alone.
+- **§5.1 permission flow shape corrected** (Spike 0.1, validated against aerolalit's reference plugin). Outbound payload field is **`behavior`** not `decision`. `reason?` has no evidence — dropped. BOTH `claude/channel` AND `claude/channel/permission` capabilities required. `request_id` charset `[a-km-z]{5}`.
+- **§5.4 IPC path budget off by 4 bytes** (Spike 0.3). Atomic-create's `<path>.tmp` overflows on a 100-byte path. Correct cap: final ≤ 96B. Windows default flips to TCP+token (Bun lacks SDDL API + open panic bug on busy pipes).
+- **§5.2 tool_result extraction reuse.** `src/runner.ts:923-934` already does the inside-`user.message.content[]` extraction correctly — Sprint 2 ports verbatim.
+- **§5.2 macOS `/tmp` symlink gotcha** — Tailer must `realpath` cwd before computing the encoded JSONL path. `/tmp/foo` and `/private/tmp/foo` are the same directory but encode differently.
+- **§5.2 additional types** beyond Nibbler's list: `pr-link`, `agent-name`, `custom-title`, `queue-operation`. `tool_result.content` is **string OR array** (array when result includes images) — tailer needs `typeof === 'string'` guard.
+- **§5.2 `permissionMode` is dual-nature** — a field on `user` lines AND a discrete `permission-mode` event type (latter only on actual changes, only in interactive sessions).
+
+Sprint 0 deliverables live under `docs/spikes/` on PR #109. Finding docs, probes, and fixtures are reviewable independently of this spec PR.
 
 ### What changed in v2.1 (Nibbler review on PR #106)
 
@@ -138,11 +154,13 @@ Key points from the diagram:
 ```js
 capabilities: {
   experimental: {
-    'claude/channel': {},
-    'claude/channel/permission': {}   // optional, for permission prompts
+    'claude/channel': {},               // required — base channel capability
+    'claude/channel/permission': {}     // required for the permission flow
   }
 }
 ```
+
+Both capabilities are mandatory (validated empirically in Spike 0.1 against aerolalit's reference plugin at `~/.claude/plugins/marketplaces/claude-plugins-official/external_plugins/telegram/server.ts:388,394`). Omitting `claude/channel/permission` disables the structured permission flow and forces the operator-approve-via-plan-mode fallback path.
 
 **Initialisation handshake:**
 - The plugin reads a per-invocation env var `CCAW_AGENT_ID` (set by Session Manager when spawning `claude`).
@@ -166,10 +184,14 @@ The Channels permission flow is bidirectional, modelled after the structure aero
 
 | Direction | Notification | Payload (key fields) |
 |---|---|---|
-| Claude → plugin | `notifications/claude/channel/permission_request` | `request_id`, `tool_name`, `description`, `input_preview` |
-| plugin → Claude | `notifications/claude/channel/permission` | `request_id` (same), `decision: 'allow' \| 'deny'`, optional `reason` |
+| Claude → plugin | `notifications/claude/channel/permission_request` | `request_id`, `tool_name`, `description`, `input_preview` (zod-validated at aerolalit `server.ts:420`) |
+| plugin → Claude | `notifications/claude/channel/permission` | `request_id` (same), `behavior: 'allow' \| 'deny'` |
 
-The Bus MCP receives the `permission_request` from Claude, forwards to the Bus core, which routes to whichever surface is currently active for that agent (Discord button, Telegram inline keyboard, Web UI banner). The surface's reply comes back through `bus.ingestPermissionDecision({request_id, decision, reason})`, which the Bus MCP turns into the outbound `permission` notification.
+`request_id` is a 5-character lowercase string from `[a-km-z]` (charset confirmed empirically in Spike 0.1 via the reference plugin's regex at `server.ts:84,733`). Useful as a probe assertion and for test fixtures.
+
+The outbound payload field is **`behavior`**, not `decision`. v2.1 of this spec incorrectly named it `decision` based on the textual description in Nibbler's review; the reference plugin's send-site at `server.ts:774,933` confirms `behavior`. Any earlier reference to a `reason?` field is also dropped — no evidence for it in the reference.
+
+The Bus MCP receives the `permission_request` from Claude, forwards to the Bus core, which routes to whichever surface is currently active for that agent (Discord button, Telegram inline keyboard, Web UI banner). The surface's reply comes back through `bus.ingestPermissionDecision({request_id, behavior})`, which the Bus MCP turns into the outbound `permission` notification.
 
 **Capability contract:** declaring `claude/channel/permission` in the MCP capabilities asserts that the plugin authenticates the replier. Plus's per-adapter allow-list (§7) is what satisfies that contract — only allow-listed users on each surface can submit a permission decision.
 
@@ -179,36 +201,44 @@ The Bus MCP receives the `permission_request` from Claude, forwards to the Bus c
 
 **Inputs:**
 - File path: `~/.claude/projects/<url-encoded-cwd>/<session-id>.jsonl`. Discovered via Session Manager (which knows each agent's cwd and session-id).
+- **The cwd must be `realpath`'d before encoding.** macOS `/tmp` is a symlink to `/private/tmp`; an agent started with `cwd: '/tmp/foo'` will have its JSONL under the encoded `/private/tmp/foo` path. The Tailer must call `fs.realpathSync(cwd)` before computing the encoded directory name. Without this, the Tailer watches the wrong directory and silently never receives events. Empirically discovered in Spike 0.5.
 - One tailer goroutine/worker per agent.
 
 **Implementation:**
 - Use `fs.watchFile` (Node.js) or equivalent + a seek pointer per session. On new bytes: read, split on `\n`, JSON.parse each line, dispatch.
 - On daemon restart: read from byte 0 to repopulate state; emit a `bus.events.replay_done` marker so subscribers can distinguish historical from live.
 
-**JSONL line types to handle** (validated against `claude 2.1.126` traces and aerolalit's reference plugin; `runner.ts:891-909` is a working reference for tool-result extraction):
+**JSONL line types to handle** (validated against `claude 2.1.143` traces in Spike 0.2; `runner.ts:923-934` is the working reference for `tool_result` extraction and ports verbatim into the Tailer):
 
 | JSONL shape | Bus topic | Notes |
 |---|---|---|
-| `{type: 'user', message: {role:'user', content: <string \| Array>}}` | `prompt` | When `content` is a string, this correlates with what Bus MCP pushed in. When it's an Array, it may contain tool-result blocks — see next row. |
-| `{type: 'user', message: {role:'user', content: [{type: 'tool_result', tool_use_id, content, is_error?}, ...]}}` | `tool_result` (per block) | **Important: `tool_result` is NOT a top-level type.** It is a content block inside a `user` message. The tailer must walk `message.content[]` and emit one `tool_result` Bus event per block, carrying the `tool_use_id`. |
-| `{type: 'assistant', message: {role:'assistant', content: [<block>...], usage: {...}}}` | `response.text` \| `response.tool_use` \| `response.thinking` (per block) | Walk `content[]`. Each `{type: 'text', text}` → `response.text`. Each `{type: 'tool_use', id, name, input}` → `response.tool_use`. Each `{type: 'thinking', thinking}` → `response.thinking`. The `usage` block on the same line → also emit `usage` (see below). |
-| `{type: 'attachment', ...}` | `attachment` | **Must not silently drop.** Carries user-uploaded files (images, text, voice) — silently dropping regresses UX. Spike 0.2 captures the exact payload shape. |
-| `{type: 'permission-mode', mode}` | `session.permission_mode_change` | Operator changed permission mode via slash command. |
-| `{type: 'file-history-snapshot', ...}` | `session.file_snapshot` | Filesystem snapshot for restore semantics. Tailer emits but most subscribers ignore. |
+| `{type: 'user', message: {role:'user', content: <string \| Array>}}` | `prompt` | When `content` is a string, this correlates with what Bus MCP pushed in. When it's an Array, walk for tool-result blocks — see next row. |
+| `{type: 'user', message: {role:'user', content: [{type: 'tool_result', tool_use_id, content, is_error?}, ...]}}` | `tool_result` (per block) | **Important: `tool_result` is NOT a top-level type.** It is a content block inside a `user` message. The tailer walks `message.content[]` and emits one `tool_result` Bus event per block, carrying the `tool_use_id`. **`content` is string OR array** (array when result includes images); tailer needs `typeof === 'string'` guard before any string ops. |
+| `{type: 'assistant', message: {role:'assistant', content: [<block>...], usage: {...}}}` | `response.text` \| `response.tool_use` \| `response.thinking` (per block) | Walk `content[]`. `{type:'text', text}` → `response.text`. `{type:'tool_use', id, name, input}` → `response.tool_use`. `{type:'thinking', thinking}` → `response.thinking`. The `usage` block on the same line → also emit `usage`. Assistant lines may also carry `error`/`isApiErrorMessage`/`apiErrorStatus` fields on degraded turns. |
+| `{type: 'attachment', subtype: <22-variant union>, ...}` | `attachment.<subtype>` | **Must not silently drop.** 22 distinct subtypes observed in Spike 0.2. Bus-critical ones: `hook_success`/`hook_cancelled`/`hook_blocking_error`, `edited_text_file`, `command_permissions`, `plan_mode`/`plan_mode_exit`, `task_reminder`. Sprint 1 builds the per-subtype topic mapping. |
+| `{type: 'permission-mode', mode}` | `session.permission_mode_change` | Fires only on actual changes, only in interactive sessions (headless never emits). Note: `permissionMode` *also* appears as a field on `user` lines — same data in two places. |
+| `{type: 'file-history-snapshot', ...}` | `session.file_snapshot` | Filesystem snapshot for restore semantics. |
 | `{type: 'ai-title', title}` | `session.title` | Auto-generated session title — useful for Web UI sidebar. |
-| `{type: 'last-prompt', ...}` | `session.last_prompt` | Marker line; usually metadata-only. |
-| `{type: 'queue-operation', ...}` | `session.queue` | Internal Claude Code queue marker; usually no-op. |
-| Any line containing `cache_read_input_tokens`, `cache_creation_input_tokens`, `input_tokens` in a `usage` field | `usage` | Update cache-hit dashboard. Note this is *also* emitted alongside `response.text` (the `usage` block is co-located with the assistant message). |
+| `{type: 'agent-name', ...}` | `session.agent_name` | Agent identity assignment. |
+| `{type: 'custom-title', ...}` | `session.custom_title` | Operator-set title. |
+| `{type: 'pr-link', ...}` | `session.pr_link` | PR association. |
+| `{type: 'last-prompt', ...}` | `session.last_prompt` | Marker line. |
+| `{type: 'queue-operation', ...}` | `session.queue` | Internal Claude Code queue marker. |
+| `{type: 'system', subtype: <one-of>, ...}` | `system.<subtype>` | **`system` is a container; `subtype` is the real discriminator.** Subtypes observed in Spike 0.2: `compact_boundary`, `turn_duration`, `stop_hook_summary`, `away_summary`, `informational`, `local_command`, `scheduled_task_fire`, `bridge_status`, `api_error`. The full union is open — Sprint 1 enumerates exhaustively. |
+| Any line with a `usage` field containing `cache_read_input_tokens`, `cache_creation_input_tokens`, `input_tokens` | `usage` | Update cache-hit dashboard. Co-located with the assistant message. |
 
-**Session lifecycle markers (validation pending Spike 0.5):**
+**Session lifecycle markers — empirical findings (Spikes 0.2 + 0.5):**
 
-The v2 spec assumed `system.init`, `session.end`, and `session.compact` JSONL events exist. Nibbler's validation could not find these in either the JSONL trace or the binary subtype strings (what *was* found: `elicitation_complete`, `error`, `plugin_install`, `status`, `success`, `task_notification`, `terminated`). Spike 0.5 (§10.0) probes the slash-command and lifecycle path to settle this empirically. Fallback if these markers don't exist:
+The earlier hypothesis of named `session.init` / `session.end` / `session.compact` JSONL line types is **dropped**. None exist on `claude 2.1.143`. Real behaviour:
 
-- **`session.end`** → process exit observed by Session Manager (no JSONL event required).
-- **`session.compact`** → detect via JSONL line-count delta after operator-triggered `/compact`, or via a tailer hook on the post-compact JSONL prefix (Claude rewrites the JSONL after `/compact`).
-- **`session.init`** → the first `assistant` or `system` line in a previously-empty JSONL file marks the boundary.
+| Event | JSONL signal | Detection mechanism |
+|---|---|---|
+| **`session.init`** | First non-empty line in a previously-empty `<session-id>.jsonl` file | `fs.watch('change')` on the file; emit `session.init` once on the first byte observed |
+| **`session.compact`** | `{type:'system', subtype:'compact_boundary', compactMetadata: {trigger, preTokens, postTokens, durationMs}}` appended to the JSONL | Bus topic `session.compact` is mapped 1:1 from `system.compact_boundary` |
+| **`/clear` event** | **Rotation, not truncate.** A new `<new-session-id>.jsonl` file appears in the same project directory; the old file is frozen unchanged and carries no marker | `fs.watch('add')` on the project directory; treat as `session.end(old)` immediately followed by `session.init(new)`; re-bind subscribers to the new session_id |
+| **`session.end` (process exit)** | `<command-name>/exit</command-name>` envelope in the JSONL on `/quit`; otherwise no JSONL signal | Session Manager observes process exit (PTY `onExit` or `Bun.spawn` exit promise); emit `session.end` from there. The JSONL `/exit` envelope is informational, not the authoritative signal. |
 
-The Bus event topics (`session.init`, `session.end`, `session.compact`) remain stable in the Bus's external API regardless of whether they come from JSONL markers or from inference — adapters depend on the topic name, not the source.
+The Bus event topics (`session.init`, `session.compact`, `session.end`) remain stable in the Bus's external API regardless of detection source — adapters subscribe by topic name and don't care whether the event came from a JSONL marker, a directory watch, or process exit.
 
 **Emit format (single normalised schema):**
 ```ts
@@ -230,15 +260,21 @@ type BusEvent = {
 
 | Mode | Implementation | Platforms | Use case |
 |---|---|---|---|
-| `process` (default) | Direct `Bun.spawn` of `claude`; supervisor watches exit; stdin pipe held open for slash-command relay | macOS, Linux, Windows | Default for fresh installs; smallest dependency surface |
+| `pty-stdin` (default) | Spawn `claude` via `bun-pty` to satisfy the REPL's `isatty(0)` gate. **`stdout: 'ignore'`** — the Bus never reads stdout. Slash commands written to the PTY master. JSONL is the only read source. | macOS, Linux | Default for fresh installs |
 | `tmux` (opt-in) | Wraps `claude` in a detached tmux session; operator can `tmux attach` to inspect | macOS, Linux | Operators who want to attach into a running session for debugging or to issue commands by hand |
+| `process` (Windows-only, fallback) | Direct `Bun.spawn` with `stdin: 'pipe'` — slash command relay does NOT work in this mode on `claude` 2.1.x (REPL downshifts to `--print`). Acceptable only on Windows where `bun-pty` is unavailable or where the operator does not need slash commands. | Windows | Windows fallback when `bun-pty` is unavailable |
 
-Default is `process`. tmux moves from required (v1 spec) to opt-in operator convenience because:
-- tmux is friction on Windows (no first-class install path).
-- Slash-command relay does **not** require tmux when the supervisor owns the stdin file descriptor — it can write the slash text and a newline directly.
-- Bus runtime is supposed to be lightweight; binding it to tmux contradicts that goal.
+Default is `pty-stdin`. The earlier v2 spec made `process` the default; Spike 0.4 disproved this empirically. `claude` 2.1.143 gates the REPL on `process.stdin.isTTY` AND `process.stdout.isTTY` (binary-confirmed via `strings`: `if (isFirst && process.stdin.isTTY)`). Plain `Bun.spawn({stdin:'pipe'})` auto-downshifts to `--print` mode within ~3 s with exit code 1 and discards any slash command sent.
 
-**Per-agent spawn (default `process` mode):**
+**This is not a return to the PTY runner.** The structural difference vs the current PTY runner:
+- The PTY runner spawns `claude` via `bun-pty` AND reads stdout, parsing TUI bytes for content. That stdout-read is what the v2 spec is replacing.
+- The Bus runtime spawns `claude` via `bun-pty` for *stdin TTY emulation only*. `stdout: 'ignore'` on the bun-pty handle. Reads come from JSONL.
+
+The Bus's "no TUI byte parsing" claim survives intact. `bun-pty` is already in dependencies (powers the legacy PTY runner via `src/runner/pty-process.ts`), so this carries zero added dependency.
+
+tmux remains an opt-in alternative for operators who want pane-attach inspection. The `process` mode is Windows-only fallback (because `bun-pty` is Unix-focused and `claude.exe` may behave differently than the macOS/Linux build — Sprint 0.3 + a Windows-host validation are required before any of those defaults are settled).
+
+**Per-agent spawn (default `pty-stdin` mode):**
 ```ts
 function spawnAgent(agent: AgentConfig): Promise<AgentProcess> {
   const args = [
@@ -253,29 +289,38 @@ function spawnAgent(agent: AgentConfig): Promise<AgentProcess> {
     CCAW_AGENT_ID: agent.id,
     CCAW_BUS_SOCK: BUS_SOCK_PATH,
   };
-  const proc = Bun.spawn(['claude', ...args], {
+  // Spike 0.4 confirmed: plain `Bun.spawn({stdin:'pipe'})` downshifts claude
+  // to --print mode within ~3s because of the isatty(0) gate. Use bun-pty
+  // for TTY emulation; stdout still ignored — the Bus does NOT scrape TUI.
+  const { spawn: ptySpawn } = await import('bun-pty');
+  const proc = ptySpawn('claude', args, {
+    name: 'xterm-256color',
+    cols: 120,
+    rows: 30,
     cwd: agent.cwd,
     env,
-    stdin: 'pipe',                     // for slash-command relay
-    stdout: 'ignore',                  // we read JSONL, not stdout
-    stderr: 'pipe',                    // for crash diagnostics
   });
+  // We attach onData consumers ONLY for crash diagnostics (stderr-equivalent).
+  // No parsing of the byte stream into model output — that's the PTY runner's
+  // failure mode and the entire reason for this migration.
+  proc.onData((chunk) => observeForCrashSignals(chunk));
   return { agentId: agent.id, proc, supervisor: makeSupervisor(proc) };
 }
 ```
 
-The `tmux` mode wraps the same `args` array under `tmux new-session -d -s claudeclaw-<agentId>` and uses `tmux send-keys` for slash commands. Selecting between modes is config: `bus.supervision: 'process' | 'tmux'`.
+The `tmux` mode wraps the same `args` array under `tmux new-session -d -s claudeclaw-<agentId>` and uses `tmux send-keys` for slash commands. Selecting between modes is config: `bus.supervision: 'pty-stdin' | 'tmux' | 'process'` (last is Windows-only fallback).
 
-**Lifecycle (both modes):**
+**Lifecycle (all modes):**
 - `start()` — spawn all configured agents.
-- `stop(agent_id)` — send `/quit` via stdin (`process` mode) or `send-keys` (`tmux` mode); wait for JSONL `session.end`; reap process / kill tmux session.
+- `stop(agent_id)` — send `/quit` via PTY write (`pty-stdin` mode), `send-keys` (`tmux` mode), or `proc.kill()` (`process` mode on Windows where slash commands don't work). Observe PTY/process exit; emit `session.end` from Session Manager.
 - `restart(agent_id)` — stop then start, preserve `session_id` for `--resume` continuity.
 - `health()` — for each agent, check process alive + JSONL file is receiving updates within the heartbeat interval. Optional: detect "alive but JSONL stalled" as a degraded state.
 
 **Slash command relay:**
-- `process` mode: write `"/compact\n"` to the supervised process's stdin. Claude Code accepts slash commands on stdin in interactive sessions. Supported commands: `/compact`, `/clear`, `/model <name>`, `/quit`. This is the same control surface as aerolalit's reference implementation, just without the tmux indirection.
+- `pty-stdin` mode: write `"/compact\n"` to the bun-pty master. Empirically validated in Spike 0.4 — slash commands fire and produce `system.local_command` JSONL envelopes on success or failure. Supported: `/compact`, `/clear`, `/model <name>`, `/quit` (`/quit` maps to `/exit` internally).
 - `tmux` mode: keep the existing `tmux send-keys` path for operators who prefer it.
-- Either way: **never used for prompts** — prompts flow through the Bus MCP `notifications/claude/channel` path. Slash commands are the only stdin / `send-keys` write.
+- `process` mode (Windows-only): slash commands not supported. Operator-facing commands must be routed through Web UI or REST + Session Manager `restart()` for state changes that would otherwise need `/clear` or `/compact`.
+- **Never used for prompts** — prompts flow through the Bus MCP `notifications/claude/channel` path. Slash commands are the only PTY-write / `send-keys`.
 
 ### 5.4 Bus Core (`src/bus/core.ts`)
 
@@ -329,17 +374,17 @@ The Bus MCP runs inside the `claude` process (loaded as a plugin), so it is nece
 
 1. **Unix Domain Socket** (default on Linux). Path: `${XDG_RUNTIME_DIR:-$HOME/.claudeclaw/run}/bus-<instanceId>-<agentId>.sock`.
    - **`instanceId` disambiguates multi-daemon hosts.** Two daemons on the same host (dev + prod side-by-side, staging, container scenarios) would otherwise collide on `bus-<agentId>.sock` if their agent_ids overlap. `instanceId` is derived once at daemon start from `cwd-hash[:8] || pid` (stable across the daemon's lifetime, unique per daemon instance).
-   - **macOS without `XDG_RUNTIME_DIR`:** macOS does not set this var by default, so the fallback `$HOME/.claudeclaw/run/...` is the default path on every macOS install. The 104-byte `sun_path` cap is the operative budget — for a typical `$HOME` of ~30 bytes, the remaining ~70 bytes accommodate the `.claudeclaw/run/bus-<8>-<agent>.sock` template comfortably, but `agent_id` slugs over ~40 chars will overflow. Startup validation measures the resolved path and fails fast with a clear error if it exceeds 100 bytes (4-byte safety margin).
+   - **macOS without `XDG_RUNTIME_DIR`:** macOS does not set this var by default, so the fallback `$HOME/.claudeclaw/run/...` is the default path on every macOS install. The 104-byte `sun_path` cap is the operative budget. **Atomic-create (`<path>.tmp` → rename → `<path>`) requires +4B headroom** because `<path>.tmp` must also fit. Empirically validated in Spike 0.3: a 100B *final* path fails to bind because the `.tmp` form overflows. Correct safe cap is **final ≤ 96B**, which on a typical macOS `$HOME` (~23B) caps agent-slug at ~36 chars. Startup validation measures the resolved final path and fails fast with a clear error if it exceeds 96 bytes.
    - **Permission bits:** `0600`, owner-only.
    - **Same-uid constraint (rationale):** Daemon and MCP server must run as the same UID. This is what `0600` permission bits enforce. The constraint also rejects multi-user-host attack surfaces (no separate `claudeclaw` system user with its own socket that other users could connect to). Operators running multi-tenant hosts must isolate per-user via OS-level user separation, not per-daemon UID separation.
    - **Atomic create:** bind to `<path>.tmp`, `chmod 0600`, then `rename` → `<path>`. Prevents races where the MCP server connects before the daemon has bound + chmod'd.
    - **Cleanup on exit:** SIGTERM handler unlinks the socket; orphaned sockets from crashed daemons are unlinked on next start after a `connect()` probe confirms no listener.
 
-2. **Windows named pipe** (default on Windows). Path: `\\.\pipe\claudeclaw-bus-<instanceId>-<agentId>`.
+2. **Windows named pipe** (preferred when validated; **not default**). Path: `\\.\pipe\claudeclaw-bus-<instanceId>-<agentId>`.
    - Use Bun's `node:net` named-pipe support via `net.createServer({ allowHalfOpen: false })` listening on the pipe path.
-   - Security descriptor: restrict to the current user SID. Bun exposes this via the underlying libuv flags; if not exposed in current Bun version, document the limitation and fall back to transport #3. **Spike 0.3 confirms which.**
+   - Security descriptor: restrict to the current user SID. **Spike 0.3 finding: Bun 1.3.4 does not expose any SDDL/security-descriptor API for named pipes** — there is no way from Bun TS to restrict the pipe to the current user SID. Additionally, **open Bun bug #30265 panics on busy-pipe binding** instead of returning `EADDRINUSE`. Until both are resolved, named pipes on Windows are not safe as the default — operators may opt in once they've validated their Bun version, but new installs should default to transport #3.
 
-3. **Localhost TCP + token** (fallback). When UDS / named pipe are unavailable or known-broken in the current runtime:
+3. **Localhost TCP + token** (default on Windows per Spike 0.3; fallback elsewhere). When UDS / named pipe are unavailable or known-broken in the current runtime:
    - Bus core binds to `127.0.0.1:<random-ephemeral-port>`.
    - Generates a 32-byte random token, writes it to `~/.claudeclaw/agents/<agentId>/bus-token` (mode `0600`).
    - MCP server reads token via env vars (`CCAW_BUS_PORT`, `CCAW_BUS_TOKEN`).
@@ -469,9 +514,11 @@ When Anthropic GAs Channels (drops the `--dangerously-load-development-channels`
 
 ## 10. Engineering plan
 
-### Sprint 0 (pre-Sprint 1) — De-risking spikes
+### Sprint 0 (pre-Sprint 1) — De-risking spikes ✅ COMPLETE
 
-Five spikes that must complete before Sprint 1 starts. Each produces a written finding committed to `docs/spikes/` and either unblocks Sprint 1 as-specified or triggers a spec revision.
+All five Sprint 0 spikes shipped on branch `spec/sprint-0-spikes` (PR #109). Findings folded into this spec as the v2.2 commit. Cross-cutting empirical outcomes are summarised at the top of this document under "What changed in v2.2."
+
+Original spike specifications retained below for traceability:
 
 **Spike 0.1 — Permission-prompt flow (both directions).** Manually load a minimal Channels plugin into `claude --dangerously-load-development-channels` and trigger a permission-gated tool call. Validate the two-direction flow per §5.1:
 - Confirm `notifications/claude/channel/permission_request` fires from Claude with `request_id`, `tool_name`, `description`, `input_preview` payload fields.
