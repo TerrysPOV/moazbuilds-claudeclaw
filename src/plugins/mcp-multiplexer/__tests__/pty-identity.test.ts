@@ -165,4 +165,53 @@ describe("pty-identity", () => {
   it("getIdentity returns undefined for unknown ptyIds", () => {
     expect(getIdentity("nope")).toBeUndefined();
   });
+
+  // Codex P2 on PR #98 (#72 item 14 follow-up): the cached `record.public`
+  // projection is shared by reference across every `issueIdentity` /
+  // `getIdentity` call for the PTY's lifetime. A caller that mutates the
+  // returned headers (e.g. debug code overwriting Authorization with
+  // "[REDACTED]") would poison the cache and break auth for every
+  // subsequent inbound request from that PTY. Freeze both levels (outer
+  // PtyIdentity + headers map) so accidental mutation throws in strict
+  // mode rather than silently corrupting state.
+  describe("Codex P2 PR #98: identity is immutable", () => {
+    it("returned identity is frozen — header mutation throws in strict mode", () => {
+      const id = issueIdentity("suzy");
+      expect(Object.isFrozen(id)).toBe(true);
+      expect(Object.isFrozen(id.headers)).toBe(true);
+      expect(() => {
+        (id.headers as Record<string, string>)[AUTH_HEADER] = "Bearer poisoned";
+      }).toThrow();
+      // The real value is unchanged.
+      expect(id.headers[AUTH_HEADER]).toMatch(/^Bearer [0-9a-f]+$/);
+    });
+
+    it("issueIdentity and getIdentity return the SAME frozen object for the same PTY", () => {
+      const issued = issueIdentity("suzy");
+      const fetched = getIdentity("suzy");
+      expect(fetched).toBe(issued); // reference equality
+      expect(Object.isFrozen(fetched!)).toBe(true);
+    });
+
+    it("a fresh issueIdentity after revoke produces a NEW frozen object", () => {
+      const first = issueIdentity("suzy");
+      revokeIdentity("suzy");
+      const second = issueIdentity("suzy");
+      expect(second).not.toBe(first); // new identity, new object
+      expect(second.headers[AUTH_HEADER]).not.toBe(first.headers[AUTH_HEADER]);
+      expect(Object.isFrozen(second)).toBe(true);
+      expect(Object.isFrozen(second.headers)).toBe(true);
+    });
+
+    it("attempting to mutate outer fields throws", () => {
+      const id = issueIdentity("suzy");
+      expect(() => {
+        (id as { ptyId: string }).ptyId = "evil";
+      }).toThrow();
+      expect(() => {
+        (id as { issuedAt: number }).issuedAt = 0;
+      }).toThrow();
+      expect(id.ptyId).toBe("suzy");
+    });
+  });
 });

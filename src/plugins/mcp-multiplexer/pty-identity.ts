@@ -111,15 +111,29 @@ function _validatePtyId(ptyId: string): void {
 
 function _toPublic(record: InternalIdentity): PtyIdentity {
   const bearer = `Bearer ${record.secret.toString("hex")}`;
-  return {
+  // Codex P2 on PR #98 (#72 item 14 follow-up): freeze the projection
+  // before caching it. The cache stores ONE PtyIdentity object that's
+  // returned from every `issueIdentity` / `getIdentity` call for the
+  // record's lifetime. Without the freeze, a caller doing e.g.
+  // `identity.headers.Authorization = "[REDACTED]"` for debug logging
+  // would mutate the cached value and poison every subsequent reader
+  // for that PTY — breaking auth on the next inbound request.
+  //
+  // Freeze the headers map AND the outer object. `Object.freeze` is
+  // shallow, so both levels need an explicit call. In strict-mode (Bun
+  // + ESM, always strict) any attempted mutation throws a TypeError —
+  // the bug surfaces immediately at the offending callsite instead of
+  // poisoning silently.
+  const headers = Object.freeze({
+    [AUTH_HEADER]: bearer,
+    [PTY_ID_HEADER]: record.ptyId,
+    [PTY_TS_HEADER]: String(record.issuedAt),
+  });
+  return Object.freeze({
     ptyId: record.ptyId,
     issuedAt: record.issuedAt,
-    headers: {
-      [AUTH_HEADER]: bearer,
-      [PTY_ID_HEADER]: record.ptyId,
-      [PTY_TS_HEADER]: String(record.issuedAt),
-    },
-  };
+    headers,
+  });
 }
 
 /**
