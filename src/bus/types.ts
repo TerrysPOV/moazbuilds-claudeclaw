@@ -87,7 +87,17 @@ export type BusEventTopic =
   | "channel.permission_request"
   | "channel.permission_response"
   | `attachment.${string}`
-  | `system.${string}`;
+  | `system.${string}`
+  /**
+   * Bus-internal control events emitted by infrastructure (Tailer, schema
+   * probe, etc.). Sprint 2 introduces:
+   *  - `bus.events.replay_done` — JSONL Tailer finished historical replay
+   *    and is now live-tailing (spec §5.2).
+   *  - `bus.event.unknown` — JSONL Tailer encountered an unrecognised line
+   *    type; payload carries the raw line for forward-compat audit
+   *    (spec §11.1).
+   */
+  | `bus.${string}`;
 
 export interface BusEvent<P = unknown> {
   /** Milliseconds since epoch. */
