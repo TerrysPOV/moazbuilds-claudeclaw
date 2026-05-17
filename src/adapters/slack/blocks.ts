@@ -4,7 +4,7 @@
  * Spec: `docs/ClaudeClaw_Plus_Bus_Architecture_Spec.md` §5.5.3.
  *
  * Pure functions split out of `index.ts` so the main adapter file stays
- * under the per-file LOC cap (SPRINT_4_PLAN.md). Block Kit reference:
+ * under the per-file LOC cap (spec §5.5.3). Block Kit reference:
  * https://api.slack.com/block-kit
  *
  * Sprint 4 ships one builder — `buildPermissionBlocks` for allow/deny

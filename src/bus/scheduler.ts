@@ -20,7 +20,7 @@
  *     `src/config.ts` — those stay live for `runtime: pty`. The Bus
  *     scheduler is the equivalent surface for `runtime: bus`.
  *
- * Non-goals (deferred to later sprints, per SPRINT_4_PLAN.md):
+ * Non-goals (deferred to later sprints):
  *   - Persistence / restart recovery.
  *   - Queue / dedupe coupling (that lives in Gateway, Sprint 3+).
  *   - Hybrid auth router routing (it just reads the `user_id: 'system'`

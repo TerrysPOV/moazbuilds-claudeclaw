@@ -2,7 +2,6 @@
  * Tests for `src/adapters/slack/index.ts` (Sprint 4 Agent A).
  *
  * Spec: `docs/ClaudeClaw_Plus_Bus_Architecture_Spec.md` §5.5.3.
- * Sprint coordination: `src/bus/SPRINT_4_PLAN.md`.
  *
  * Run with: `bun test src/adapters/slack/__tests__/slack.test.ts`
  *
@@ -15,7 +14,7 @@
  *   - `FakeSlackSocket` implements `SlackSocketLike` so we can drive
  *     inbound envelopes deterministically.
  *
- * Coverage targets from SPRINT_4_PLAN.md:
+ * Coverage targets (spec §5.5.3):
  *   - allow-list: empty = allow all; populated + match = allow; populated
  *     + miss = silent skip
  *   - Channel routing → correct agent_id
@@ -999,5 +998,210 @@ describe("SlackAdapter — start() rollback on socket failure (PR #117 review)",
     await a2.start();
     expect(okSocket.started).toBe(true);
     await a2.stop();
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────── */
+/* PR #117 review — Agent #2 HIGH findings                                  */
+/* ────────────────────────────────────────────────────────────────────── */
+
+describe("SlackAdapter — Events API retry dedup (PR #117 review)", () => {
+  // Slack retries `event_callback` deliveries up to 3 times on 3xx/5xx
+  // ack failures, replaying the same `event_id`. Agent #2 flagged that
+  // the adapter had no dedup, so a slow `chat.postMessage` could fire
+  // the same permission flow / sendPrompt twice.
+
+  it("processes the first delivery and drops retries with the same event_id", async () => {
+    adapter = await startAdapter();
+    const envelope = {
+      type: "event_callback" as const,
+      event_id: "Ev01ABCDEF",
+      event: msg({ text: "first delivery" }),
+    };
+    await adapter.handleEventsApiRequest(envelope);
+    await adapter.handleEventsApiRequest(envelope);
+    await adapter.handleEventsApiRequest(envelope);
+    await flushMicrotasks();
+    expect(bus.prompts).toHaveLength(1);
+    expect(bus.prompts[0]?.text).toBe("first delivery");
+  });
+
+  it("returns the challenge for url_verification even if dedup cache is warm", async () => {
+    adapter = await startAdapter();
+    await adapter.handleEventsApiRequest({
+      type: "event_callback",
+      event_id: "Ev01",
+      event: msg({ text: "warm" }),
+    });
+    const result = await adapter.handleEventsApiRequest({
+      type: "url_verification",
+      challenge: "deadbeef",
+    });
+    expect(result).toBe("deadbeef");
+  });
+
+  it("missing event_id falls through to processing (no defensive drop)", async () => {
+    adapter = await startAdapter();
+    await adapter.handleEventsApiRequest({
+      type: "event_callback",
+      event: msg({ text: "no event_id" }),
+    });
+    await adapter.handleEventsApiRequest({
+      type: "event_callback",
+      event: msg({ text: "still no event_id" }),
+    });
+    await flushMicrotasks();
+    expect(bus.prompts).toHaveLength(2);
+  });
+
+  it("evicts oldest entries past maxSeenEventIds", async () => {
+    adapter = await startAdapter({ maxSeenEventIds: 2 });
+    // Three distinct event_ids; the first is evicted after the third
+    // arrives. Re-delivering the first should now process again.
+    for (const id of ["E1", "E2", "E3"]) {
+      await adapter.handleEventsApiRequest({
+        type: "event_callback",
+        event_id: id,
+        event: msg({ text: id, ts: `170000000${id}.0` }),
+      });
+    }
+    // Re-deliver E1 — it should be processed again because evicted.
+    await adapter.handleEventsApiRequest({
+      type: "event_callback",
+      event_id: "E1",
+      event: msg({ text: "E1 redelivery", ts: "1700000001.0" }),
+    });
+    await flushMicrotasks();
+    // 3 originals + 1 redelivery for E1 (evicted), but NOT the dedup
+    // for E2/E3 which would still be live.
+    expect(bus.prompts.length).toBe(4);
+  });
+
+  it("stop() clears the dedup cache so a restarted adapter forgets retries", async () => {
+    adapter = await startAdapter();
+    await adapter.handleEventsApiRequest({
+      type: "event_callback",
+      event_id: "Ev-restart",
+      event: msg({ text: "before stop" }),
+    });
+    await adapter.stop();
+    adapter = null;
+
+    const a2 = await startAdapter();
+    await a2.handleEventsApiRequest({
+      type: "event_callback",
+      event_id: "Ev-restart",
+      event: msg({ text: "after restart" }),
+    });
+    await flushMicrotasks();
+    // Two prompts total: one before stop, one after. Cache was cleared.
+    expect(bus.prompts.length).toBe(2);
+    expect(bus.prompts[1]?.text).toBe("after restart");
+    await a2.stop();
+  });
+});
+
+describe("SlackAdapter — threadOwners LRU bound (PR #117 review)", () => {
+  // Agent #2 flagged unbounded growth of the thread-ownership cache for
+  // long-running daemons. The adapter now enforces an LRU cap.
+
+  it("evicts the oldest thread when size exceeds maxThreadOwners", async () => {
+    adapter = await startAdapter({
+      maxThreadOwners: 2,
+      routing: { channels: { C100: "triage" } },
+    });
+
+    // Seed 3 distinct threads. After the 3rd, the 1st should be evicted.
+    socket.push(
+      eventsEnvelope(msg({ channel: "C100", thread_ts: "T1", ts: "T1.r1", text: "thread 1" })),
+    );
+    socket.push(
+      eventsEnvelope(msg({ channel: "C100", thread_ts: "T2", ts: "T2.r1", text: "thread 2" })),
+    );
+    socket.push(
+      eventsEnvelope(msg({ channel: "C100", thread_ts: "T3", ts: "T3.r1", text: "thread 3" })),
+    );
+    await waitFor(() => bus.prompts.length >= 3);
+
+    // A reply in T1 (now evicted) still resolves via channel mapping
+    // because channels[C100] = triage. We assert that the cache size
+    // stays bounded — that's the load-bearing claim.
+    socket.push(
+      eventsEnvelope(msg({ channel: "C100", thread_ts: "T1", ts: "T1.r2", text: "back to T1" })),
+    );
+    await waitFor(() => bus.prompts.length >= 4);
+    expect(bus.prompts[3]?.agent_id).toBe("triage");
+    // Cap honoured.
+    // @ts-expect-error — reach into private state for the size assertion.
+    expect(adapter.threadOwners.size).toBeLessThanOrEqual(2);
+  });
+
+  it("touch-on-read keeps active threads warm", async () => {
+    adapter = await startAdapter({
+      maxThreadOwners: 2,
+      routing: { channels: { C100: "triage", C200: "research" }, threadAgentId: "thread-only" },
+    });
+
+    // Establish T1 → triage (channel C100 → triage), T2 → research.
+    socket.push(
+      eventsEnvelope(msg({ channel: "C100", thread_ts: "T1", ts: "T1.r1", text: "kick T1" })),
+    );
+    socket.push(
+      eventsEnvelope(msg({ channel: "C200", thread_ts: "T2", ts: "T2.r1", text: "kick T2" })),
+    );
+    await waitFor(() => bus.prompts.length >= 2);
+
+    // Touch T1 (now newer than T2).
+    socket.push(
+      eventsEnvelope(msg({ channel: "C100", thread_ts: "T1", ts: "T1.r2", text: "touch T1" })),
+    );
+    await waitFor(() => bus.prompts.length >= 3);
+
+    // Now insert T3 in an unrouted channel — to land it in threadOwners
+    // we need the resolver to fire AND succeed via threadAgentId.
+    socket.push(
+      eventsEnvelope(msg({ channel: "C999", thread_ts: "T3", ts: "T3.r1", text: "kick T3" })),
+    );
+    await waitFor(() => bus.prompts.length >= 4);
+
+    // T2 (least-recently-used) should have been evicted, T1 retained.
+    // @ts-expect-error — reach into private state for assertion.
+    expect(adapter.threadOwners.has("C100:T1")).toBe(true);
+    // @ts-expect-error — reach into private state for assertion.
+    expect(adapter.threadOwners.has("C200:T2")).toBe(false);
+  });
+});
+
+describe("createSlackApi — fetch timeout (PR #117 review)", () => {
+  // Agent #2 flagged that the original fetch had no AbortSignal, so a
+  // stuck Slack edge could pin `await postMessage()` for minutes and
+  // block the adapter's event loop.
+
+  it("aborts the request after timeoutMs and surfaces a typed error", async () => {
+    const realFetch = globalThis.fetch;
+    let abortedFromOutside = false;
+    // Stub a fetch that never resolves until the AbortController fires.
+    globalThis.fetch = ((_url: string, init?: RequestInit) => {
+      return new Promise((_, reject) => {
+        const sig = init?.signal as AbortSignal | undefined;
+        if (sig) {
+          sig.addEventListener("abort", () => {
+            abortedFromOutside = true;
+            reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+          });
+        }
+      });
+    }) as typeof globalThis.fetch;
+
+    try {
+      const { createSlackApi } = await import("../api");
+      const api = createSlackApi("fake-token", { timeoutMs: 25 });
+      await expect(
+        api.postMessage({ channel: "C1", text: "hi" }),
+      ).rejects.toThrow(/timeout after 25ms/);
+      expect(abortedFromOutside).toBe(true);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 });

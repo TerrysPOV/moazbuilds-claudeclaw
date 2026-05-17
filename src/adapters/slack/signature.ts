@@ -5,7 +5,7 @@
  * Reference: https://api.slack.com/authentication/verifying-requests-from-slack
  *
  * Split out of `index.ts` so the main adapter file stays under the
- * per-file LOC cap (SPRINT_4_PLAN.md) and so the signing path is unit-
+ * per-file LOC cap (spec §5.5.3) and so the signing path is unit-
  * testable without standing up an adapter instance.
  *
  * The legacy listener at `src/commands/slack.ts` doesn't ship an HTTP

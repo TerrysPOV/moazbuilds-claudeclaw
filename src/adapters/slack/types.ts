@@ -7,8 +7,6 @@
  *    allowlist, so the Bus MCP is the only viable plumbing for Slack
  *    regardless of Channels GA."
  *
- * Sprint coordination: `src/bus/SPRINT_4_PLAN.md` (Agent A scope).
- *
  * These shapes mirror the subset of Slack's Web API / Events API / Socket
  * Mode envelopes that the legacy PTY listener (`src/commands/slack.ts`,
  * 1950 LOC) consumes. We re-declare them here (rather than importing) so
@@ -19,9 +17,9 @@
  *   - Adapter takes `gateway` / `api` seams the same way Discord/Telegram
  *     do, so tests can inject `FakeSlackApi` without hitting `slack.com`.
  *   - Block Kit button `action_id` uses the cleaner colon-separated form
- *     `perm:<allow|deny>:<request_id>` per SPRINT_4_PLAN.md — Discord
- *     still uses `ccaw_perm_<…>_<…>` underscores; convergence is a
- *     separate Sprint 4 task.
+ *     `perm:<allow|deny>:<request_id>` (spec §5.5.3) — Discord still uses
+ *     `ccaw_perm_<…>_<…>` underscores; convergence is a separate Sprint 4
+ *     task.
  */
 
 import type { BusCore } from "../../bus/core";
@@ -83,6 +81,17 @@ export interface SlackAdapterOptions {
    * (`handleEventsApiRequest`) is the fully-supported path.
    */
   socket?: SlackSocketLike;
+  /**
+   * LRU cap on the Events API `event_id` dedup cache. Defaults to 5000.
+   * Tests set this to 2-3 to exercise eviction. PR #117 review (Agent #2).
+   */
+  maxSeenEventIds?: number;
+  /**
+   * LRU cap on the `threadOwners` cache (one entry per active thread).
+   * Defaults to 10000. Tests set this to 2-3 to exercise eviction.
+   * PR #117 review (Agent #2).
+   */
+  maxThreadOwners?: number;
 }
 
 /* ────────────────────────────────────────────────────────────────────── */
@@ -156,6 +165,14 @@ export interface SlackEventsApiEnvelope {
   event?: SlackMessageEvent;
   /** Slack team id (for multi-workspace installs). */
   team_id?: string;
+  /**
+   * Per-delivery event id Slack assigns to every `event_callback`. Repeats
+   * verbatim on retries (3xx/5xx ack failures), so the adapter dedups on
+   * this. PR #117 review (Agent #2): the adapter previously had no retry
+   * guard, so a slow `chat.postMessage` could trigger a permission flow
+   * twice.
+   */
+  event_id?: string;
 }
 
 /** Socket Mode envelope shape — top-level WebSocket frames the bus cares about. */
@@ -243,10 +260,10 @@ export interface SlackSocketLike {
  * `action_id` shape used for permission-prompt buttons. Format:
  *   `perm:<allow|deny>:<request_id>`
  *
- * Spec choice (SPRINT_4_PLAN.md §"Component-by-component scope"): Slack
- * uses the colon-separated form that Telegram already uses. Discord's
- * underscore form (`ccaw_perm_…`) will converge in a follow-up — keeping
- * both adapters drift-free is a separate task.
+ * Spec choice (§5.5.3): Slack uses the colon-separated form that
+ * Telegram already uses. Discord's underscore form (`ccaw_perm_…`) will
+ * converge in a follow-up — keeping both adapters drift-free is a
+ * separate task.
  *
  * Block Kit `action_id` limit is 255 characters; `perm:<5>:abcde` is 16,
  * leaving plenty of headroom for future correlation ids.

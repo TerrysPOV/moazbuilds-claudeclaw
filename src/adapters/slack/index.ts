@@ -5,9 +5,8 @@
  * NOT on Anthropic's Channels allowlist, so the Bus MCP is permanent
  * plumbing for Slack regardless of Channels GA.
  *
- * Coordination: `src/bus/SPRINT_4_PLAN.md`. Behaviour parity with the
- * legacy PTY-coupled listener at `src/commands/slack.ts` (1950 LOC) for
- * the subset the Bus runtime needs.
+ * Behaviour parity with the legacy PTY-coupled listener at
+ * `src/commands/slack.ts` (1950 LOC) for the subset the Bus runtime needs.
  *
  * PR #113 review carryovers (don't repeat):
  *   1. Allow-list: empty = allow all (legacy `slack.ts:976`).
@@ -47,6 +46,21 @@ interface PendingHumanAsk {
   thread_ts?: string;
 }
 
+/**
+ * Cap on the `seenEventIds` LRU. Slack retries every ~1s up to 3 times,
+ * so a 5k entry cap covers >1h of traffic at 1 event/sec — far beyond
+ * the retry window — while bounding memory to ~5k strings (~200kB).
+ * PR #117 review (Agent #2).
+ */
+const DEFAULT_MAX_SEEN_EVENT_IDS = 5_000;
+
+/**
+ * Cap on the `threadOwners` map. Each entry is `${channel}:${thread_ts}`
+ * → agent_id (~80 bytes). 10k cap → ~800kB worst case. PR #117 review
+ * (Agent #2) flagged unbounded growth for long-running daemons.
+ */
+const DEFAULT_MAX_THREAD_OWNERS = 10_000;
+
 export class SlackAdapter {
   private readonly bus: BusCore;
   private readonly token: string;
@@ -76,8 +90,22 @@ export class SlackAdapter {
    */
   private readonly pendingHumanAsks = new Map<string, PendingHumanAsk>();
 
-  /** Thread ownership cache keyed `${channel_id}:${thread_ts}`. */
+  /**
+   * Thread ownership cache keyed `${channel_id}:${thread_ts}`. Bounded
+   * LRU — see `recordThreadOwner` / `lookupThreadOwner`. Entries past
+   * `maxThreadOwners` are evicted oldest-first.
+   */
   private readonly threadOwners = new Map<string, string>();
+  private readonly maxThreadOwners: number;
+
+  /**
+   * LRU of Events API `event_id`s already processed. Slack retries on
+   * 3xx/5xx ack failure with the same `event_id`; without this guard a
+   * slow `chat.postMessage` could cause the adapter to fire the same
+   * permission flow / sendPrompt twice. PR #117 review (Agent #2).
+   */
+  private readonly seenEventIds = new Map<string, true>();
+  private readonly maxSeenEventIds: number;
 
   private started = false;
 
@@ -96,6 +124,8 @@ export class SlackAdapter {
     this.channels = { ...opts.routing.channels };
     this.threadAgentId = opts.routing.threadAgentId;
     this.logger = opts.logger ?? console;
+    this.maxSeenEventIds = opts.maxSeenEventIds ?? DEFAULT_MAX_SEEN_EVENT_IDS;
+    this.maxThreadOwners = opts.maxThreadOwners ?? DEFAULT_MAX_THREAD_OWNERS;
   }
 
   /* ──────────────────────────── lifecycle ─────────────────────────── */
@@ -179,6 +209,7 @@ export class SlackAdapter {
     this.pendingPermissions.clear();
     this.pendingHumanAsks.clear();
     this.threadOwners.clear();
+    this.seenEventIds.clear();
   }
 
   /* ──────────────────────────── inbound (Socket Mode) ───────────── */
@@ -217,9 +248,61 @@ export class SlackAdapter {
       return envelope.challenge;
     }
     if (envelope.type === "event_callback" && envelope.event) {
+      // Slack retry-dedup: if this event_id is already in our LRU we still
+      // return 200 (the operative ack), but we DO NOT re-fire the message
+      // handler. PR #117 review (Agent #2).
+      if (envelope.event_id && this.markEventIdSeen(envelope.event_id)) {
+        return "";
+      }
       await this.handleMessageEvent(envelope.event);
     }
     return "";
+  }
+
+  /**
+   * Record an Events API `event_id` in the bounded LRU. Returns `true`
+   * when the id was already present (i.e. this is a Slack retry that
+   * should be deduped); `false` when the id is new.
+   *
+   * Eviction is oldest-first because `Map` iterates in insertion order.
+   * "Touch on read" isn't useful here — retries arrive within seconds of
+   * the original, well inside the LRU window.
+   */
+  private markEventIdSeen(eventId: string): boolean {
+    if (this.seenEventIds.has(eventId)) return true;
+    this.seenEventIds.set(eventId, true);
+    if (this.seenEventIds.size > this.maxSeenEventIds) {
+      const oldest = this.seenEventIds.keys().next().value;
+      if (oldest !== undefined) this.seenEventIds.delete(oldest);
+    }
+    return false;
+  }
+
+  /**
+   * Record `(channel, thread) → agent_id` with LRU eviction. Touches on
+   * write so an active thread stays warm in the cache. PR #117 review
+   * (Agent #2) caught unbounded growth.
+   */
+  private recordThreadOwner(key: string, agentId: string): void {
+    if (this.threadOwners.has(key)) this.threadOwners.delete(key);
+    this.threadOwners.set(key, agentId);
+    if (this.threadOwners.size > this.maxThreadOwners) {
+      const oldest = this.threadOwners.keys().next().value;
+      if (oldest !== undefined) this.threadOwners.delete(oldest);
+    }
+  }
+
+  /**
+   * Look up a thread owner and touch it (delete + reinsert) so active
+   * threads survive eviction. Returns `undefined` for unknown keys.
+   */
+  private lookupThreadOwner(key: string): string | undefined {
+    const owner = this.threadOwners.get(key);
+    if (owner !== undefined) {
+      this.threadOwners.delete(key);
+      this.threadOwners.set(key, owner);
+    }
+    return owner;
   }
 
   /**
@@ -263,7 +346,7 @@ export class SlackAdapter {
       return;
     }
     if (event.thread_ts) {
-      this.threadOwners.set(`${channelId}:${event.thread_ts}`, agentId);
+      this.recordThreadOwner(`${channelId}:${event.thread_ts}`, agentId);
     }
 
     // Pending request_human → route reply as ask_answer. Composite key per
@@ -490,7 +573,7 @@ export class SlackAdapter {
   private resolveAgentId(event: SlackMessageEvent): string | null {
     if (event.thread_ts) {
       const threadKey = `${event.channel}:${event.thread_ts}`;
-      const owner = this.threadOwners.get(threadKey);
+      const owner = this.lookupThreadOwner(threadKey);
       if (owner) return owner;
     }
     const direct = this.channels[event.channel];
@@ -533,7 +616,7 @@ export { createSlackApi } from "./api";
 export { buildPermissionBlocks } from "./blocks";
 export { verifySlackSignature } from "./signature";
 
-/* Sprint 4.5+ TODOs (deferred — coordinator tracks in SPRINT_4_PLAN.md):
+/* Sprint 4.5+ TODOs (deferred — tracked in PR follow-ups):
  *  - Production Socket Mode WebSocket driver (`./socket.ts`); extract
  *    from `src/commands/slack.ts:1751-1830`.
  *  - Events API HTTP turn-key handler (`./http.ts`).
