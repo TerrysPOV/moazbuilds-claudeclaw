@@ -1,0 +1,46 @@
+{
+  "cwd": "/tmp/spike-0.5-deep-31xrpu8c",
+  "session_id": "14814f73-1c1c-4e49-b15e-8de669d727d7",
+  "before_lines": 15,
+  "primary_lines_after_clear": 15,
+  "primary_lines_final": 15,
+  "new_files": [
+    "837ebd10-ea4c-4419-a736-1715968d9be2.jsonl"
+  ],
+  "primary_unchanged_by_clear": true,
+  "analysis_primary": {
+    "types": {
+      "permission-mode": 1,
+      "file-history-snapshot": 2,
+      "user": 2,
+      "attachment": 3,
+      "ai-title": 1,
+      "assistant": 2,
+      "system": 4
+    },
+    "subtypes": {
+      "stop_hook_summary": 2,
+      "turn_duration": 2
+    },
+    "cmds": [],
+    "farewells": []
+  },
+  "analysis_new_files": {
+    "837ebd10-ea4c-4419-a736-1715968d9be2.jsonl": {
+      "types": {
+        "file-history-snapshot": 2,
+        "user": 5,
+        "system": 1,
+        "last-prompt": 1
+      },
+      "subtypes": {
+        "local_command": 1
+      },
+      "cmds": [
+        "/clear",
+        "/exit"
+      ],
+      "farewells": []
+    }
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "cwd": "/tmp/spike-0.5-deep-hghln4jt",
+  "session_id": "ccfa7b42-d4bb-4f83-8d58-96266fc9240b",
+  "exit_code": 0,
+  "turns_sent": 4,
+  "before_lines": 21,
+  "after_lines": 32,
+  "analysis": {
+    "types": {
+      "permission-mode": 3,
+      "file-history-snapshot": 6,
+      "user": 11,
+      "attachment": 5,
+      "ai-title": 3,
+      "assistant": 4,
+      "system": 5,
+      "last-prompt": 2
+    },
+    "subtypes": {
+      "turn_duration": 4,
+      "compact_boundary": 1
+    },
+    "cmds": [
+      "/compact",
+      "/exit"
+    ],
+    "farewells": []
+  },
+  "new_files": [],
+  "compact_boundary_present": true
+}

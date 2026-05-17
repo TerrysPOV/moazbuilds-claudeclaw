@@ -1,0 +1,108 @@
+{
+  "cmd": "clear",
+  "session_id": "f6d6c356-af65-4d6b-a6a1-f82169b9f006",
+  "cwd": "/tmp/spike-0.5-clear-w1uffkwk",
+  "claude_version": "2.1.126",
+  "platform": "Linux ARM64 proot",
+  "exit_code": 0,
+  "files_before": [
+    "f6d6c356-af65-4d6b-a6a1-f82169b9f006.jsonl"
+  ],
+  "files_after": [
+    "e7cb09f9-70f7-4bfe-bc6e-4b9fc9d93dbb.jsonl",
+    "f6d6c356-af65-4d6b-a6a1-f82169b9f006.jsonl"
+  ],
+  "files_after_exit": [
+    "e7cb09f9-70f7-4bfe-bc6e-4b9fc9d93dbb.jsonl",
+    "f6d6c356-af65-4d6b-a6a1-f82169b9f006.jsonl"
+  ],
+  "new_files_appeared": [
+    "e7cb09f9-70f7-4bfe-bc6e-4b9fc9d93dbb.jsonl"
+  ],
+  "primary_lines_before": 9,
+  "primary_lines_after": 9,
+  "primary_lines_added": 0,
+  "analysis_after": {
+    "types": {
+      "permission-mode": 1,
+      "file-history-snapshot": 1,
+      "user": 1,
+      "attachment": 3,
+      "ai-title": 1,
+      "assistant": 1,
+      "system": 1
+    },
+    "system_subtypes": {
+      "turn_duration": 1
+    },
+    "command_envelopes": []
+  },
+  "analysis_new_files": {
+    "e7cb09f9-70f7-4bfe-bc6e-4b9fc9d93dbb.jsonl": {
+      "types": {
+        "file-history-snapshot": 2,
+        "user": 5,
+        "system": 1,
+        "last-prompt": 1
+      },
+      "system_subtypes": {
+        "local_command": 1
+      },
+      "command_envelopes": [
+        "/clear",
+        "/exit",
+        "stdout: Bye!"
+      ]
+    }
+  },
+  "timeline": [
+    {
+      "t": 0.0,
+      "evt": "spawn"
+    },
+    {
+      "t": 9.0,
+      "evt": "enter-blasts-sent"
+    },
+    {
+      "t": 24.27,
+      "evt": "after-spawn-alive"
+    },
+    {
+      "t": 24.27,
+      "evt": "sent-prompt"
+    },
+    {
+      "t": 69.45,
+      "evt": "after-prompt"
+    },
+    {
+      "t": 69.45,
+      "evt": "snapshot-before-1files"
+    },
+    {
+      "t": 69.45,
+      "evt": "sent-clear"
+    },
+    {
+      "t": 75.5,
+      "evt": "after-slash-alive"
+    },
+    {
+      "t": 75.51,
+      "evt": "snapshot-after-2files"
+    },
+    {
+      "t": 75.51,
+      "evt": "sent-quit"
+    },
+    {
+      "t": 75.98,
+      "evt": "reap-exit0"
+    },
+    {
+      "t": 75.98,
+      "evt": "snapshot-after-exit-2files"
+    }
+  ]
+}

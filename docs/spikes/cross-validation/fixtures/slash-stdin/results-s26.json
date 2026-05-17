@@ -1,0 +1,89 @@
+{
+  "claude_version": "2.1.126",
+  "platform": "Linux ARM64 proot",
+  "plain_stdin": {
+    "runs": [
+      {
+        "cwd": "/tmp/spike-0.4-cwd-7l73jh5s",
+        "duration_s": 5.277,
+        "exit_code": 1,
+        "stdout_bytes": 0,
+        "stderr_bytes": 251,
+        "stderr": "Warning: no stdin data received in 3s, proceeding without it. If piping from a slow command, redirect stdin explicitly: < /dev/null to skip, or wait longer.\nError: Input must be provided either through stdin or as a prompt argument when using --print\n"
+      },
+      {
+        "cwd": "/tmp/spike-0.4-cwd-0wraww1n",
+        "duration_s": 6.597,
+        "exit_code": 1,
+        "stdout_bytes": 0,
+        "stderr_bytes": 251,
+        "stderr": "Warning: no stdin data received in 3s, proceeding without it. If piping from a slow command, redirect stdin explicitly: < /dev/null to skip, or wait longer.\nError: Input must be provided either through stdin or as a prompt argument when using --print\n"
+      },
+      {
+        "cwd": "/tmp/spike-0.4-cwd-cebspyh2",
+        "duration_s": 7.553,
+        "exit_code": 1,
+        "stdout_bytes": 0,
+        "stderr_bytes": 251,
+        "stderr": "Warning: no stdin data received in 3s, proceeding without it. If piping from a slow command, redirect stdin explicitly: < /dev/null to skip, or wait longer.\nError: Input must be provided either through stdin or as a prompt argument when using --print\n"
+      }
+    ],
+    "all_failed": true,
+    "duration_min_s": 5.277,
+    "duration_max_s": 7.553,
+    "all_have_print_error": true
+  },
+  "pty": {
+    "runs": [
+      {
+        "cwd": "/tmp/spike-0.4-cwd-7iy9i9sb",
+        "session_id": "6ba326df-561c-41a5-87d3-a48de90f0b22",
+        "duration_s": 18.899,
+        "exit_code": -1,
+        "stdout_bytes": 6024,
+        "t_quit_sent_s": 17.23,
+        "alive_after_quit_settle": true,
+        "farewell_in_output": null,
+        "resume_hint_in_output": false
+      },
+      {
+        "cwd": "/tmp/spike-0.4-cwd-foxi1g_s",
+        "session_id": "136d8101-f6fa-45b0-9eb0-858f9140e63c",
+        "duration_s": 18.781,
+        "exit_code": -1,
+        "stdout_bytes": 6042,
+        "t_quit_sent_s": 17.146,
+        "alive_after_quit_settle": true,
+        "farewell_in_output": null,
+        "resume_hint_in_output": false
+      },
+      {
+        "cwd": "/tmp/spike-0.4-cwd-4esz8cv0",
+        "session_id": "398fb0a7-6561-4722-bbc4-cc64e1f56822",
+        "duration_s": 18.963,
+        "exit_code": -1,
+        "stdout_bytes": 6042,
+        "t_quit_sent_s": 17.311,
+        "alive_after_quit_settle": true,
+        "farewell_in_output": null,
+        "resume_hint_in_output": false
+      }
+    ],
+    "any_clean_quit": false,
+    "any_farewell_captured": false,
+    "any_resume_hint": false
+  },
+  "print_mode_sanity": {
+    "duration_s": 7.895,
+    "exit_code": 0,
+    "stdout": "PRINT_OK",
+    "stderr": "",
+    "matches_expected": true
+  },
+  "verdict": {
+    "plain_stdin_blocked": true,
+    "pty_accepts_slash": false,
+    "print_mode_works": true,
+    "conclusion": "plain stdin gated to --print; PTY required for interactive slash commands"
+  }
+}

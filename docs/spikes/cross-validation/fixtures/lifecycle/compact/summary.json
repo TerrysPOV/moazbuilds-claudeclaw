@@ -1,0 +1,93 @@
+{
+  "cmd": "compact",
+  "session_id": "5f3a8b16-d100-4370-aa45-bd0efdbf1728",
+  "cwd": "/tmp/spike-0.5-compact-yb1ha97r",
+  "claude_version": "2.1.126",
+  "platform": "Linux ARM64 proot",
+  "exit_code": 0,
+  "files_before": [
+    "5f3a8b16-d100-4370-aa45-bd0efdbf1728.jsonl"
+  ],
+  "files_after": [
+    "5f3a8b16-d100-4370-aa45-bd0efdbf1728.jsonl"
+  ],
+  "files_after_exit": [
+    "5f3a8b16-d100-4370-aa45-bd0efdbf1728.jsonl"
+  ],
+  "new_files_appeared": [],
+  "primary_lines_before": 9,
+  "primary_lines_after": 20,
+  "primary_lines_added": 11,
+  "analysis_after": {
+    "types": {
+      "permission-mode": 2,
+      "file-history-snapshot": 3,
+      "user": 6,
+      "attachment": 3,
+      "ai-title": 2,
+      "assistant": 1,
+      "system": 2,
+      "last-prompt": 1
+    },
+    "system_subtypes": {
+      "turn_duration": 1,
+      "local_command": 1
+    },
+    "command_envelopes": [
+      "/compact",
+      "/exit",
+      "stdout: See ya!"
+    ]
+  },
+  "analysis_new_files": {},
+  "timeline": [
+    {
+      "t": 0.0,
+      "evt": "spawn"
+    },
+    {
+      "t": 9.01,
+      "evt": "enter-blasts-sent"
+    },
+    {
+      "t": 24.4,
+      "evt": "after-spawn-alive"
+    },
+    {
+      "t": 24.4,
+      "evt": "sent-prompt"
+    },
+    {
+      "t": 69.65,
+      "evt": "after-prompt"
+    },
+    {
+      "t": 69.65,
+      "evt": "snapshot-before-1files"
+    },
+    {
+      "t": 69.65,
+      "evt": "sent-compact"
+    },
+    {
+      "t": 75.73,
+      "evt": "after-slash-alive"
+    },
+    {
+      "t": 75.73,
+      "evt": "snapshot-after-1files"
+    },
+    {
+      "t": 75.73,
+      "evt": "sent-quit"
+    },
+    {
+      "t": 76.07,
+      "evt": "reap-exit0"
+    },
+    {
+      "t": 76.07,
+      "evt": "snapshot-after-exit-1files"
+    }
+  ]
+}
