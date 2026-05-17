@@ -73,15 +73,53 @@ export interface McpHttpHandlerOpts {
  *  would OOM the daemon. */
 const MAX_BODY_BYTES = 1_048_576; // 1 MiB
 
-/** Helper: read raw body bytes once. Phase D #2 (security): enforce a
- *  hard byte cap so a malicious or buggy client can't OOM the daemon
- *  with a multi-GB JSON POST. */
+/**
+ * Maximum body size we'll clone + JSON.parse for the audit-log peek
+ * (#72 item 11). Above this threshold we skip the peek entirely — the
+ * `rpc_method` audit field becomes undefined for that request, which
+ * is forensic-only (the auth + rate-limit + per-bucket dispatch paths
+ * are unaffected). Saves a full body duplicate + JSON-parse for tool
+ * calls with large arguments (file contents, image attachments, etc).
+ *
+ * 4KB is comfortably above the size of the JSON-RPC envelope for any
+ * realistic call (method names + ids + small args). Tool calls with
+ * non-trivial inputs cross this threshold quickly — those are the
+ * exact cases where the clone+parse matters for peak-memory pressure.
+ */
+const PEEK_MAX_BYTES = 4096;
+
+/**
+ * Helper: read JSON body for the audit-log peek. The SDK transport
+ * reparses the body itself from the original Request — this helper
+ * exists only so the audit path can grab `rpc_method` without
+ * consuming the body stream.
+ *
+ * Skip path (#72 item 11): when the declared `Content-Length` exceeds
+ * `PEEK_MAX_BYTES`, return `undefined` immediately. We avoid:
+ *   - `req.clone()` (full body duplication in memory)
+ *   - `cloned.json()` (a second JSON.parse pass over the same bytes
+ *     the SDK transport will already parse)
+ *
+ * The audit row for that request will carry `rpc_method: undefined`,
+ * which is fine — operators reading the audit log can still see the
+ * server name, ptyId, timestamp, etc. The bulk of multiplexer traffic
+ * (tool listings, small dispatches) is well under 4KB and continues
+ * to get the peek.
+ */
 async function _readBody(req: Request): Promise<unknown> {
-  // The SDK transport parses JSON itself from the Request — we just pass
-  // the raw Request through. This helper exists so the auth path can
-  // peek without consuming the body stream.
   const ct = req.headers.get("content-type") ?? "";
   if (!ct.toLowerCase().includes("json")) return undefined;
+  // Skip the clone+parse when the body is big enough to materially
+  // matter for peak memory. Without a declared Content-Length we
+  // can't cheaply size-check, so we fall through to the clone path
+  // — _enforceBodyCap already capped the absolute size at 1 MiB.
+  const declared = req.headers.get("content-length");
+  if (declared !== null) {
+    const n = Number(declared);
+    if (Number.isFinite(n) && n > PEEK_MAX_BYTES) {
+      return undefined;
+    }
+  }
   try {
     const cloned = req.clone();
     return await cloned.json();

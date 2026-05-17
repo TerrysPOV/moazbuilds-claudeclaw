@@ -559,3 +559,155 @@ describe("McpHttpHandler — multiplexer_invoke audit carries X-Claudeclaw-Ts (#
     revokeIdentity("suzy");
   });
 });
+
+// #72 item 11: skip the body-peek clone when the request body exceeds
+// PEEK_MAX_BYTES (4 KiB). Saves a full body duplicate + JSON-parse pass
+// for tool calls with large arguments (file contents, image attachments,
+// etc). The `rpc_method` audit field becomes undefined for those calls
+// — forensic-only loss, no security/correctness impact.
+describe("McpHttpHandler — body-peek threshold for audit (#72 item 11)", () => {
+  let proc: McpServerProcess | null = null;
+  let handler: McpHttpHandler | null = null;
+
+  beforeEach(async () => {
+    _resetIdentityStore();
+    proc = new McpServerProcess("test", makeServerConfig());
+    await proc.start();
+    handler = new McpHttpHandler({ serverName: "test", proc: proc! });
+  });
+
+  afterEach(async () => {
+    if (handler) await handler.stop();
+    if (proc) await proc.stop();
+    proc = null;
+    handler = null;
+    _resetIdentityStore();
+    _resetMcpBridge();
+  });
+
+  function captureAudits(events: Array<{ name: string; payload: Record<string, unknown> }>) {
+    _setMcpBridge({
+      audit: (name: string, payload: Record<string, unknown>) => {
+        events.push({ name, payload });
+      },
+      registerPluginTool: () => {},
+      unregisterPluginTool: () => {},
+      listTools: () => [],
+      invoke: async () => {
+        throw new Error("not in test");
+      },
+      // biome-ignore lint/suspicious/noExplicitAny: minimal test bridge
+    } as any);
+  }
+
+  /** Build a Request with an explicit content-length so the peek logic
+   *  can short-circuit. The body JSON is constructed to be roughly
+   *  `targetSize` bytes (close enough for the 4 KiB threshold). */
+  function bigRpcRequest(targetBodyBytes: number, headers: Record<string, string>): Request {
+    // The method field is what _peekRpcMethod would extract — fill the
+    // rest with padding to push past PEEK_MAX_BYTES.
+    const padding = "x".repeat(Math.max(0, targetBodyBytes - 80));
+    const body = JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/list",
+      params: { padding },
+    });
+    return new Request("http://127.0.0.1:4632/mcp/test", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        "content-length": String(body.length),
+        ...headers,
+      },
+      body,
+    });
+  }
+
+  it("includes rpc_method in audit when body is below the peek threshold", async () => {
+    const id = issueIdentity("suzy");
+    const events: Array<{ name: string; payload: Record<string, unknown> }> = [];
+    captureAudits(events);
+
+    // Default small request (~80 bytes JSON) — well under 4 KiB.
+    await handler!.handle(
+      rpcRequest(
+        { jsonrpc: "2.0", id: 1, method: "tools/list" },
+        { [PTY_ID_HEADER]: "suzy", [AUTH_HEADER]: id.headers[AUTH_HEADER] },
+      ),
+    );
+
+    const invoke = events.find((e) => e.name === "multiplexer_invoke");
+    expect(invoke).toBeDefined();
+    expect(invoke!.payload.rpc_method).toBe("tools/list");
+    revokeIdentity("suzy");
+  });
+
+  it("omits rpc_method (sets to undefined) when body exceeds PEEK_MAX_BYTES", async () => {
+    const id = issueIdentity("suzy");
+    const events: Array<{ name: string; payload: Record<string, unknown> }> = [];
+    captureAudits(events);
+
+    // 8 KiB body — comfortably above the 4 KiB peek threshold.
+    await handler!.handle(
+      bigRpcRequest(8192, {
+        [PTY_ID_HEADER]: "suzy",
+        [AUTH_HEADER]: id.headers[AUTH_HEADER],
+      }),
+    );
+
+    const invoke = events.find((e) => e.name === "multiplexer_invoke");
+    expect(invoke).toBeDefined();
+    // The clone+parse path was skipped → no method extracted.
+    expect(invoke!.payload.rpc_method).toBeUndefined();
+    // Everything else still recorded — server, pty_id, stateless,
+    // client_ts (when present) are all available without the body peek.
+    expect(invoke!.payload.server).toBe("test");
+    expect(invoke!.payload.pty_id).toBe("suzy");
+    revokeIdentity("suzy");
+  });
+
+  it("still includes rpc_method when content-length declared is just under threshold", async () => {
+    const id = issueIdentity("suzy");
+    const events: Array<{ name: string; payload: Record<string, unknown> }> = [];
+    captureAudits(events);
+
+    // 3 KiB body — under the 4 KiB cap, so the peek runs.
+    await handler!.handle(
+      bigRpcRequest(3000, {
+        [PTY_ID_HEADER]: "suzy",
+        [AUTH_HEADER]: id.headers[AUTH_HEADER],
+      }),
+    );
+
+    const invoke = events.find((e) => e.name === "multiplexer_invoke");
+    expect(invoke).toBeDefined();
+    expect(invoke!.payload.rpc_method).toBe("tools/list");
+    revokeIdentity("suzy");
+  });
+
+  it("the peek skip does not affect the audit fire path (only rpc_method is dropped)", async () => {
+    const id = issueIdentity("suzy");
+    const events: Array<{ name: string; payload: Record<string, unknown> }> = [];
+    captureAudits(events);
+
+    // 8 KiB body — peek will be skipped, but the rest of the dispatch
+    // path must continue normally. The `multiplexer_invoke` audit still
+    // fires (auth + rate-limit + bucket-init all reached); only
+    // `rpc_method` is absent.
+    await handler!.handle(
+      bigRpcRequest(8192, {
+        [PTY_ID_HEADER]: "suzy",
+        [AUTH_HEADER]: id.headers[AUTH_HEADER],
+      }),
+    );
+
+    const invoke = events.find((e) => e.name === "multiplexer_invoke");
+    expect(invoke).toBeDefined();
+    expect(invoke!.payload.server).toBe("test");
+    expect(invoke!.payload.pty_id).toBe("suzy");
+    expect(invoke!.payload.rpc_method).toBeUndefined();
+    revokeIdentity("suzy");
+  });
+});
