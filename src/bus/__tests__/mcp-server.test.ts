@@ -307,21 +307,15 @@ describe("BusMcpServer — outbound tools", () => {
     expect(reqHuman.type).toBe("request_human");
     if (reqHuman.type !== "request_human") throw new Error("type narrowing");
     expect(reqHuman.question).toBe("approve deploy?");
-
-    // The model knows the ask_id from the pending map; we look it up directly
-    // since request_human's correlation token isn't returned on the wire yet.
-    // The implementation reuses the ask-answer pipeline keyed by the internal
-    // askId — the only one outstanding here.
-    const pendingIds = Array.from(
-      (h.bus as unknown as { pendingAnswers: Map<string, unknown> }).pendingAnswers.keys(),
-    );
-    expect(pendingIds.length).toBe(1);
-    const askId = take(pendingIds[0], "pending ask id");
+    // ask_id is now carried on the wire (Codex P1 fix on PR #110) — adapter
+    // echoes it back on IpcAskAnswer for correlation.
+    expect(typeof reqHuman.ask_id).toBe("string");
+    expect(reqHuman.ask_id.length).toBeGreaterThan(0);
 
     h.ipc.push({
       type: "ask_answer",
       agent_id: "agent-tools",
-      ask_id: askId,
+      ask_id: reqHuman.ask_id,
       answer: "yes",
     });
 

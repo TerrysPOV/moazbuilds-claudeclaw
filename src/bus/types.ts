@@ -225,6 +225,16 @@ export interface IpcCancel {
 export interface IpcRequestHuman {
   type: "request_human";
   agent_id: string;
+  /**
+   * Correlation id for the eventual `IpcAskAnswer` carrying the human's
+   * reply. The MCP server allocates this when the tool is invoked; the
+   * adapter MUST echo the same value in its `IpcAskAnswer` so the MCP
+   * server can resolve the blocking tool-call promise.
+   *
+   * Without this id, `request_human` calls block indefinitely (Codex P1
+   * on PR #110 — Sprint 1 fix-up).
+   */
+  ask_id: string;
   question: string;
 }
 

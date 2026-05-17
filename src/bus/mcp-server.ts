@@ -125,7 +125,16 @@ function openSocketTransport(opts: SocketOpts): Promise<IpcTransport> {
     const sock: Socket = connect(opts as Parameters<typeof connect>[0]);
     sock.once("error", reject);
     sock.once("connect", () => {
+      // Replace the connect-time `reject` handler with a post-connect handler
+      // that surfaces socket errors instead of letting them become unhandled
+      // 'error' events that crash the plugin process. Codex P1 on PR #110:
+      // after the connect listener removed the only error handler, an
+      // emitted socket error (Bus core restart, UDS unlinked, peer reset)
+      // would propagate unhandled and tear the process down.
       sock.removeListener("error", reject);
+      sock.on("error", (err) => {
+        process.stderr.write(`Bus MCP: IPC socket error: ${String(err)}\n`);
+      });
       resolve(wrapSocket(sock));
     });
   });
@@ -473,6 +482,11 @@ export class BusMcpServer {
     // Reuse the ask-answer pipeline — request_human is structurally `ask`
     // with blocking semantics (the tool call awaits the promise instead of
     // returning the id immediately).
+    //
+    // The same `ask_id` MUST flow out on the IpcRequestHuman so the adapter
+    // knows which id to echo on its IpcAskAnswer. Without it the answer
+    // pipeline can't route back here and the tool call blocks forever
+    // (Codex P1 on PR #110).
     const askId = randomUUID();
     const answerPromise = new Promise<string>((resolve) => {
       this.pendingAnswers.set(askId, { blocking: true, resolve });
@@ -480,15 +494,10 @@ export class BusMcpServer {
     const ipcMsg: IpcRequestHuman = {
       type: "request_human",
       agent_id: this.agentId,
+      ask_id: askId,
       question: args.question,
     };
     this.ipc.send(ipcMsg);
-    // Piggyback on the IpcAskAnswer plumbing using the local askId as the
-    // correlation key. Bus core, when answering a request_human, emits
-    // IpcAskAnswer carrying this id (mirrors the ask flow).
-    // TODO(Sprint 3): coordinate with adapter side on the wire-level
-    // request_human → ask_answer correlation token if Bus core decides to
-    // model request_human separately.
     const answer = await answerPromise;
     return {
       content: [{ type: "text", text: answer }],
