@@ -209,7 +209,7 @@ Both capabilities are mandatory (validated empirically in Spike 0.1 against aero
 
 **Inbound (from Plus Bus core → Claude session):**
 - The Bus core sends a prompt to the MCP server via UDS: `{type: 'prompt', text, origin: 'discord|telegram|slack|webui|cli', origin_id, agent_id}`.
-- The MCP server emits `notifications/claude/channel` with `params: {channel_id: 'plus-bus', payload: { text, metadata: { origin, origin_id } }}`.
+- The MCP server emits `notifications/claude/channel` with `params: {content: <prompt text>, meta: {origin, origin_id, ...}}`. **The shape is flat — `content` and `meta` at the top of `params`** — empirically the only shape `claude 2.1.x` will accept (Sprint 1 integration finding, validated against aerolalit's reference plugin). Earlier drafts of this spec described a nested `{channel_id, payload: {text, metadata}}` shape; that was speculation that would be rejected by claude at parse time.
 - Claude Code receives the notification and treats it as a new turn in the conversation.
 
 **Outbound (from Claude → Plus Bus core):**
