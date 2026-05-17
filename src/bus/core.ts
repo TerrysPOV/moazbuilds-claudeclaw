@@ -118,6 +118,8 @@ export interface BusCore {
   ingestReply(req: IngestReplyRequest): void;
   ingestSessionEvent(e: BusEvent): void;
   ingestPermissionDecision(req: IngestPermissionDecisionRequest): void;
+  /** Sprint 2 (Sprint 1 follow-up): adapter API for `ask` / `request_human` answers. */
+  ingestAskAnswer(req: { agent_id: string; ask_id: string; answer: string }): void;
   state(): BusState;
   /** Sprint 1 helper: start the IPC server (idempotent). */
   start(): Promise<void>;
@@ -299,6 +301,31 @@ export class BusCoreImpl implements BusCore {
         type: "permission_response",
         agent_id: req.agent_id,
         response: { request_id: req.request_id, behavior: req.behavior },
+      });
+    }
+  }
+
+  /**
+   * Adapter-facing API for delivering an answer to a previously-issued
+   * `ask` or `request_human` tool call. The MCP server allocates the
+   * `ask_id` and emits the question outward as a `system.ask_request` or
+   * `system.request_human` BusEvent (the latter carries `ask_id` per the
+   * Codex P1 fix). Adapters collect the human's reply and call this
+   * method to route it back; Bus core sends `IpcAskAnswer` over the IPC
+   * channel and the MCP server's pendingAnswers map resolves the
+   * outstanding tool-call promise.
+   *
+   * Sprint 1 deferred this API (no adapters needed it yet). Sprint 2
+   * adds it ahead of Sprint 3 surface work so the Web UI adapter
+   * (and Discord/Telegram in Sprint 3) can wire it up immediately.
+   */
+  ingestAskAnswer(req: { agent_id: string; ask_id: string; answer: string }): void {
+    if (this.ipcServer) {
+      this.ipcServer.send(req.agent_id, {
+        type: "ask_answer",
+        agent_id: req.agent_id,
+        ask_id: req.ask_id,
+        answer: req.answer,
       });
     }
   }
