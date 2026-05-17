@@ -1,0 +1,500 @@
+/**
+ * Telegram Bot adapter (Sprint 3 Agent B). Spec §5.5.2; coordination
+ * `src/bus/SPRINT_3_PLAN.md`. Mirrors `src/commands/telegram.ts` (legacy
+ * PTY listener) but speaks only to `BusCore`. The legacy file stays;
+ * Sprint 5 flips `runtime: bus` and retires it. Out of scope: file-bytes
+ * upload pipeline (file_ids only); Markdown polish (plain text only).
+ */
+
+import type { BusCore, Subscription } from "../../bus/core";
+import type { BusEvent, PermissionRequest } from "../../bus/types";
+import { createTelegramApi } from "./api";
+import { extractReactionDirectives } from "./directives";
+import { buildPromptMetadata } from "./metadata";
+import type {
+  TelegramApi,
+  TelegramCallbackQuery,
+  TelegramInlineKeyboardButton,
+  TelegramMessage,
+  TelegramUpdate,
+} from "./types";
+
+export interface TelegramAdapterOptions {
+  bus: BusCore;
+  /** Bot token (`123:abc…`). Used for the default HTTP API client. */
+  token: string;
+  /**
+   * Numeric user IDs allowed to talk to the bot. Empty list rejects all —
+   * explicit allow-listing is a precondition under the Bus runtime.
+   */
+  allowedUserIds: number[];
+  /** chat-id → agent_id routing. `defaultAgentId` covers fall-through. */
+  routing: {
+    chats: Record<string, string>;
+    defaultAgentId?: string;
+  };
+  /** Poll interval ms between successive `getUpdates` calls. Default 1000. */
+  pollIntervalMs?: number;
+  /** Override the API client (tests inject a fake). */
+  api?: TelegramApi;
+  /** Optional structured logger; defaults to `console`. */
+  logger?: Pick<Console, "warn" | "info" | "error">;
+}
+
+/**
+ * Per-agent target context. `[react:<emoji>]` UX needs the originating
+ * message id, so we hold the last inbound per agent. One slot per agent
+ * is enough for Sprint 3's single-user-bot pattern.
+ */
+interface PendingPrompt {
+  chat_id: number;
+  /** Telegram message id of the inbound user message — reaction target. */
+  source_message_id: number;
+  /** Optional forum-topic thread id, propagated to outbound sends. */
+  message_thread_id?: number;
+}
+
+/** In-flight `system.request_human` correlation; next chat reply answers it. */
+interface PendingHumanAsk {
+  ask_id: string;
+  agent_id: string;
+}
+
+export class TelegramAdapter {
+  private readonly bus: BusCore;
+  private readonly api: TelegramApi;
+  private readonly allowedUserIds: ReadonlySet<number>;
+  private readonly routingChats: Record<string, string>;
+  private readonly defaultAgentId: string | undefined;
+  private readonly pollIntervalMs: number;
+  private readonly logger: Pick<Console, "warn" | "info" | "error">;
+
+  /** getUpdates offset cursor — bumped past the highest processed update_id. */
+  private nextOffset = 0;
+  /** Generation counter — bumped by `stop()` to abort the long-poll loop. */
+  private generation = 0;
+  private running = false;
+  /** AbortController for the in-flight `getUpdates` call. */
+  private inflightAbort: AbortController | null = null;
+
+  /** Live subscriptions keyed by agent_id. Cleaned up by `stop()`. */
+  private readonly subscriptions = new Map<string, Subscription[]>();
+
+  /** Last inbound per agent — target for outbound + reaction message id. */
+  private readonly lastChatPerAgent = new Map<string, PendingPrompt>();
+  /** request_id → context; callback_query routes back to `ingestPermissionDecision`. */
+  private readonly pendingPermissions = new Map<string, { agent_id: string; chat_id: number }>();
+  /** chat_id → pending ask. The next plain-text reply resolves it. */
+  private readonly pendingHumanAsks = new Map<number, PendingHumanAsk>();
+
+  /** Loop promise so `stop()` can await graceful exit. */
+  private loopPromise: Promise<void> | null = null;
+
+  constructor(opts: TelegramAdapterOptions) {
+    if (!opts.bus) throw new Error("TelegramAdapter: `bus` is required");
+    if (!opts.token) throw new Error("TelegramAdapter: `token` is required");
+    if (!opts.routing) throw new Error("TelegramAdapter: `routing` is required");
+
+    this.bus = opts.bus;
+    this.api = opts.api ?? createTelegramApi(opts.token);
+    this.allowedUserIds = new Set(opts.allowedUserIds);
+    this.routingChats = { ...opts.routing.chats };
+    this.defaultAgentId = opts.routing.defaultAgentId;
+    this.pollIntervalMs = opts.pollIntervalMs ?? 1000;
+    this.logger = opts.logger ?? console;
+  }
+
+  async start(): Promise<void> {
+    if (this.running) return;
+    this.running = true;
+    this.generation += 1;
+
+    // Subscribe for every routed agent + the default, so fallback-only
+    // agents still receive `response.text`.
+    const agentIds = new Set<string>(Object.values(this.routingChats));
+    if (this.defaultAgentId) agentIds.add(this.defaultAgentId);
+    for (const agentId of agentIds) {
+      this.subscribeForAgent(agentId);
+    }
+
+    const gen = this.generation;
+    this.loopPromise = this.pollLoop(gen).catch((err) => {
+      this.logger.error("[telegram-adapter] poll loop crashed", err);
+    });
+  }
+
+  async stop(): Promise<void> {
+    if (!this.running) return;
+    this.running = false;
+    this.generation += 1; // signal the loop to exit on next iteration
+
+    // Abort the long-poll so stop() returns promptly (legacy waits 30s).
+    if (this.inflightAbort) {
+      try {
+        this.inflightAbort.abort();
+      } catch {
+        // already aborted — fine.
+      }
+    }
+
+    for (const subs of this.subscriptions.values()) {
+      for (const sub of subs) {
+        try {
+          sub.close();
+        } catch (err) {
+          this.logger.error("[telegram-adapter] subscription.close failed", err);
+        }
+      }
+    }
+    this.subscriptions.clear();
+
+    if (this.loopPromise) {
+      try {
+        await this.loopPromise;
+      } catch (err) {
+        this.logger.error("[telegram-adapter] loop await failed", err);
+      }
+      this.loopPromise = null;
+    }
+  }
+
+  /**
+   * Long-poll loop — `getUpdates` → dispatch → repeat. Mirrors
+   * `src/commands/telegram.ts:2172-2218`. Generation token (instead of
+   * the legacy `running` boolean) cleanly aborts after rapid stop/start.
+   */
+  private async pollLoop(gen: number): Promise<void> {
+    while (this.running && this.generation === gen) {
+      const ac = new AbortController();
+      this.inflightAbort = ac;
+      try {
+        const data = await this.api.getUpdates(this.nextOffset, 30, ac.signal);
+        if (this.generation !== gen) break;
+        if (!data.ok) {
+          await this.sleep(this.pollIntervalMs);
+          continue;
+        }
+        for (const update of data.result) {
+          this.nextOffset = update.update_id + 1;
+          try {
+            await this.dispatchUpdate(update);
+          } catch (err) {
+            this.logger.error("[telegram-adapter] dispatch failed", err);
+          }
+        }
+      } catch (err) {
+        if (this.generation !== gen || !this.running) break;
+        if ((err as { name?: string })?.name === "AbortError") break;
+        this.logger.error("[telegram-adapter] getUpdates failed", err);
+        await this.sleep(this.pollIntervalMs);
+      } finally {
+        this.inflightAbort = null;
+      }
+    }
+  }
+
+  /** Fan out by update kind. Edited messages reuse the message path (parity). */
+  private async dispatchUpdate(update: TelegramUpdate): Promise<void> {
+    const message = update.message ?? update.edited_message;
+    if (message) {
+      await this.handleMessage(message);
+    }
+    if (update.callback_query) {
+      await this.handleCallbackQuery(update.callback_query);
+    }
+  }
+
+  private async handleMessage(message: TelegramMessage): Promise<void> {
+    const chatId = message.chat.id;
+    const userId = message.from?.id;
+
+    // Drop bot-to-bot echoes (legacy gating + spec allow-list semantics).
+    if (message.from?.is_bot) return;
+
+    // Allow-list. Named rejection in private chats; silent skip elsewhere.
+    const isPrivate = message.chat.type === "private";
+    if (userId === undefined || !this.allowedUserIds.has(userId)) {
+      if (isPrivate) {
+        await this.safeSendMessage({
+          chat_id: chatId,
+          text: "Unauthorized.",
+          message_thread_id: message.message_thread_id,
+        });
+      }
+      return;
+    }
+
+    const agentId = this.resolveAgent(chatId);
+    if (!agentId) return;
+
+    // Telegram puts captioned-photo text in `caption` — accept either.
+    const text = (message.text ?? message.caption ?? "").trim();
+    const metadata = buildPromptMetadata(message);
+
+    // Pending `request_human` for this chat? Route reply as ask_answer.
+    const pendingAsk = this.pendingHumanAsks.get(chatId);
+    if (pendingAsk && text.length > 0) {
+      this.pendingHumanAsks.delete(chatId);
+      this.bus.ingestAskAnswer({
+        agent_id: pendingAsk.agent_id,
+        ask_id: pendingAsk.ask_id,
+        answer: text,
+      });
+      return;
+    }
+
+    // Empty payload with no attachments — nothing to do.
+    const attachments = metadata.attachments as unknown[] | undefined;
+    if (text.length === 0 && (!attachments || attachments.length === 0)) {
+      return;
+    }
+
+    await this.bus.sendPrompt({
+      agent_id: agentId,
+      origin: "telegram",
+      origin_id: String(chatId),
+      user_id: String(userId),
+      text,
+      metadata,
+    });
+
+    const pending: PendingPrompt = {
+      chat_id: chatId,
+      source_message_id: message.message_id,
+      message_thread_id: message.message_thread_id,
+    };
+    this.lastChatPerAgent.set(agentId, pending);
+  }
+
+  /** Subscribe to the three §5.5.2 topics for `agentId` (response, perm, ask). */
+  private subscribeForAgent(agentId: string): void {
+    if (this.subscriptions.has(agentId)) return;
+    const subs: Subscription[] = [];
+    subs.push(
+      this.bus.subscribe(
+        { agent_id: agentId, topics: ["response.text"] },
+        (event) => void this.handleResponseText(agentId, event),
+      ),
+      this.bus.subscribe(
+        { agent_id: agentId, topics: ["channel.permission_request"] },
+        (event) => void this.handlePermissionRequest(agentId, event),
+      ),
+      this.bus.subscribe(
+        { agent_id: agentId, topics: ["system.request_human"] },
+        (event) => void this.handleRequestHuman(agentId, event),
+      ),
+    );
+    this.subscriptions.set(agentId, subs);
+  }
+
+  private async handleResponseText(agentId: string, event: BusEvent): Promise<void> {
+    const payload = event.payload as { text?: string };
+    const rawText = typeof payload?.text === "string" ? payload.text : "";
+    if (rawText.length === 0) return;
+
+    const target = this.targetForAgent(agentId);
+    if (!target) {
+      this.logger.warn(
+        `[telegram-adapter] no target chat for agent ${agentId}; dropping response.text`,
+      );
+      return;
+    }
+
+    const { cleanedText, emojis } = extractReactionDirectives(rawText);
+
+    if (cleanedText.length > 0) {
+      await this.safeSendMessage({
+        chat_id: target.chat_id,
+        text: cleanedText,
+        message_thread_id: target.message_thread_id,
+      });
+    }
+
+    // Reactions target the inbound user message (CLAUDE.md UX). No source
+    // message → nothing to react to.
+    if (emojis.length > 0 && target.source_message_id) {
+      for (const emoji of emojis) {
+        await this.safeSetReaction({
+          chat_id: target.chat_id,
+          message_id: target.source_message_id,
+          emoji,
+        });
+      }
+    }
+  }
+
+  private async handlePermissionRequest(agentId: string, event: BusEvent): Promise<void> {
+    const req = event.payload as PermissionRequest | undefined;
+    if (!req || typeof req.request_id !== "string") return;
+
+    const target = this.targetForAgent(agentId);
+    if (!target) {
+      this.logger.warn(
+        `[telegram-adapter] no target chat for permission_request on agent ${agentId}`,
+      );
+      return;
+    }
+
+    this.pendingPermissions.set(req.request_id, { agent_id: agentId, chat_id: target.chat_id });
+
+    const text = [
+      `🔒 *Permission request*`,
+      `Tool: ${req.tool_name}`,
+      req.description ? req.description : "",
+      req.input_preview ? `\n\`\`\`\n${req.input_preview}\n\`\`\`` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    // callback_data shape `perm:<allow|deny>:<request_id>` — legacy "type:id" pattern.
+    const keyboard: TelegramInlineKeyboardButton[][] = [
+      [
+        { text: "✅ Allow", callback_data: `perm:allow:${req.request_id}` },
+        { text: "❌ Deny", callback_data: `perm:deny:${req.request_id}` },
+      ],
+    ];
+
+    await this.safeSendMessage({
+      chat_id: target.chat_id,
+      text,
+      message_thread_id: target.message_thread_id,
+      reply_markup: { inline_keyboard: keyboard },
+    });
+  }
+
+  private async handleRequestHuman(agentId: string, event: BusEvent): Promise<void> {
+    const payload = event.payload as { ask_id?: string; question?: string };
+    if (typeof payload?.ask_id !== "string" || typeof payload?.question !== "string") {
+      return;
+    }
+    const target = this.targetForAgent(agentId);
+    if (!target) {
+      this.logger.warn(`[telegram-adapter] no target chat for request_human on agent ${agentId}`);
+      return;
+    }
+
+    // One pending ask per chat; newer supersedes older (spec §5.4 flow).
+    this.pendingHumanAsks.set(target.chat_id, { ask_id: payload.ask_id, agent_id: agentId });
+
+    await this.safeSendMessage({
+      chat_id: target.chat_id,
+      text: `🤔 ${payload.question}`,
+      message_thread_id: target.message_thread_id,
+    });
+  }
+
+  /**
+   * Handle `perm:<allow|deny>:<id>` (the only pattern this adapter emits).
+   * Legacy file's `btn:`, `pending:`, `sec_yes_` patterns are out of scope.
+   */
+  private async handleCallbackQuery(query: TelegramCallbackQuery): Promise<void> {
+    const data = query.data ?? "";
+    const userId = query.from?.id;
+    if (userId === undefined || !this.allowedUserIds.has(userId)) {
+      await this.safeAnswerCallback({
+        callback_query_id: query.id,
+        text: "Unauthorized.",
+      });
+      return;
+    }
+
+    const match = data.match(/^perm:(allow|deny):(.+)$/);
+    if (!match) {
+      // Unknown callback shape — ack so the spinner clears, then drop.
+      await this.safeAnswerCallback({ callback_query_id: query.id });
+      return;
+    }
+
+    const behavior = match[1] as "allow" | "deny";
+    const requestId = match[2];
+    if (!requestId) {
+      await this.safeAnswerCallback({ callback_query_id: query.id });
+      return;
+    }
+    const pending = this.pendingPermissions.get(requestId);
+    if (!pending) {
+      // Likely expired (daemon restart). Tell the user instead of silently
+      // dropping — they'd otherwise wait forever for the underlying tool.
+      await this.safeAnswerCallback({
+        callback_query_id: query.id,
+        text: "This permission request has expired.",
+      });
+      return;
+    }
+    this.pendingPermissions.delete(requestId);
+    this.bus.ingestPermissionDecision({
+      agent_id: pending.agent_id,
+      request_id: requestId,
+      behavior,
+    });
+    await this.safeAnswerCallback({
+      callback_query_id: query.id,
+      text: behavior === "allow" ? "✅ Allowed" : "❌ Denied",
+    });
+  }
+
+  private resolveAgent(chatId: number): string | undefined {
+    const explicit = this.routingChats[String(chatId)];
+    if (explicit) return explicit;
+    return this.defaultAgentId;
+  }
+
+  /**
+   * Pick an outbound chat for the agent. Prefers the last inbound (so
+   * replies thread back); falls back to the first chat routed to the
+   * agent so spontaneous events (cron, background tools) still reach
+   * a surface.
+   */
+  private targetForAgent(agentId: string): PendingPrompt | null {
+    const last = this.lastChatPerAgent.get(agentId);
+    if (last) return last;
+    for (const [chatIdStr, mappedAgent] of Object.entries(this.routingChats)) {
+      if (mappedAgent === agentId) {
+        const chatId = Number(chatIdStr);
+        if (Number.isFinite(chatId)) {
+          return { chat_id: chatId, source_message_id: 0 };
+        }
+      }
+    }
+    return null;
+  }
+
+  /** Best-effort API call — any throw is logged, never propagated. */
+  private async safe(label: string, fn: () => Promise<unknown>): Promise<void> {
+    try {
+      await fn();
+    } catch (err) {
+      this.logger.error(`[telegram-adapter] ${label} failed`, err);
+    }
+  }
+
+  private safeSendMessage(params: {
+    chat_id: number;
+    text: string;
+    message_thread_id?: number;
+    reply_markup?: { inline_keyboard: TelegramInlineKeyboardButton[][] };
+  }): Promise<void> {
+    return this.safe("sendMessage", () => this.api.sendMessage(params));
+  }
+
+  private safeSetReaction(params: {
+    chat_id: number;
+    message_id: number;
+    emoji: string;
+  }): Promise<void> {
+    return this.safe("setMessageReaction", () => this.api.setMessageReaction(params));
+  }
+
+  private safeAnswerCallback(params: { callback_query_id: string; text?: string }): Promise<void> {
+    return this.safe("answerCallbackQuery", () => this.api.answerCallbackQuery(params));
+  }
+
+  private async sleep(ms: number): Promise<void> {
+    if (ms <= 0) return;
+    await new Promise<void>((resolve) => setTimeout(resolve, ms));
+  }
+}
+
+// Re-exports so test files don't need to dig through the helper modules.
+export { extractReactionDirectives } from "./directives";
+export type { TelegramApi } from "./types";
