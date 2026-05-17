@@ -235,11 +235,9 @@ export class McpMultiplexerPlugin {
       console.error(
         `[mcp-multiplexer] dormant — gateway host '${settings.webHost}' is non-loopback; refusing to expose MCP routes externally.`,
       );
-      try {
-        getMcpBridge().audit("multiplexer_refused_non_loopback", {
-          host: settings.webHost,
-        });
-      } catch {}
+      getMcpBridge().audit("multiplexer_refused_non_loopback", {
+        host: settings.webHost,
+      });
       return;
     }
 
@@ -247,17 +245,13 @@ export class McpMultiplexerPlugin {
       console.error(
         "[mcp-multiplexer] dormant — settings.web.enabled is false; multiplexer requires the HTTP gateway.",
       );
-      try {
-        getMcpBridge().audit("multiplexer_dormant_web_disabled", {});
-      } catch {}
+      getMcpBridge().audit("multiplexer_dormant_web_disabled", {});
       return;
     }
 
     if (settings.shared.length === 0) {
       console.error("[mcp-multiplexer] dormant — settings.mcp.shared is empty.");
-      try {
-        getMcpBridge().audit("multiplexer_dormant_empty_shared", {});
-      } catch {}
+      getMcpBridge().audit("multiplexer_dormant_empty_shared", {});
       return;
     }
 
@@ -276,9 +270,7 @@ export class McpMultiplexerPlugin {
       console.error(
         `[mcp-multiplexer] dormant — could not load ${this.configPath}; no shared servers will be spawned.`,
       );
-      try {
-        getMcpBridge().audit("multiplexer_no_config", { path: this.configPath });
-      } catch {}
+      getMcpBridge().audit("multiplexer_no_config", { path: this.configPath });
       // Clear the cache we set above so isActive() + bridgeBaseUrl() are
       // consistent ("plugin is not running" → "URL is default placeholder").
       this.cachedSharedNames = [];
@@ -364,13 +356,11 @@ export class McpMultiplexerPlugin {
           console.error(
             `[mcp-multiplexer] spawned ${name} pid ${this._pidOf(proc)} — ${proc.tools.length} tools`,
           );
-          try {
-            getMcpBridge().audit("multiplexer_server_ready", {
-              server: name,
-              stateless: settings.stateless.includes(name),
-              tools: proc.tools.length,
-            });
-          } catch {}
+          getMcpBridge().audit("multiplexer_server_ready", {
+            server: name,
+            stateless: settings.stateless.includes(name),
+            tools: proc.tools.length,
+          });
         } catch (err) {
           console.error(
             `[mcp-multiplexer] failed to start '${name}': ${
@@ -539,12 +529,10 @@ export class McpMultiplexerPlugin {
         `colliding entries from ${this.userMcpJsonPath} to avoid duplicate ` +
         `child processes per PTY.`,
     );
-    try {
-      getMcpBridge().audit("multiplexer_user_mcp_collision", {
-        path: this.userMcpJsonPath,
-        collisions,
-      });
-    } catch {}
+    getMcpBridge().audit("multiplexer_user_mcp_collision", {
+      path: this.userMcpJsonPath,
+      collisions,
+    });
   }
 
   // ── Session-map persistence ─────────────────────────────────────────
@@ -710,14 +698,12 @@ export class McpMultiplexerPlugin {
       const uptimeS = proc.startedAt
         ? Math.floor((Date.now() - proc.startedAt.getTime()) / 1000)
         : null;
-      try {
-        getMcpBridge().audit(degraded ? "mcp_health_degraded" : "mcp_health_transition", {
-          server: name,
-          previous_status: prev ?? "unknown",
-          current_status: curr,
-          uptime_s: uptimeS,
-        });
-      } catch {}
+      getMcpBridge().audit(degraded ? "mcp_health_degraded" : "mcp_health_transition", {
+        server: name,
+        previous_status: prev ?? "unknown",
+        current_status: curr,
+        uptime_s: uptimeS,
+      });
       const line = `[mcp-multiplexer] HEALTH ${name}: ${prev ?? "unknown"} → ${curr}${degraded ? " (DEGRADED)" : ""}`;
       if (degraded) console.warn(line);
       else console.log(line);
@@ -763,12 +749,10 @@ export class McpMultiplexerPlugin {
 
   issueIdentity(ptyId: string): PtyIdentity {
     const id = _issueIdentity(ptyId);
-    try {
-      getMcpBridge().audit("multiplexer_identity_issued", {
-        pty_id: ptyId,
-        issued_at: id.issuedAt,
-      });
-    } catch {}
+    getMcpBridge().audit("multiplexer_identity_issued", {
+      pty_id: ptyId,
+      issued_at: id.issuedAt,
+    });
     return id;
   }
 
@@ -776,9 +760,7 @@ export class McpMultiplexerPlugin {
     const removed = _revokeIdentity(ptyId);
     await Promise.allSettled([...this.handlers.values()].map((h) => h.releasePty(ptyId)));
     if (removed) {
-      try {
-        getMcpBridge().audit("multiplexer_identity_released", { pty_id: ptyId });
-      } catch {}
+      getMcpBridge().audit("multiplexer_identity_released", { pty_id: ptyId });
     }
   }
 
@@ -831,13 +813,11 @@ export class McpMultiplexerPlugin {
     //                              loop is still running)
     if (status === "failed") {
       console.error(`[mcp-multiplexer] server '${name}' permanently failed: ${reason}`);
-      try {
-        getMcpBridge().audit("multiplexer_server_permanently_failed", {
-          server: name,
-          reason,
-          status,
-        });
-      } catch {}
+      getMcpBridge().audit("multiplexer_server_permanently_failed", {
+        server: name,
+        reason,
+        status,
+      });
       // #72 item 6: align the health-probe view with what we just
       // audited so the next `_sampleHealth` tick doesn't re-fire
       // `mcp_health_degraded` for the same incident.
@@ -845,13 +825,11 @@ export class McpMultiplexerPlugin {
       return;
     }
     console.error(`[mcp-multiplexer] server '${name}' crashed: ${reason} — status: ${status}`);
-    try {
-      getMcpBridge().audit("multiplexer_server_crashed", {
-        server: name,
-        reason,
-        status,
-      });
-    } catch {}
+    getMcpBridge().audit("multiplexer_server_crashed", {
+      server: name,
+      reason,
+      status,
+    });
     // #72 item 6: same dedup gate as the permanently-failed branch
     // above — sync `lastObservedStatus` so the next probe tick treats
     // this incident as already-audited and only fires on a subsequent

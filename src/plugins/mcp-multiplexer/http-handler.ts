@@ -233,12 +233,10 @@ export class McpHttpHandler {
     }
     if (!bearer || !verifyBearer(ptyId, bearer)) {
       // Audit, but only the failure event — do not log the bearer itself.
-      try {
-        getMcpBridge().audit("multiplexer_auth_rejected", {
-          server: this.serverName,
-          pty_id: ptyId,
-        });
-      } catch {}
+      getMcpBridge().audit("multiplexer_auth_rejected", {
+        server: this.serverName,
+        pty_id: ptyId,
+      });
       return _errResponse(401, "invalid_bearer", "HMAC verification failed");
     }
 
@@ -247,15 +245,13 @@ export class McpHttpHandler {
     // even before the issuing PTY respawns and rotates the secret.
     const rl = this._checkRateLimit(ptyId);
     if (rl.rejected) {
-      try {
-        getMcpBridge().audit("multiplexer_rate_limited", {
-          server: this.serverName,
-          pty_id: ptyId,
-          max_per_window: this._rlMax,
-          window_ms: this._rlWindowMs,
-          retry_after_sec: rl.retryAfterSec,
-        });
-      } catch {}
+      getMcpBridge().audit("multiplexer_rate_limited", {
+        server: this.serverName,
+        pty_id: ptyId,
+        max_per_window: this._rlMax,
+        window_ms: this._rlWindowMs,
+        retry_after_sec: rl.retryAfterSec,
+      });
       return new Response(
         JSON.stringify({
           error: "rate_limited",
@@ -320,15 +316,13 @@ export class McpHttpHandler {
     const tsRaw = safeReq.headers.get(PTY_TS_HEADER);
     const tsNum = tsRaw != null && /^\d+$/.test(tsRaw) ? Number(tsRaw) : null;
 
-    try {
-      getMcpBridge().audit("multiplexer_invoke", {
-        server: this.serverName,
-        pty_id: ptyId,
-        stateless: this.stateless,
-        rpc_method: _peekRpcMethod(peek),
-        client_ts: tsNum,
-      });
-    } catch {}
+    getMcpBridge().audit("multiplexer_invoke", {
+      server: this.serverName,
+      pty_id: ptyId,
+      stateless: this.stateless,
+      rpc_method: _peekRpcMethod(peek),
+      client_ts: tsNum,
+    });
 
     // Hand off to the SDK transport. It will read the body, dispatch
     // to the registered handlers on the SDK Server, and return a
@@ -502,13 +496,11 @@ export class McpHttpHandler {
     sdkServer.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { name, arguments: args } = request.params;
       if (!allowedNames.has(name)) {
-        try {
-          getMcpBridge().audit("multiplexer_tool_rejected", {
-            server: this.serverName,
-            tool: name,
-            reason: "not_in_allowed_set",
-          });
-        } catch {}
+        getMcpBridge().audit("multiplexer_tool_rejected", {
+          server: this.serverName,
+          tool: name,
+          reason: "not_in_allowed_set",
+        });
         return {
           content: [
             {

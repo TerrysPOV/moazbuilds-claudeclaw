@@ -224,12 +224,25 @@ export class PluginMcpBridge {
     return { type: "object", additionalProperties: true };
   }
 
+  /**
+   * Append an audit event to the JSONL log.
+   *
+   * **Contract (#72 item 13): this method MUST NOT throw.** Every
+   * failure mode — JSON-serialisation of a payload that contains
+   * circular refs, FS write errors on a full / read-only disk,
+   * permission errors, etc. — is swallowed by the inner try/catch.
+   * Callers are explicitly relieved of the burden of wrapping
+   * `getMcpBridge().audit(...)` in their own try/catch; doing so is
+   * dead code that exists in production paths only because callers
+   * were defensive before this contract was nailed down. As of #72
+   * item 13 all 20 caller-side wrappers were removed.
+   */
   audit(event: string, payload: Record<string, unknown>): void {
     try {
       const entry = JSON.stringify({ event, ts: new Date().toISOString(), ...payload }) + "\n";
       appendFileSync(this.auditPath, entry, { encoding: "utf8" });
     } catch {
-      // Audit failures must not break the bridge
+      // Audit failures must not break the bridge — see contract above.
     }
   }
 }

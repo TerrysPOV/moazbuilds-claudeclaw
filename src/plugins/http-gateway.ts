@@ -411,9 +411,7 @@ export class PluginHttpGateway {
     try {
       getMcpBridge().unregisterPlugin(name);
     } catch {}
-    try {
-      getMcpBridge().audit("http_plugin_unregistered", { plugin: name, request_id: requestId });
-    } catch {}
+    getMcpBridge().audit("http_plugin_unregistered", { plugin: name, request_id: requestId });
     return json({ unregistered: name, request_id: requestId });
   }
 
@@ -537,12 +535,10 @@ export class PluginHttpGateway {
       inProcessHealthFn: opts.healthFn,
     });
 
-    try {
-      getMcpBridge().audit("in_process_plugin_registered", {
-        plugin: name,
-        tools_count: opts.tools.length,
-      });
-    } catch {}
+    getMcpBridge().audit("in_process_plugin_registered", {
+      plugin: name,
+      tools_count: opts.tools.length,
+    });
     return pluginToken;
   }
 

@@ -95,13 +95,14 @@ function _hashFor(serverName: string, ptyId: string, sessionId: string): string 
   return createHash("sha256").update(`${serverName}:${ptyId}:${sessionId}`).digest("hex");
 }
 
-/** Fire an audit event, swallowing any failure (audits must never break us). */
+/**
+ * Fire an audit event. The bridge contract (#72 item 13) guarantees
+ * `audit()` never throws — failures are swallowed inside the bridge
+ * itself with a JSON-serialise try/catch + FS-append swallow. The
+ * caller-side wrapper that used to live here was dead defense.
+ */
 function _audit(event: string, payload: Record<string, unknown>): void {
-  try {
-    getMcpBridge().audit(event, payload);
-  } catch {
-    // intentionally swallowed — persistence layer must never throw from audit
-  }
+  getMcpBridge().audit(event, payload);
 }
 
 /** Type-guard for a parsed PersistedFile. */

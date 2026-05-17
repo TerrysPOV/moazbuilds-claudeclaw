@@ -99,9 +99,7 @@ export class McpProxyPlugin {
       console.error(
         `[mcp-proxy] skipping ${skipped.length} server(s) claimed by multiplexer: ${skipped.join(", ")}`,
       );
-      try {
-        getMcpBridge().audit("mcp_proxy_skip_shared", { servers: skipped });
-      } catch {}
+      getMcpBridge().audit("mcp_proxy_skip_shared", { servers: skipped });
     }
     const allTools: { name: string; description: string; schema: Record<string, unknown> }[] = [];
 
@@ -228,23 +226,19 @@ export class McpProxyPlugin {
     // either name without a payload-shape migration.
     if (proc.status === "failed") {
       console.error(`[mcp-proxy] Server '${name}' permanently failed: ${reason}`);
-      try {
-        getMcpBridge().audit("mcp_proxy_server_permanently_failed", {
-          server: name,
-          reason,
-          status: proc.status,
-        });
-      } catch {}
-      return;
-    }
-    console.error(`[mcp-proxy] Server '${name}' crashed: ${reason} — status: ${proc.status}`);
-    try {
-      getMcpBridge().audit("mcp_proxy_server_crashed", {
+      getMcpBridge().audit("mcp_proxy_server_permanently_failed", {
         server: name,
         reason,
         status: proc.status,
       });
-    } catch {}
+      return;
+    }
+    console.error(`[mcp-proxy] Server '${name}' crashed: ${reason} — status: ${proc.status}`);
+    getMcpBridge().audit("mcp_proxy_server_crashed", {
+      server: name,
+      reason,
+      status: proc.status,
+    });
   }
 
   private async _invokeReasoned(fqn: string, args: unknown): Promise<unknown> {
