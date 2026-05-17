@@ -34,8 +34,13 @@ export interface AgentProcess {
   /**
    * Crash-signal observer ONLY. The Bus must NEVER parse model output from
    * this channel — model output comes from the JSONL Tailer (Sprint 2).
-   * See spec §5.3 ("`stdout: 'ignore'` semantics — `onData` ONLY for crash
-   * signal observation, NEVER parsed as model output").
+   *
+   * Implementation note: the underlying child is spawned with `stdio: 'pipe'`
+   * (so the daemon can observe crash diagnostics), but the Bus treats the
+   * stdout/stderr stream as **opaque bytes** — equivalent to `stdout: 'ignore'`
+   * for the model-output channel. The spec's "`stdout: 'ignore'` semantics"
+   * is a behavioural claim about how the Bus handles the bytes, not the
+   * literal stdio flag passed to the spawn.
    */
   onData(handler: DataHandler): void;
 }

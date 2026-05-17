@@ -537,6 +537,47 @@ describe("BusCore IPC", () => {
     client.close();
   });
 
+  it("request_human from MCP fans out as system.request_human carrying ask_id", async () => {
+    // Regression for PR #110 review agent #5: BusEvent dropped ask_id from
+    // the IPC payload, leaving subscribers unable to echo the correlation
+    // id back via IpcAskAnswer. The wire IpcRequestHuman gained ask_id in
+    // the Codex P1 fix; this asserts the fan-out preserves it.
+    const sockPath = join(tempDir, "bus.sock");
+    bus = createBusCore({
+      eventLogAppend: createMockEventLog().append,
+      socketPath: sockPath,
+    });
+    await bus.start();
+
+    const received: BusEvent[] = [];
+    bus.subscribe({ agent_id: "alpha", topics: ["system.request_human"] }, (e) => received.push(e));
+
+    const client = await connectIpcClient(sockPath);
+    client.send({
+      type: "hello",
+      agent_id: "alpha",
+      capabilities: ["claude/channel", "claude/channel/permission"],
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    client.send({
+      type: "request_human",
+      agent_id: "alpha",
+      ask_id: "abcde",
+      question: "approve deploy?",
+    });
+
+    const start = Date.now();
+    while (received.length === 0 && Date.now() - start < 1000) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(received).toHaveLength(1);
+    const payload = received[0].payload as { ask_id: string; question: string };
+    expect(payload.ask_id).toBe("abcde");
+    expect(payload.question).toBe("approve deploy?");
+    client.close();
+  });
+
   it("ingestPermissionDecision forwards a permission_response over IPC", async () => {
     const sockPath = join(tempDir, "bus.sock");
     bus = createBusCore({

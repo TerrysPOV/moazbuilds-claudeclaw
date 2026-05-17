@@ -382,12 +382,17 @@ export class BusCoreImpl implements BusCore {
         });
         break;
       case "request_human":
+        // Forward the correlation id along with the question. Without
+        // `ask_id` the subscriber (Sprint 3 adapter) can't echo back the
+        // matching `IpcAskAnswer` and the originating tool call blocks
+        // forever. PR #110 review (agent #5): the wire format carries
+        // `ask_id` but this fan-out previously dropped it.
         this.publish({
           ts: Date.now(),
           agent_id: agentId,
           session_id: "",
           topic: "system.request_human",
-          payload: { question: msg.question },
+          payload: { ask_id: msg.ask_id, question: msg.question },
         });
         break;
       case "permission_request":

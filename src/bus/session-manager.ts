@@ -31,7 +31,7 @@ import { spawn as nodeSpawnChildProcess } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { cleanSpawnEnv } from "../runner";
+import { cleanSpawnEnv, withCleanProcessEnv } from "../runner";
 import {
   type AgentProcess,
   ChildAgentProcess,
@@ -121,8 +121,25 @@ function buildChildEnv(agent: AgentConfig, busSocketPath: string): Record<string
   env.CCAW_BUS_SOCK = busSocketPath;
   // TCP fallback wiring is a stub in Sprint 1 — values flow through if the
   // daemon set them but we do not synthesise them here.
+  //
+  // PR #110 review (agent #4) flagged that propagating `CCAW_BUS_TOKEN` via
+  // process env exposes it on Linux via `/proc/<pid>/environ` to any process
+  // on the same UID for the lifetime of the spawned `claude` (the on-disk
+  // token file is mode 0600 and avoids this — env-passing reduces that
+  // protection to same-UID-only).
+  //
+  // Mitigation chosen for Sprint 1: only propagate `CCAW_BUS_TOKEN` when
+  // `CCAW_BUS_SOCK` is unset, i.e. when the TCP fallback transport is the
+  // active path. UDS sessions never need the token (UDS uses filesystem
+  // permission bits) so withholding it removes the leak surface entirely
+  // for the default transport. Sprint 2's TCP-fallback work (Spike 0.3)
+  // will revisit this — options on the table: token via inherited file
+  // descriptor instead of env, or short-lived token rotation.
   if (process.env.CCAW_BUS_PORT) env.CCAW_BUS_PORT = process.env.CCAW_BUS_PORT;
-  if (process.env.CCAW_BUS_TOKEN) env.CCAW_BUS_TOKEN = process.env.CCAW_BUS_TOKEN;
+  const isTcpTransport = !busSocketPath && !!process.env.CCAW_BUS_PORT;
+  if (isTcpTransport && process.env.CCAW_BUS_TOKEN) {
+    env.CCAW_BUS_TOKEN = process.env.CCAW_BUS_TOKEN;
+  }
   return env;
 }
 
@@ -229,21 +246,30 @@ export class SessionManager {
         },
       ) => PtyHandle;
     };
-    // NOTE: production code paths must wrap this call in `withCleanProcessEnv`
-    // (see `src/runner/pty-process.ts`) because bun-pty's Rust wrapper does
-    // NOT call `env_clear()` before forking — the child inherits unsanitised
-    // env from the parent process. Bus Sprint 1 inherits the daemon's
-    // already-clean process.env (no API-key leakage at the daemon level),
-    // but if anything sets ANTHROPIC_API_KEY in the daemon env this must be
-    // upgraded. TODO(sprint-2): wire `withCleanProcessEnv` here once the
-    // daemon-env story is settled.
-    const pty = ptySpawn(cmd, args, {
-      name: "xterm-256color",
-      cols: 120,
-      rows: 30,
-      cwd: realCwd,
-      env,
-    });
+    // PR #110 review (agent #3) flagged that not wrapping this call
+    // reintroduces the exact env-leak class PR #83 fixed: bun-pty's Rust
+    // `portable_pty` MERGES the parent process env at fork() time, so
+    // passing a sanitised env Record is insufficient. `ANTHROPIC_API_KEY`
+    // or short-lived `CLAUDE_CODE_OAUTH_TOKEN` would leak into spawned
+    // claudes if the daemon ever had them in `process.env` (common in dev:
+    // operator shell sets them, or `/etc/claudeclaw/.claudeclaw-env` loads
+    // them). PR #104 added the `sk-ant-oat01-*` long-lived token exception
+    // — that exception is honoured by `withCleanProcessEnv` itself, so
+    // wrapping here is safe for the supported token shape.
+    //
+    // `withCleanProcessEnv` must run synchronously around the spawn (Rust
+    // fork-time read of `environ`). The bun-pty handle is the first thing
+    // returned so the post-spawn restore happens after the child has
+    // inherited the stripped env.
+    const pty = withCleanProcessEnv(() =>
+      ptySpawn(cmd, args, {
+        name: "xterm-256color",
+        cols: 120,
+        rows: 30,
+        cwd: realCwd,
+        env,
+      }),
+    );
     return new PtyAgentProcess(agent.id, pty);
   }
 
@@ -274,14 +300,26 @@ export class SessionManager {
     realCwd: string,
   ): ChildAgentProcess {
     // tmux mode (opt-in, spec §5.3): wrap the same args under a detached
-    // tmux session. Slash commands flow via `tmux send-keys` — not stdin —
-    // so this AgentProcess overrides `send_slash` indirectly through the
-    // subprocess (the tmux client itself terminates immediately after `-d`).
+    // tmux session. The `tmux new-session -d` invocation forks the actual
+    // session into the background and the spawning client process exits
+    // immediately — so the ChildAgentProcess.stdin we hold here belongs to
+    // an already-dead tmux client, and `send_slash` writes will silently
+    // no-op. Operators selecting `tmux` mode in Sprint 1 LOSE slash-relay
+    // (no /quit-via-relay, /compact, /clear) — `stop()` falls back to
+    // SIGTERM directly, which is functional but not graceful.
+    //
+    // Surface this loudly at spawn time so an operator who picked `tmux`
+    // by mistake notices before it bites them in production. PR #110
+    // review (agent #5) flagged that the documentation didn't warn.
     //
     // TODO(sprint-2): implement a TmuxAgentProcess that overrides
     // `send_slash` to shell out to `tmux send-keys -t <session> "/<cmd>"
-    // Enter`. For now we return a ChildAgentProcess; send_slash will be a
-    // no-op against the already-exited tmux client and reject.
+    // Enter`. Until then, `tmux` mode is best-effort + ungraceful.
+    process.stderr.write(
+      `[bus] WARNING: agent ${agent.id} supervision='tmux' — slash-command relay ` +
+        `is not implemented in Sprint 1; stop() will use SIGTERM. Use 'pty-stdin' ` +
+        `or 'process-stream-json' for graceful slash-command lifecycle.\n`,
+    );
     const claudeBin = this.options.commandOverride ?? "claude";
     const sessionName = `claudeclaw-${agent.id}`;
     const tmuxArgs = ["new-session", "-d", "-s", sessionName, claudeBin, ...args];
