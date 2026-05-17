@@ -87,6 +87,36 @@ Under the Bus runtime, #105 is impossible to reproduce: the JSONL tailer reads `
 
 When Anthropic GA's the Channels feature (and allowlists community channel plugins), the Bus's Discord/Telegram adapters can swap to Anthropic's official channel plugins as a configuration change rather than a rewrite. The Bus core, JSONL tailer, and Slack/Web UI adapters are unaffected. See §9.
 
+### 2.3 Why "PTY for stdin" doesn't contradict the "no TUI parsing" guarantee
+
+A reasonable challenge to v2.2: "you said the Bus runtime removes PTY-based parsing, but the default supervision is now `pty-stdin` — isn't that still a PTY?"
+
+The answer is a structural distinction worth making explicit.
+
+**Two separate things a PTY does:**
+
+1. **TTY emulation** — gives a child process a `tty(4)` file descriptor on stdin/stdout so the child believes a real terminal is attached. POSIX-standard primitive. Used by `expect`, `script`, `tmux`, GNU `screen`, every CI runner that captures interactive output. Carries zero semantics about what the child does with that terminal.
+
+2. **Stdout byte parsing** — the caller reads everything the child writes to stdout, parses ANSI escape sequences, terminal control codes, and screen-buffer-style rendered text, and interprets that byte stream as program output. This is what makes the PTY runner fragile: Anthropic owns the byte-level rendering and changes it (issues #81, #84, #105 are all this class).
+
+The Bus runtime uses (1) and does not use (2). Concretely:
+
+```ts
+const proc = ptySpawn('claude', args, { /* TTY config */ });
+// We only WRITE to the PTY master (for slash commands).
+// stdout/stderr from the PTY slave is observed for crash signals only,
+// NEVER parsed as model output. Model output comes from the JSONL tailer.
+proc.onData((chunk) => observeForCrashSignals(chunk));
+```
+
+The "no TUI parsing" guarantee is about (2) — TUI rendering and byte interpretation. It survives intact. The PTY layer is doing TTY emulation only, which is the same job a PTY does for `expect` or `script` — POSIX plumbing, not protocol surface.
+
+**Why this matters:** Anthropic's REPL has an `isatty()` gate (validated in Spike 0.4). Their native Channels architecture (the official Telegram plugin) sidesteps the gate by assuming a human operator runs `claude` in a real terminal with a real TTY. Plus is daemonised — there is no human at a terminal — so we provide the TTY ourselves via `bun-pty`. We're standing in for the absent human from claude's perspective, nothing more.
+
+Anthropic's headless mode (`claude -p` / `--print` — same flag, long and short forms) is the other end of the spectrum: no TTY needed, but one-shot per invocation, with no way for Channel notifications to push new turns into a running session. The `--input-format=stream-json` flag is a modifier on that mode (changes how stdin is parsed) rather than a separate mode. Probe 0.6 in `docs/spikes/` definitively settles whether `-p --input-format=stream-json` can open a third path — see that doc for empirical results.
+
+Until Anthropic provides a non-TTY long-running mode, the Bus's `pty-stdin` supervision is the structurally correct answer for daemon-managed agents. It is **not** a regression from the v2 "process" model — that model was untestable speculation; this one is the empirically-validated minimum.
+
 ## 3. Design principles
 
 1. **One Bus, many surfaces.** All Plus surfaces (Discord, Telegram, Slack, Web UI, REST/CLI) talk to one internal API. No surface ever talks directly to `claude`.
