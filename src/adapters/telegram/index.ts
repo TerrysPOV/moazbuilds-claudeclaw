@@ -85,7 +85,15 @@ export class TelegramAdapter {
   /** request_id → context; callback_query routes back to `ingestPermissionDecision`. */
   private readonly pendingPermissions = new Map<string, { agent_id: string; chat_id: number }>();
   /** chat_id → pending ask. The next plain-text reply resolves it. */
-  private readonly pendingHumanAsks = new Map<number, PendingHumanAsk>();
+  /**
+   * Pending `request_human` keyed by `${agentId}:${chatId}` so multi-agent
+   * configs sharing a chat don't collide. PR #113 review (agent #2):
+   * earlier chat-id-only keying matched Telegram's documented single-user
+   * pattern, but breaks the moment `routing.chats` maps multiple chats to
+   * different agents AND the operator shares one chat across them. Discord
+   * adapter already uses the composite key — symmetry restored.
+   */
+  private readonly pendingHumanAsks = new Map<string, PendingHumanAsk>();
 
   /** Loop promise so `stop()` can await graceful exit. */
   private loopPromise: Promise<void> | null = null;
@@ -147,6 +155,14 @@ export class TelegramAdapter {
       }
     }
     this.subscriptions.clear();
+
+    // Clear correlation maps so stop→start cycles don't reuse stale
+    // request_id / ask_id / per-agent target state. PR #113 review
+    // (agent #2): Discord adapter clears these; Telegram was missing
+    // the symmetric cleanup.
+    this.pendingPermissions.clear();
+    this.pendingHumanAsks.clear();
+    this.lastChatPerAgent.clear();
 
     if (this.loopPromise) {
       try {
@@ -211,9 +227,16 @@ export class TelegramAdapter {
     // Drop bot-to-bot echoes (legacy gating + spec allow-list semantics).
     if (message.from?.is_bot) return;
 
-    // Allow-list. Named rejection in private chats; silent skip elsewhere.
+    // Allow-list — telegram.ts:1131 semantics: empty list = "allow all"
+    // (preserved for default-config parity per PR #113 review); non-empty
+    // list with no match = named rejection in private chats / silent skip
+    // in group chats. The earlier "empty = deny all" behaviour was a
+    // silent regression for operators running default configs.
     const isPrivate = message.chat.type === "private";
-    if (userId === undefined || !this.allowedUserIds.has(userId)) {
+    if (
+      userId === undefined ||
+      (this.allowedUserIds.size > 0 && !this.allowedUserIds.has(userId))
+    ) {
       if (isPrivate) {
         await this.safeSendMessage({
           chat_id: chatId,
@@ -224,6 +247,16 @@ export class TelegramAdapter {
       return;
     }
 
+    // TODO(sprint-4): port the legacy 30 msg/min per-user rate limit
+    // (`src/commands/telegram.ts:264-275`). The Bus runtime hasn't settled
+    // where rate limiting lives (per-adapter vs central Bus middleware),
+    // so this adapter is currently unrate-limited. PR #113 review agent
+    // #3 flagged the missing TODO marker — adding here so a future
+    // operator grepping finds it.
+    // TODO(sprint-4): port `[buttons:...]` directive + `buttonLabelMap`
+    // TTL eviction from legacy (`telegram.ts` commits d845e02, a6c45aa).
+    // Currently agent-emitted inline buttons UX is gone in Bus runtime.
+
     const agentId = this.resolveAgent(chatId);
     if (!agentId) return;
 
@@ -231,10 +264,15 @@ export class TelegramAdapter {
     const text = (message.text ?? message.caption ?? "").trim();
     const metadata = buildPromptMetadata(message);
 
-    // Pending `request_human` for this chat? Route reply as ask_answer.
-    const pendingAsk = this.pendingHumanAsks.get(chatId);
+    // Pending `request_human` for this (agent, chat)? Route the text-bearing
+    // reply as ask_answer. Per PR #113 agent #5 finding: this path GATES
+    // on `text.length > 0` — photo-only / document-only replies do NOT
+    // resolve the pending ask. That's intentional (an ask needs prose) but
+    // documented here so it's not a surprise.
+    const pendingAskKey = `${agentId}:${chatId}`;
+    const pendingAsk = this.pendingHumanAsks.get(pendingAskKey);
     if (pendingAsk && text.length > 0) {
-      this.pendingHumanAsks.delete(chatId);
+      this.pendingHumanAsks.delete(pendingAskKey);
       this.bus.ingestAskAnswer({
         agent_id: pendingAsk.agent_id,
         ask_id: pendingAsk.ask_id,
@@ -374,7 +412,11 @@ export class TelegramAdapter {
     }
 
     // One pending ask per chat; newer supersedes older (spec §5.4 flow).
-    this.pendingHumanAsks.set(target.chat_id, { ask_id: payload.ask_id, agent_id: agentId });
+    // Composite key: agent + chat. PR #113 review (agent #2).
+    this.pendingHumanAsks.set(`${agentId}:${target.chat_id}`, {
+      ask_id: payload.ask_id,
+      agent_id: agentId,
+    });
 
     await this.safeSendMessage({
       chat_id: target.chat_id,
@@ -390,7 +432,11 @@ export class TelegramAdapter {
   private async handleCallbackQuery(query: TelegramCallbackQuery): Promise<void> {
     const data = query.data ?? "";
     const userId = query.from?.id;
-    if (userId === undefined || !this.allowedUserIds.has(userId)) {
+    // Allow-list — empty = "allow all" (legacy parity, PR #113 review).
+    if (
+      userId === undefined ||
+      (this.allowedUserIds.size > 0 && !this.allowedUserIds.has(userId))
+    ) {
       await this.safeAnswerCallback({
         callback_query_id: query.id,
         text: "Unauthorized.",

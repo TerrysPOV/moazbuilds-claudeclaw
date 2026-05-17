@@ -210,11 +210,17 @@ export class DiscordAdapter {
     const channelId = message.channel_id;
     const isDM = !message.guild_id;
 
-    // 2. Allow-list — discord.ts:882. DM = "Unauthorized." reply,
-    //    guild = silent skip. An empty allow-list = closed bot (the
-    //    legacy code defaults to "allow all" on empty, but per Sprint
-    //    3 plan we keep parity at the call site).
-    if (!this.allowedUserIds.has(userId)) {
+    // 2. Allow-list — discord.ts:882 semantics:
+    //    * empty list = "allow all" (legacy `allowedUserIds.length > 0`
+    //      gate — preserved for default-config parity; operators with
+    //      `discord.allowedUserIds: []` should NOT see their bot stop
+    //      responding after the Bus runtime flip).
+    //    * non-empty list, member match = allow.
+    //    * non-empty list, no match = DM "Unauthorized." reply,
+    //      guild = silent skip.
+    //    Sprint 3 review (PR #113 agent #3): the earlier "empty = deny
+    //    all" behaviour was a silent regression. Restored here.
+    if (this.allowedUserIds.size > 0 && !this.allowedUserIds.has(userId)) {
       if (isDM) {
         try {
           await this.restApi.sendMessage(channelId, "Unauthorized.");
@@ -307,9 +313,11 @@ export class DiscordAdapter {
     const parsed = parsePermissionCustomId(interaction.data.custom_id);
     if (!parsed) return;
 
-    // Allow-list — discord.ts:1358.
+    // Allow-list — discord.ts:1358. Same semantics as the message path:
+    // empty = "allow all", non-empty = membership check. PR #113 review
+    // restored legacy parity.
     const actorId = interaction.member?.user?.id ?? interaction.user?.id;
-    if (!actorId || !this.allowedUserIds.has(actorId)) {
+    if (!actorId || (this.allowedUserIds.size > 0 && !this.allowedUserIds.has(actorId))) {
       try {
         await this.restApi.respondToInteraction(interaction.id, interaction.token, {
           content: "Unauthorized.",

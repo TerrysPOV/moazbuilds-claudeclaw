@@ -660,6 +660,129 @@ describe("TelegramAdapter — permission flow", () => {
 /* request_human flow                                                       */
 /* ────────────────────────────────────────────────────────────────────── */
 
+describe("TelegramAdapter — allow-list semantics (PR #113 review)", () => {
+  it("empty allowedUserIds = allow all (legacy parity)", async () => {
+    adapter = await startAdapter({ allowedUserIds: [] });
+    api.enqueueUpdates([
+      {
+        message: {
+          message_id: 1,
+          from: { id: 9999 }, // not in any list
+          chat: { id: 100, type: "private" },
+          text: "anyone home?",
+        },
+      },
+    ]);
+    // Should reach the bus (allowed because list is empty), NOT bounce
+    // with "Unauthorized.".
+    await waitFor(() => bus.prompts.length > 0);
+    expect(bus.prompts).toHaveLength(1);
+    const unauthorisedReplies = api.sendMessages.filter((m) => m.text === "Unauthorized.");
+    expect(unauthorisedReplies).toHaveLength(0);
+  });
+
+  it("non-empty allowedUserIds with no match still rejects", async () => {
+    adapter = await startAdapter({ allowedUserIds: [42] });
+    api.enqueueUpdates([
+      {
+        message: {
+          message_id: 1,
+          from: { id: 9999 },
+          chat: { id: 100, type: "private" },
+          text: "trying again",
+        },
+      },
+    ]);
+    await waitFor(() => api.sendMessages.length > 0);
+    expect(api.sendMessages[0]?.text).toBe("Unauthorized.");
+    expect(bus.prompts).toHaveLength(0);
+  });
+});
+
+describe("TelegramAdapter — request_human keying (PR #113 review)", () => {
+  it("uses composite (agent_id, chat_id) key so multi-agent doesn't collide", async () => {
+    // Two agents routed to two different chats. Each agent gets its own
+    // pending ask; resolving one doesn't clear the other.
+    adapter = await startAdapter({
+      routing: { chats: { "100": "triage", "200": "research" } },
+    });
+    // Seed a prompt for each agent so `lastChatPerAgent` is populated.
+    api.enqueueUpdates([
+      {
+        message: {
+          message_id: 1,
+          from: { id: 42 },
+          chat: { id: 100, type: "private" },
+          text: "p1",
+        },
+      },
+      {
+        message: {
+          message_id: 2,
+          from: { id: 42 },
+          chat: { id: 200, type: "private" },
+          text: "p2",
+        },
+      },
+    ]);
+    await waitFor(() => bus.prompts.length >= 2);
+
+    // Two simultaneous request_human, one per agent, both visible at the
+    // same time — keying by chat_id alone would clobber one of them.
+    bus.emit({
+      ts: Date.now(),
+      agent_id: "triage",
+      session_id: "s1",
+      topic: "system.request_human",
+      payload: { ask_id: "ask-triage", question: "Q1?" },
+    });
+    bus.emit({
+      ts: Date.now(),
+      agent_id: "research",
+      session_id: "s2",
+      topic: "system.request_human",
+      payload: { ask_id: "ask-research", question: "Q2?" },
+    });
+    await waitFor(() => api.sendMessages.length >= 2);
+
+    // Resolve triage's ask via chat 100 — research's ask should remain.
+    api.enqueueUpdates([
+      {
+        message: {
+          message_id: 3,
+          from: { id: 42 },
+          chat: { id: 100, type: "private" },
+          text: "triage-answer",
+        },
+      },
+    ]);
+    await waitFor(() => bus.askAnswers.length >= 1);
+    expect(bus.askAnswers[0]).toEqual({
+      agent_id: "triage",
+      ask_id: "ask-triage",
+      answer: "triage-answer",
+    });
+
+    // Now resolve research's ask via chat 200.
+    api.enqueueUpdates([
+      {
+        message: {
+          message_id: 4,
+          from: { id: 42 },
+          chat: { id: 200, type: "private" },
+          text: "research-answer",
+        },
+      },
+    ]);
+    await waitFor(() => bus.askAnswers.length >= 2);
+    expect(bus.askAnswers[1]).toEqual({
+      agent_id: "research",
+      ask_id: "ask-research",
+      answer: "research-answer",
+    });
+  });
+});
+
 describe("TelegramAdapter — request_human flow", () => {
   it("emits a question message and routes the next operator reply via ingestAskAnswer", async () => {
     adapter = await startAdapter();

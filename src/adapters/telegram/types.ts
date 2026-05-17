@@ -113,7 +113,7 @@ export interface TelegramInlineKeyboardButton {
 
 /**
  * Minimal Telegram API surface used by the adapter. Real implementation is
- * `createTelegramApi()` in `index.ts`; tests substitute a `FakeTelegramApi`
+ * `createTelegramApi()` in `./api.ts`; tests substitute a `FakeTelegramApi`
  * to avoid hitting `api.telegram.org` (see `__tests__/telegram.test.ts`).
  *
  * Shape mirrors the calls in `src/commands/telegram.ts` — only the methods

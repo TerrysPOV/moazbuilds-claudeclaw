@@ -100,6 +100,27 @@ describe("DiscordAdapter — allow-list", () => {
     expect(h.bus.prompts).toHaveLength(0);
   });
 
+  // PR #113 review (agents #2 + #3): the earlier Sprint 3 adapter had
+  // empty list = deny all, a silent regression for operators on the
+  // default config. Legacy semantics restored: empty = allow all.
+  it("empty allowedUserIds = allow all (legacy parity)", async () => {
+    adapter = await startAdapter(h, { allowedUserIds: [] });
+    h.gateway.push({
+      type: "MESSAGE_CREATE",
+      message: makeMessage({
+        channel_id: "ch-1",
+        guild_id: "g-1",
+        author: { id: "anyone", username: "rando" },
+        content: "hi from anyone",
+      }),
+    });
+    await flushMicrotasks();
+    expect(h.bus.prompts).toHaveLength(1);
+    // No "Unauthorized." reply was sent.
+    const unauth = h.rest.sent.filter((s) => s.text === "Unauthorized.");
+    expect(unauth).toHaveLength(0);
+  });
+
   it("drops bot author messages", async () => {
     adapter = await startAdapter(h);
     h.gateway.push({

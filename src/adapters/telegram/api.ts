@@ -18,12 +18,17 @@ const API_BASE = "https://api.telegram.org/bot";
 /**
  * Build a `TelegramApi` instance bound to a particular bot token.
  *
- * Notes on parity with the legacy implementation:
- *   - `getUpdates` uses `allowed_updates: ["message", "edited_message",
- *     "callback_query"]` — the minimum the adapter handles. The legacy
- *     file also requests `my_chat_member`; that update type drives
- *     group-join messages which the Bus adapter doesn't have a behaviour
- *     for yet (Sprint 4 follow-up).
+ * `allowed_updates` differences vs `src/commands/telegram.ts:2177`:
+ *   - Bus adapter requests `["message", "edited_message", "callback_query"]`.
+ *   - Legacy requests `["message", "my_chat_member", "callback_query"]`.
+ *   - Bus ADDS `edited_message` (lets adapter react to message edits in
+ *     Sprint 4+ without re-subscribing).
+ *   - Bus DROPS `my_chat_member` (group-join semantics not yet wired into
+ *     the Bus; Sprint 4 follow-up if the surface needs it).
+ * Both sets are intentional; PR #113 review (agent #5) flagged the
+ * earlier comment for framing the diff as one-sided.
+ *
+ * Other notes:
  *   - `setMessageReaction` wraps a single emoji in the expected
  *     `[{type:"emoji", emoji:"…"}]` array shape per Bot API 7.x.
  *   - Errors throw with `${method}: ${status} ${statusText}` so the

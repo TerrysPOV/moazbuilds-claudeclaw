@@ -126,8 +126,13 @@ export function formatPermissionPrompt(req: PermissionRequest): string {
 /**
  * Discord component shape: type 1 = ACTION_ROW, type 2 = BUTTON,
  * style 3 = SUCCESS (green), 4 = DANGER (red). Returns `unknown[]` so
- * `index.ts` doesn't have to depend on a Discord SDK type — the legacy
- * code uses the same shape (`src/commands/discord.ts:1538`).
+ * `index.ts` doesn't have to depend on a Discord SDK type.
+ *
+ * Note: permission buttons are NEW in the Bus runtime — the legacy
+ * `src/commands/discord.ts` doesn't have an equivalent ACTION_ROW
+ * builder (its permission flow is in-band TUI rendering). PR #113
+ * review (agent #5) caught an earlier comment claiming legacy parity
+ * here; correcting to acknowledge this is greenfield.
  */
 export function buildPermissionButtons(requestId: string): unknown[] {
   return [
