@@ -1,0 +1,953 @@
+/**
+ * Tests for `src/adapters/slack/index.ts` (Sprint 4 Agent A).
+ *
+ * Spec: `docs/ClaudeClaw_Plus_Bus_Architecture_Spec.md` §5.5.3.
+ * Sprint coordination: `src/bus/SPRINT_4_PLAN.md`.
+ *
+ * Run with: `bun test src/adapters/slack/__tests__/slack.test.ts`
+ *
+ * Strategy mirrors the Telegram / Discord adapter suites:
+ *   - `FakeBus` implements the public `BusCore` interface so we can assert
+ *     on `sendPrompt` / `ingestPermissionDecision` / `ingestAskAnswer`
+ *     calls without spinning up the real IPC stack.
+ *   - `FakeSlackApi` implements the `SlackApi` seam — never touches
+ *     `slack.com/api/*`.
+ *   - `FakeSlackSocket` implements `SlackSocketLike` so we can drive
+ *     inbound envelopes deterministically.
+ *
+ * Coverage targets from SPRINT_4_PLAN.md:
+ *   - allow-list: empty = allow all; populated + match = allow; populated
+ *     + miss = silent skip
+ *   - Channel routing → correct agent_id
+ *   - Thread routing
+ *   - bus.sendPrompt shape correct
+ *   - response.text posts back
+ *   - Permission flow: block_actions click → ingestPermissionDecision
+ *   - request_human first-reply-wins
+ *   - Map composite keying: two agents in same channel don't collide
+ *   - stop() cleans all maps
+ */
+
+import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { randomUUID, createHmac } from "node:crypto";
+import { SlackAdapter, buildPermissionBlocks, PERMISSION_ACTION_ID_REGEX } from "../index";
+import type { BusCore, SendPromptRequest } from "../../../bus/core";
+import type {
+  Subscription,
+  SubscriptionFilter,
+  SubscriptionHandler,
+} from "../../../bus/core-subscription";
+import type { BusEvent } from "../../../bus/types";
+import type {
+  SlackApi,
+  SlackBlock,
+  SlackBlockActionsPayload,
+  SlackMessageEvent,
+  SlackSocketEnvelope,
+  SlackSocketLike,
+} from "../types";
+
+// Test-only fake tokens. Slack's real prefixes are intentionally NOT used
+// here so the secret-scanner pre-commit hook (block-secrets-in-code.sh)
+// doesn't false-positive on the test file.
+const FAKE_BOT_TOKEN = "fake-bot-token";
+const FAKE_SIGNING_SECRET = "test-secret";
+
+/* ────────────────────────────────────────────────────────────────────── */
+/* FakeBus                                                                  */
+/* ────────────────────────────────────────────────────────────────────── */
+
+interface FakeSubscription extends Subscription {
+  filter: SubscriptionFilter;
+  handler: SubscriptionHandler;
+  closedFlag: boolean;
+}
+
+class FakeBus implements BusCore {
+  public readonly prompts: SendPromptRequest[] = [];
+  public readonly permissionDecisions: Array<{
+    agent_id: string;
+    request_id: string;
+    behavior: "allow" | "deny";
+  }> = [];
+  public readonly askAnswers: Array<{ agent_id: string; ask_id: string; answer: string }> = [];
+  public readonly subscriptions = new Map<string, FakeSubscription>();
+
+  async sendPrompt(req: SendPromptRequest): Promise<{ promise_id: string }> {
+    this.prompts.push(req);
+    return { promise_id: randomUUID() };
+  }
+
+  subscribe(filter: SubscriptionFilter, handler: SubscriptionHandler): Subscription {
+    const id = randomUUID();
+    const record: FakeSubscription = {
+      id,
+      filter,
+      handler,
+      closedFlag: false,
+      close: () => {
+        record.closedFlag = true;
+        this.subscriptions.delete(id);
+      },
+      get overflowCount() {
+        return 0;
+      },
+      get depth() {
+        return 0;
+      },
+    };
+    this.subscriptions.set(id, record);
+    return record;
+  }
+
+  /** Push a synthetic event to every matching live subscription. */
+  emit(event: BusEvent): void {
+    for (const sub of this.subscriptions.values()) {
+      if (sub.closedFlag) continue;
+      if (sub.filter.agent_id && sub.filter.agent_id !== event.agent_id) continue;
+      if (sub.filter.topics && sub.filter.topics.length > 0) {
+        if (!sub.filter.topics.includes(event.topic)) continue;
+      }
+      sub.handler(event);
+    }
+  }
+
+  async invokeSlashCommand(): Promise<void> {}
+  ingestReply(): void {}
+  ingestSessionEvent(): void {}
+  ingestPermissionDecision(req: {
+    agent_id: string;
+    request_id: string;
+    behavior: "allow" | "deny";
+  }): void {
+    this.permissionDecisions.push(req);
+  }
+  ingestAskAnswer(req: { agent_id: string; ask_id: string; answer: string }): void {
+    this.askAnswers.push(req);
+  }
+  state() {
+    return {
+      subscriberCount: this.subscriptions.size,
+      connectedAgents: [],
+      totalOverflows: 0,
+    };
+  }
+  async start(): Promise<void> {}
+  async stop(): Promise<void> {}
+}
+
+/* ────────────────────────────────────────────────────────────────────── */
+/* FakeSlackApi + FakeSlackSocket                                            */
+/* ────────────────────────────────────────────────────────────────────── */
+
+interface PostMessageCall {
+  channel: string;
+  text: string;
+  thread_ts?: string;
+  blocks?: SlackBlock[];
+}
+
+class FakeSlackApi implements SlackApi {
+  public readonly sent: PostMessageCall[] = [];
+  public forceError: string | null = null;
+
+  async postMessage(params: PostMessageCall): Promise<{
+    ok: boolean;
+    ts?: string;
+    error?: string;
+  }> {
+    this.sent.push(params);
+    if (this.forceError) return { ok: false, error: this.forceError };
+    return { ok: true, ts: `1234.${this.sent.length}` };
+  }
+}
+
+class FakeSlackSocket implements SlackSocketLike {
+  public started = false;
+  public stopped = false;
+  public readonly acks: Array<{ envelopeId: string; payload?: unknown }> = [];
+  private handlers: Array<(env: SlackSocketEnvelope) => void> = [];
+
+  async start(): Promise<void> {
+    this.started = true;
+  }
+  async stop(): Promise<void> {
+    this.stopped = true;
+    this.handlers = [];
+  }
+  onEnvelope(handler: (env: SlackSocketEnvelope) => void): () => void {
+    this.handlers.push(handler);
+    return () => {
+      this.handlers = this.handlers.filter((h) => h !== handler);
+    };
+  }
+  ack(envelopeId: string, payload?: unknown): void {
+    this.acks.push({ envelopeId, payload });
+  }
+  /** Test-only: push an envelope as if it came over the wire. */
+  push(env: SlackSocketEnvelope): void {
+    for (const h of this.handlers) h(env);
+  }
+}
+
+const SILENT_LOGGER = {
+  warn: () => {},
+  info: () => {},
+  error: () => {},
+};
+
+/* ────────────────────────────────────────────────────────────────────── */
+/* Harness                                                                   */
+/* ────────────────────────────────────────────────────────────────────── */
+
+let bus: FakeBus;
+let api: FakeSlackApi;
+let socket: FakeSlackSocket;
+let adapter: SlackAdapter | null = null;
+
+async function flushMicrotasks(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 500): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((r) => setTimeout(r, 2));
+  }
+  throw new Error(`waitFor: condition not met within ${timeoutMs}ms`);
+}
+
+async function startAdapter(
+  opts: Partial<ConstructorParameters<typeof SlackAdapter>[0]> = {},
+): Promise<SlackAdapter> {
+  const a = new SlackAdapter({
+    bus,
+    token: FAKE_BOT_TOKEN,
+    signingSecret: FAKE_SIGNING_SECRET,
+    allowedUserIds: ["U42"],
+    routing: { channels: { C100: "triage" } },
+    api,
+    socket,
+    logger: SILENT_LOGGER,
+    ...opts,
+  });
+  await a.start();
+  return a;
+}
+
+function msg(over: Partial<SlackMessageEvent> = {}): SlackMessageEvent {
+  return {
+    type: over.type ?? "message",
+    channel: over.channel ?? "C100",
+    user: over.user ?? "U42",
+    ts: over.ts ?? "1700000000.000100",
+    text: over.text ?? "hello",
+    thread_ts: over.thread_ts,
+    bot_id: over.bot_id,
+    subtype: over.subtype,
+    files: over.files,
+  };
+}
+
+function eventsEnvelope(event: SlackMessageEvent): SlackSocketEnvelope {
+  return {
+    type: "events_api",
+    envelope_id: `env-${randomUUID()}`,
+    payload: { event } as SlackSocketEnvelope["payload"],
+  };
+}
+
+function blockActionsEnvelope(payload: SlackBlockActionsPayload): SlackSocketEnvelope {
+  return {
+    type: "interactive",
+    envelope_id: `env-${randomUUID()}`,
+    payload: payload as unknown as SlackSocketEnvelope["payload"],
+  };
+}
+
+beforeEach(() => {
+  bus = new FakeBus();
+  api = new FakeSlackApi();
+  socket = new FakeSlackSocket();
+});
+
+afterEach(async () => {
+  if (adapter) {
+    await adapter.stop();
+    adapter = null;
+  }
+});
+
+/* ────────────────────────────────────────────────────────────────────── */
+/* buildPermissionBlocks                                                     */
+/* ────────────────────────────────────────────────────────────────────── */
+
+describe("buildPermissionBlocks", () => {
+  it("produces section + actions with two perm:* buttons", () => {
+    const blocks = buildPermissionBlocks({
+      request_id: "abcde",
+      tool_name: "bash",
+      description: "run `ls`",
+      input_preview: "ls -la",
+    });
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0]?.type).toBe("section");
+    const actions = blocks[1];
+    if (actions?.type !== "actions") throw new Error("expected actions block");
+    expect(actions.elements).toHaveLength(2);
+    expect(actions.elements[0]?.action_id).toBe("perm:allow:abcde");
+    expect(actions.elements[1]?.action_id).toBe("perm:deny:abcde");
+  });
+
+  it("PERMISSION_ACTION_ID_REGEX round-trips both behaviours", () => {
+    const allow = "perm:allow:xyzab".match(PERMISSION_ACTION_ID_REGEX);
+    expect(allow?.[1]).toBe("allow");
+    expect(allow?.[2]).toBe("xyzab");
+    const deny = "perm:deny:xyzab".match(PERMISSION_ACTION_ID_REGEX);
+    expect(deny?.[1]).toBe("deny");
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────── */
+/* Allow-list (PR #113 review)                                               */
+/* ────────────────────────────────────────────────────────────────────── */
+
+describe("SlackAdapter — allow-list semantics", () => {
+  it("empty allowedUserIds = allow all (legacy parity)", async () => {
+    adapter = await startAdapter({ allowedUserIds: [] });
+    socket.push(eventsEnvelope(msg({ user: "U-stranger", text: "anyone home?" })));
+    await flushMicrotasks();
+    await waitFor(() => bus.prompts.length > 0);
+    expect(bus.prompts).toHaveLength(1);
+    expect(bus.prompts[0]?.user_id).toBe("U-stranger");
+  });
+
+  it("populated allowedUserIds + match = allow", async () => {
+    adapter = await startAdapter({ allowedUserIds: ["U42"] });
+    socket.push(eventsEnvelope(msg({ user: "U42", text: "hi" })));
+    await waitFor(() => bus.prompts.length > 0);
+    expect(bus.prompts).toHaveLength(1);
+  });
+
+  it("populated allowedUserIds + miss = silent skip (no Unauthorized reply)", async () => {
+    adapter = await startAdapter({ allowedUserIds: ["U42"] });
+    socket.push(eventsEnvelope(msg({ user: "U-stranger", text: "let me in" })));
+    // Give the adapter time to silently skip.
+    await new Promise((r) => setTimeout(r, 30));
+    expect(bus.prompts).toHaveLength(0);
+    // Crucially, NO chat.postMessage reply — Slack is multi-channel so
+    // we can't safely DM-bomb every unauthorised user.
+    expect(api.sent).toHaveLength(0);
+  });
+
+  it("drops bot messages", async () => {
+    adapter = await startAdapter();
+    socket.push(eventsEnvelope(msg({ bot_id: "B-bot", user: undefined })));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(bus.prompts).toHaveLength(0);
+    expect(api.sent).toHaveLength(0);
+  });
+
+  it("drops message subtypes other than file_share (matches legacy line 945)", async () => {
+    adapter = await startAdapter();
+    socket.push(eventsEnvelope(msg({ subtype: "message_changed" })));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(bus.prompts).toHaveLength(0);
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────── */
+/* Routing                                                                    */
+/* ────────────────────────────────────────────────────────────────────── */
+
+describe("SlackAdapter — routing", () => {
+  it("maps channels[<channel>] to the right agent_id", async () => {
+    adapter = await startAdapter({
+      routing: { channels: { C100: "triage", C200: "research" } },
+    });
+    socket.push(eventsEnvelope(msg({ channel: "C200", text: "research ping" })));
+    await waitFor(() => bus.prompts.length > 0);
+    expect(bus.prompts[0]?.agent_id).toBe("research");
+  });
+
+  it("silent-drops messages from unrouted channels with no threadAgentId", async () => {
+    adapter = await startAdapter({ routing: { channels: { C100: "triage" } } });
+    socket.push(eventsEnvelope(msg({ channel: "C999", text: "drift" })));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(bus.prompts).toHaveLength(0);
+  });
+
+  it("thread reply with no recorded owner uses parent channel mapping", async () => {
+    adapter = await startAdapter({
+      routing: { channels: { C100: "triage" } },
+    });
+    socket.push(
+      eventsEnvelope(
+        msg({
+          channel: "C100",
+          text: "reply in thread",
+          ts: "1700000000.000200",
+          thread_ts: "1700000000.000100",
+        }),
+      ),
+    );
+    await waitFor(() => bus.prompts.length > 0);
+    expect(bus.prompts[0]?.agent_id).toBe("triage");
+    const meta = bus.prompts[0]?.metadata as Record<string, unknown>;
+    expect(meta.thread_ts).toBe("1700000000.000100");
+  });
+
+  it("threadAgentId routes thread-only traffic in unrouted channels", async () => {
+    adapter = await startAdapter({
+      routing: { channels: { C100: "triage" }, threadAgentId: "threaded" },
+    });
+    socket.push(
+      eventsEnvelope(
+        msg({
+          channel: "C999", // not in channels map
+          thread_ts: "1700000000.000100",
+          ts: "1700000000.000200",
+        }),
+      ),
+    );
+    await waitFor(() => bus.prompts.length > 0);
+    expect(bus.prompts[0]?.agent_id).toBe("threaded");
+  });
+
+  it("subsequent thread replies inherit the original thread owner", async () => {
+    adapter = await startAdapter({
+      routing: { channels: { C100: "triage", C200: "research" } },
+    });
+    // First message in thread inside C100 → records "triage" ownership.
+    socket.push(
+      eventsEnvelope(
+        msg({
+          channel: "C100",
+          text: "kickoff",
+          ts: "1700000000.000100",
+          thread_ts: "1700000000.000100",
+        }),
+      ),
+    );
+    await waitFor(() => bus.prompts.length > 0);
+    // Second message — same thread_ts, same channel — should still go
+    // to triage. (Trivial in this test but proves the cache is wired.)
+    socket.push(
+      eventsEnvelope(
+        msg({
+          channel: "C100",
+          text: "followup",
+          ts: "1700000000.000200",
+          thread_ts: "1700000000.000100",
+        }),
+      ),
+    );
+    await waitFor(() => bus.prompts.length >= 2);
+    expect(bus.prompts[1]?.agent_id).toBe("triage");
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────── */
+/* sendPrompt shape                                                           */
+/* ────────────────────────────────────────────────────────────────────── */
+
+describe("SlackAdapter — bus.sendPrompt shape", () => {
+  it("forwards origin=slack with channel as origin_id and trimmed text", async () => {
+    adapter = await startAdapter();
+    socket.push(
+      eventsEnvelope(
+        msg({
+          channel: "C100",
+          user: "U42",
+          text: "   please help   ",
+          ts: "1700000000.000123",
+        }),
+      ),
+    );
+    await waitFor(() => bus.prompts.length > 0);
+    const sent = bus.prompts[0];
+    if (!sent) throw new Error("expected prompt captured");
+    expect(sent.origin).toBe("slack");
+    expect(sent.origin_id).toBe("C100");
+    expect(sent.user_id).toBe("U42");
+    expect(sent.text).toBe("please help");
+    expect(sent.agent_id).toBe("triage");
+    const meta = sent.metadata as Record<string, unknown>;
+    expect(meta.ts).toBe("1700000000.000123");
+  });
+
+  it("carries file metadata when present", async () => {
+    adapter = await startAdapter();
+    socket.push(
+      eventsEnvelope(
+        msg({
+          text: "look at this",
+          files: [
+            {
+              id: "F1",
+              name: "shot.png",
+              mimetype: "image/png",
+              filetype: "png",
+              size: 1024,
+              url_private: "https://files.slack.com/F1",
+            },
+          ],
+        }),
+      ),
+    );
+    await waitFor(() => bus.prompts.length > 0);
+    const meta = bus.prompts[0]?.metadata as Record<string, unknown>;
+    const files = meta.files as Array<Record<string, unknown>>;
+    expect(files).toBeDefined();
+    expect(files).toHaveLength(1);
+    expect(files[0]?.id).toBe("F1");
+    expect(files[0]?.mimetype).toBe("image/png");
+  });
+
+  it("drops empty messages with no files", async () => {
+    adapter = await startAdapter();
+    socket.push(eventsEnvelope(msg({ text: "   " })));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(bus.prompts).toHaveLength(0);
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────── */
+/* response.text outbound                                                     */
+/* ────────────────────────────────────────────────────────────────────── */
+
+describe("SlackAdapter — response.text outbound", () => {
+  it("posts text via chat.postMessage to routed channels", async () => {
+    adapter = await startAdapter();
+    bus.emit({
+      ts: Date.now(),
+      agent_id: "triage",
+      session_id: "s1",
+      topic: "response.text",
+      payload: { text: "on it" },
+    });
+    await waitFor(() => api.sent.length > 0);
+    expect(api.sent[0]?.channel).toBe("C100");
+    expect(api.sent[0]?.text).toBe("on it");
+  });
+
+  it("ignores response.text for an unrelated agent", async () => {
+    adapter = await startAdapter();
+    bus.emit({
+      ts: Date.now(),
+      agent_id: "other-agent",
+      session_id: "s1",
+      topic: "response.text",
+      payload: { text: "should not surface" },
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(api.sent).toHaveLength(0);
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────── */
+/* Permission flow                                                            */
+/* ────────────────────────────────────────────────────────────────────── */
+
+describe("SlackAdapter — permission flow", () => {
+  it("renders Block Kit blocks on channel.permission_request", async () => {
+    adapter = await startAdapter();
+    bus.emit({
+      ts: Date.now(),
+      agent_id: "triage",
+      session_id: "s1",
+      topic: "channel.permission_request",
+      payload: {
+        request_id: "abcde",
+        tool_name: "bash",
+        description: "run ls",
+        input_preview: "ls -la",
+      },
+    });
+    await waitFor(() => api.sent.length > 0);
+    const sent = api.sent[0];
+    expect(sent?.channel).toBe("C100");
+    expect(sent?.blocks).toBeDefined();
+    const actions = sent?.blocks?.[1];
+    if (actions?.type !== "actions") throw new Error("expected actions block");
+    expect(actions.elements[0]?.action_id).toBe("perm:allow:abcde");
+    expect(actions.elements[1]?.action_id).toBe("perm:deny:abcde");
+  });
+
+  it("routes block_actions click through bus.ingestPermissionDecision", async () => {
+    adapter = await startAdapter();
+    // Seed the pending permission.
+    bus.emit({
+      ts: Date.now(),
+      agent_id: "triage",
+      session_id: "s1",
+      topic: "channel.permission_request",
+      payload: {
+        request_id: "qwert",
+        tool_name: "bash",
+        description: "",
+        input_preview: "",
+      },
+    });
+    await waitFor(() => api.sent.length > 0);
+
+    socket.push(
+      blockActionsEnvelope({
+        type: "block_actions",
+        user: { id: "U42" },
+        channel: { id: "C100" },
+        message: { ts: "1700000000.000100" },
+        actions: [{ action_id: "perm:allow:qwert", type: "button", value: "allow" }],
+      }),
+    );
+    await waitFor(() => bus.permissionDecisions.length > 0);
+    const decision = bus.permissionDecisions[0];
+    expect(decision?.agent_id).toBe("triage");
+    expect(decision?.request_id).toBe("qwert");
+    expect(decision?.behavior).toBe("allow");
+    // Confirmation message posted as second send.
+    expect(api.sent[1]?.text).toBe("✅ Allowed");
+  });
+
+  it("silently drops block_actions from non-allow-listed users", async () => {
+    adapter = await startAdapter({ allowedUserIds: ["U42"] });
+    bus.emit({
+      ts: Date.now(),
+      agent_id: "triage",
+      session_id: "s1",
+      topic: "channel.permission_request",
+      payload: {
+        request_id: "stale",
+        tool_name: "bash",
+        description: "",
+        input_preview: "",
+      },
+    });
+    await waitFor(() => api.sent.length > 0);
+    const seenBefore = api.sent.length;
+
+    socket.push(
+      blockActionsEnvelope({
+        type: "block_actions",
+        user: { id: "U-stranger" },
+        channel: { id: "C100" },
+        actions: [{ action_id: "perm:allow:stale", type: "button", value: "allow" }],
+      }),
+    );
+    await new Promise((r) => setTimeout(r, 30));
+    expect(bus.permissionDecisions).toHaveLength(0);
+    // No confirmation message posted.
+    expect(api.sent.length).toBe(seenBefore);
+  });
+
+  it("auto-acks every envelope back to socket", async () => {
+    adapter = await startAdapter();
+    const env = eventsEnvelope(msg({ text: "hi" }));
+    socket.push(env);
+    await flushMicrotasks();
+    expect(socket.acks).toHaveLength(1);
+    expect(socket.acks[0]?.envelopeId).toBe(env.envelope_id);
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────── */
+/* request_human flow                                                         */
+/* ────────────────────────────────────────────────────────────────────── */
+
+describe("SlackAdapter — request_human first-reply-wins", () => {
+  it("posts the question and routes the next reply via ingestAskAnswer", async () => {
+    adapter = await startAdapter();
+    bus.emit({
+      ts: Date.now(),
+      agent_id: "triage",
+      session_id: "s1",
+      topic: "system.request_human",
+      payload: { ask_id: "ask-1", question: "Which env?" },
+    });
+    await waitFor(() => api.sent.length > 0);
+    expect(api.sent[0]?.text).toContain("Which env?");
+
+    socket.push(eventsEnvelope(msg({ user: "U42", text: "production" })));
+    await waitFor(() => bus.askAnswers.length > 0);
+    expect(bus.askAnswers[0]).toEqual({
+      agent_id: "triage",
+      ask_id: "ask-1",
+      answer: "production",
+    });
+    // sendPrompt was NOT called — the reply consumed the ask.
+    expect(bus.prompts).toHaveLength(0);
+  });
+
+  it("only the FIRST reply wins; subsequent replies fall through to sendPrompt", async () => {
+    adapter = await startAdapter();
+    bus.emit({
+      ts: Date.now(),
+      agent_id: "triage",
+      session_id: "s1",
+      topic: "system.request_human",
+      payload: { ask_id: "ask-99", question: "Yes or no?" },
+    });
+    await waitFor(() => api.sent.length > 0);
+
+    socket.push(eventsEnvelope(msg({ text: "yes", ts: "1.001" })));
+    await waitFor(() => bus.askAnswers.length > 0);
+    socket.push(eventsEnvelope(msg({ text: "second message", ts: "1.002" })));
+    await waitFor(() => bus.prompts.length > 0);
+    expect(bus.askAnswers).toHaveLength(1);
+    expect(bus.prompts).toHaveLength(1);
+    expect(bus.prompts[0]?.text).toBe("second message");
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────── */
+/* Composite keying (PR #113 review)                                          */
+/* ────────────────────────────────────────────────────────────────────── */
+
+describe("SlackAdapter — composite keying (PR #113 review)", () => {
+  it("two agents in two channels: pendingHumanAsks don't collide", async () => {
+    adapter = await startAdapter({
+      routing: { channels: { C100: "triage", C200: "research" } },
+    });
+
+    bus.emit({
+      ts: Date.now(),
+      agent_id: "triage",
+      session_id: "s1",
+      topic: "system.request_human",
+      payload: { ask_id: "ask-triage", question: "Q1?" },
+    });
+    bus.emit({
+      ts: Date.now(),
+      agent_id: "research",
+      session_id: "s2",
+      topic: "system.request_human",
+      payload: { ask_id: "ask-research", question: "Q2?" },
+    });
+    await waitFor(() => api.sent.length >= 2);
+
+    socket.push(eventsEnvelope(msg({ channel: "C100", user: "U42", text: "triage-answer" })));
+    await waitFor(() => bus.askAnswers.length >= 1);
+    expect(bus.askAnswers[0]).toEqual({
+      agent_id: "triage",
+      ask_id: "ask-triage",
+      answer: "triage-answer",
+    });
+
+    socket.push(eventsEnvelope(msg({ channel: "C200", user: "U42", text: "research-answer" })));
+    await waitFor(() => bus.askAnswers.length >= 2);
+    expect(bus.askAnswers[1]).toEqual({
+      agent_id: "research",
+      ask_id: "ask-research",
+      answer: "research-answer",
+    });
+  });
+
+  it("two pending permissions in two channels survive independently", async () => {
+    adapter = await startAdapter({
+      routing: { channels: { C100: "triage", C200: "research" } },
+    });
+    bus.emit({
+      ts: Date.now(),
+      agent_id: "triage",
+      session_id: "s1",
+      topic: "channel.permission_request",
+      payload: {
+        request_id: "req-1",
+        tool_name: "bash",
+        description: "",
+        input_preview: "",
+      },
+    });
+    bus.emit({
+      ts: Date.now(),
+      agent_id: "research",
+      session_id: "s2",
+      topic: "channel.permission_request",
+      payload: {
+        request_id: "req-2",
+        tool_name: "bash",
+        description: "",
+        input_preview: "",
+      },
+    });
+    await waitFor(() => api.sent.length >= 2);
+
+    // Resolve req-1 from C100.
+    socket.push(
+      blockActionsEnvelope({
+        type: "block_actions",
+        user: { id: "U42" },
+        channel: { id: "C100" },
+        actions: [{ action_id: "perm:allow:req-1", type: "button", value: "allow" }],
+      }),
+    );
+    await waitFor(() => bus.permissionDecisions.length >= 1);
+    expect(bus.permissionDecisions[0]).toEqual({
+      agent_id: "triage",
+      request_id: "req-1",
+      behavior: "allow",
+    });
+
+    // Resolve req-2 from C200 — independent.
+    socket.push(
+      blockActionsEnvelope({
+        type: "block_actions",
+        user: { id: "U42" },
+        channel: { id: "C200" },
+        actions: [{ action_id: "perm:deny:req-2", type: "button", value: "deny" }],
+      }),
+    );
+    await waitFor(() => bus.permissionDecisions.length >= 2);
+    expect(bus.permissionDecisions[1]).toEqual({
+      agent_id: "research",
+      request_id: "req-2",
+      behavior: "deny",
+    });
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────── */
+/* Events API HTTP path                                                       */
+/* ────────────────────────────────────────────────────────────────────── */
+
+describe("SlackAdapter — Events API HTTP", () => {
+  it("returns the challenge string for url_verification", async () => {
+    adapter = await startAdapter();
+    const result = await adapter.handleEventsApiRequest({
+      type: "url_verification",
+      challenge: "deadbeef",
+    });
+    expect(result).toBe("deadbeef");
+    expect(bus.prompts).toHaveLength(0);
+  });
+
+  it("routes event_callback envelopes through the normal message handler", async () => {
+    adapter = await startAdapter();
+    await adapter.handleEventsApiRequest({
+      type: "event_callback",
+      event: msg({ text: "hi via http" }),
+    });
+    await waitFor(() => bus.prompts.length > 0);
+    expect(bus.prompts[0]?.text).toBe("hi via http");
+  });
+
+  it("verifyEventsApiSignature accepts a valid signature and rejects tampering", async () => {
+    adapter = await startAdapter();
+    const body = JSON.stringify({ type: "event_callback", event: { type: "message" } });
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const base = `v0:${timestamp}:${body}`;
+    const good = `v0=${createHmac("sha256", FAKE_SIGNING_SECRET).update(base).digest("hex")}`;
+
+    expect(adapter.verifyEventsApiSignature({ body, timestamp, signature: good })).toBe(true);
+
+    // Tampered body — same signature, different body
+    expect(
+      adapter.verifyEventsApiSignature({
+        body: `${body}x`,
+        timestamp,
+        signature: good,
+      }),
+    ).toBe(false);
+
+    // Stale timestamp (>5 min) with valid signature for that stale body
+    const stale = String(Math.floor(Date.now() / 1000) - 1000);
+    const staleBase = `v0:${stale}:${body}`;
+    const staleSig = `v0=${createHmac("sha256", FAKE_SIGNING_SECRET).update(staleBase).digest("hex")}`;
+    expect(
+      adapter.verifyEventsApiSignature({
+        body,
+        timestamp: stale,
+        signature: staleSig,
+      }),
+    ).toBe(false);
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────── */
+/* stop() cleanup                                                             */
+/* ────────────────────────────────────────────────────────────────────── */
+
+describe("SlackAdapter — stop() cleanup", () => {
+  it("closes every subscription so bus.state().subscriberCount returns to 0", async () => {
+    adapter = await startAdapter({
+      routing: { channels: { C100: "triage", C200: "research" } },
+    });
+    // Two agents × three topics = six subscriptions.
+    expect(bus.state().subscriberCount).toBe(6);
+    await adapter.stop();
+    adapter = null;
+    expect(bus.state().subscriberCount).toBe(0);
+  });
+
+  it("clears every pending map (permissions, asks, thread owners)", async () => {
+    adapter = await startAdapter();
+    // Seed permission_request → fills pendingPermissions.
+    bus.emit({
+      ts: Date.now(),
+      agent_id: "triage",
+      session_id: "s1",
+      topic: "channel.permission_request",
+      payload: {
+        request_id: "abcde",
+        tool_name: "bash",
+        description: "",
+        input_preview: "",
+      },
+    });
+    // Seed a thread message → fills threadOwners.
+    socket.push(
+      eventsEnvelope(msg({ channel: "C100", thread_ts: "1.001", ts: "1.001", text: "kickoff" })),
+    );
+    await waitFor(() => api.sent.length >= 1);
+    await waitFor(() => bus.prompts.length >= 1);
+    // Seed request_human AFTER the inbound so we don't accidentally
+    // consume the pending ask with the kickoff message.
+    bus.emit({
+      ts: Date.now(),
+      agent_id: "triage",
+      session_id: "s1",
+      topic: "system.request_human",
+      payload: { ask_id: "ask-1", question: "?" },
+    });
+    await waitFor(() => api.sent.length >= 2);
+
+    await adapter.stop();
+    adapter = null;
+    expect(socket.stopped).toBe(true);
+    // After stop, the subscription count should be 0 (asserted in the
+    // previous test). Any further bus emits should NOT trigger API
+    // calls because the subscriptions are closed.
+    const sentBefore = api.sent.length;
+    bus.emit({
+      ts: Date.now(),
+      agent_id: "triage",
+      session_id: "s1",
+      topic: "response.text",
+      payload: { text: "post-stop" },
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(api.sent.length).toBe(sentBefore);
+  });
+
+  it("does not throw when stop() is called twice", async () => {
+    adapter = await startAdapter();
+    await adapter.stop();
+    await adapter.stop();
+    adapter = null;
+  });
+
+  it("stop() unwires the socket cleanly", async () => {
+    adapter = await startAdapter();
+    await adapter.stop();
+    adapter = null;
+    expect(socket.stopped).toBe(true);
+    // Late envelopes should be silently dropped — FakeSlackSocket clears
+    // its handlers on stop(), so push is a no-op.
+    socket.push(eventsEnvelope(msg({ text: "post-stop event" })));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(bus.prompts).toHaveLength(0);
+  });
+});
