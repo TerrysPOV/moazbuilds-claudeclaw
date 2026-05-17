@@ -113,9 +113,20 @@ The "no TUI parsing" guarantee is about (2) — TUI rendering and byte interpret
 
 **Why this matters:** Anthropic's REPL has an `isatty()` gate (validated in Spike 0.4). Their native Channels architecture (the official Telegram plugin) sidesteps the gate by assuming a human operator runs `claude` in a real terminal with a real TTY. Plus is daemonised — there is no human at a terminal — so we provide the TTY ourselves via `bun-pty`. We're standing in for the absent human from claude's perspective, nothing more.
 
-Anthropic's headless mode (`claude -p` / `--print` — same flag, long and short forms) is the other end of the spectrum: no TTY needed, but one-shot per invocation, with no way for Channel notifications to push new turns into a running session. The `--input-format=stream-json` flag is a modifier on that mode (changes how stdin is parsed) rather than a separate mode. Probe 0.6 in `docs/spikes/` definitively settles whether `-p --input-format=stream-json` can open a third path — see that doc for empirical results.
+Anthropic's headless mode (`claude -p` / `--print` — same flag, long and short forms) is the other end of the spectrum: no TTY needed. The `--input-format=stream-json` flag is a modifier on that mode (changes how stdin is parsed) rather than a separate mode.
 
-Until Anthropic provides a non-TTY long-running mode, the Bus's `pty-stdin` supervision is the structurally correct answer for daemon-managed agents. It is **not** a regression from the v2 "process" model — that model was untestable speculation; this one is the empirically-validated minimum.
+**Probe 0.6 outcome (`docs/spikes/0.6-stream-json-channels-probe.md`):** `claude -p --input-format=stream-json` IS multi-turn, supports JSONL output, and accepts slash commands — but **silently drops Channel notifications**. Binary inspection confirms the `case "channel"` handler dispatches with `{midTurn:true}`, i.e., channels are interjections aimed at the REPL's input prompt. `-p` mode has no input prompt to interject into, so notifications are no-ops.
+
+This validates `pty-stdin` as the correct default for channel-driven agents and surfaces a strictly better runner for the non-channel case:
+
+| Origin | Runner | Why |
+|---|---|---|
+| `discord`, `telegram`, `slack`, `webui` | `pty-stdin` (bun-pty) | Channel-driven; needs REPL; REPL needs TTY |
+| `cron`, `heartbeat`, `cli`, `rest` | `process-stream-json` | Channel-free; PTY is overhead; same JSONL semantics |
+
+Sprint 1 picks this up as a runner-selection branch keyed on `BusEvent.origin`. The two runners share the JSONL Tailer (same read path) and only differ in how the `claude` child is supervised. Operators don't see this distinction unless they look at `ps` output.
+
+Re-probe `-p --input-format=stream-json` + Channels on each `claude` minor bump — if Anthropic surfaces channel events into the stream-json output mode in a future version, `process-stream-json` could expand to channel-driven origins and bun-pty could be deprecated entirely.
 
 ## 3. Design principles
 
@@ -290,9 +301,10 @@ type BusEvent = {
 
 | Mode | Implementation | Platforms | Use case |
 |---|---|---|---|
-| `pty-stdin` (default) | Spawn `claude` via `bun-pty` to satisfy the REPL's `isatty(0)` gate. **`stdout: 'ignore'`** — the Bus never reads stdout. Slash commands written to the PTY master. JSONL is the only read source. | macOS, Linux | Default for fresh installs |
+| `pty-stdin` (default for channel-driven agents) | Spawn `claude` via `bun-pty` to satisfy the REPL's `isatty(0)` gate. **`stdout: 'ignore'`** — the Bus never reads stdout. Slash commands written to the PTY master. JSONL is the only read source. | macOS, Linux | Default for `discord`/`telegram`/`slack`/`webui` agents — anywhere Channel notifications drive turns |
+| `process-stream-json` (default for non-channel origins) | `Bun.spawn(['claude', '-p', '--input-format=stream-json'])` with JSON turns written to stdin. No PTY needed — `-p` bypasses the isatty gate. JSONL still authoritative for reads. Channel notifications are NOT delivered in this mode (Probe 0.6); slash commands ARE. | macOS, Linux, Windows | Default for `cron`/`heartbeat`/`cli`/`rest` agents — channel-free invocations where PTY emulation is unnecessary overhead |
 | `tmux` (opt-in) | Wraps `claude` in a detached tmux session; operator can `tmux attach` to inspect | macOS, Linux | Operators who want to attach into a running session for debugging or to issue commands by hand |
-| `process` (Windows-only, fallback) | Direct `Bun.spawn` with `stdin: 'pipe'` — slash command relay does NOT work in this mode on `claude` 2.1.x (REPL downshifts to `--print`). Acceptable only on Windows where `bun-pty` is unavailable or where the operator does not need slash commands. | Windows | Windows fallback when `bun-pty` is unavailable |
+| `process` (Windows-only, channel-driven fallback) | Direct `Bun.spawn` with `stdin: 'pipe'` and no PTY — slash command relay does NOT work in this mode on `claude` 2.1.x (REPL downshifts to `--print`). Acceptable only on Windows where `bun-pty` is unavailable AND the agent needs channels. | Windows | Windows fallback when `bun-pty` is unavailable and `process-stream-json` is unsuitable (channel-driven origin) |
 
 Default is `pty-stdin`. The earlier v2 spec made `process` the default; Spike 0.4 disproved this empirically. `claude` 2.1.143 gates the REPL on `process.stdin.isTTY` AND `process.stdout.isTTY` (binary-confirmed via `strings`: `if (isFirst && process.stdin.isTTY)`). Plain `Bun.spawn({stdin:'pipe'})` auto-downshifts to `--print` mode within ~3 s with exit code 1 and discards any slash command sent.
 
