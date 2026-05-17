@@ -14,6 +14,7 @@
  *     supervision path production uses — and production needs channels.
  */
 
+import { cleanSpawnEnv, withCleanProcessEnv } from "../runner";
 import type { ProbeRunner, ProbeRunnerFactory } from "./schema-probe-types";
 
 interface BunPtyHandle {
@@ -57,12 +58,26 @@ export const defaultPtyRunnerFactory: ProbeRunnerFactory = async ({
     sessionId,
   ];
 
-  const handle = bunPty.spawn(claudeBin, args, {
-    cwd,
-    cols: 120,
-    rows: 30,
-    env: { ...process.env, CI: "1" } as Record<string, string>,
-  });
+  // PR #111 review (agent #3 + agent #4) flagged: bun-pty.spawn MUST go
+  // through `withCleanProcessEnv` + use `cleanSpawnEnv()` for the same
+  // reason PR #110 wrapped session-manager.ts's spawn. bun-pty's Rust
+  // `portable_pty` merges the parent process env at fork() time; passing
+  // a sanitised env Record alone is insufficient. The leak class:
+  // `ANTHROPIC_API_KEY` (and other strip-list keys) in `process.env` get
+  // inherited by the spawned claude, trigger the "Detected a custom API
+  // key" gate, and dump a truncated key into the PTY. PR #104's
+  // long-lived `sk-ant-oat01-*` token exception is honoured by
+  // `withCleanProcessEnv` itself, so the wrap is safe for the supported
+  // token shape.
+  const env: Record<string, string> = { ...cleanSpawnEnv(), CI: "1" };
+  const handle = withCleanProcessEnv(() =>
+    bunPty.spawn(claudeBin, args, {
+      cwd,
+      cols: 120,
+      rows: 30,
+      env,
+    }),
+  );
 
   let exitCode: number | null = null;
   handle.onExit((e) => {

@@ -101,8 +101,8 @@ export function predictJsonlPath(homeDir: string, realpathCwd: string, sessionId
 /* Cache I/O                                                             */
 /* ───────────────────────────────────────────────────────────────────── */
 
-function defaultCacheFile(): string {
-  return join(homedir(), ".claudeclaw", "schema-probe-cache.json");
+function defaultCacheFile(homeOverride?: string): string {
+  return join(homeOverride ?? homedir(), ".claudeclaw", "schema-probe-cache.json");
 }
 
 function readCache(path: string): CacheEntry | null {
@@ -238,7 +238,11 @@ export class SchemaProbe {
   constructor(opts: SchemaProbeOptions = {}, runnerFactory?: ProbeRunnerFactory) {
     this.opts = {
       mode: opts.mode ?? "warn-only",
-      cacheFile: opts.cacheFile ?? defaultCacheFile(),
+      // PR #111 review (agent #5): thread `homeOverride` into the cache
+      // path too so tests passing only `homeOverride` don't end up writing
+      // to the developer's real `~/.claudeclaw/`. Explicit `cacheFile`
+      // still wins (matches the doc on SchemaProbeOptions).
+      cacheFile: opts.cacheFile ?? defaultCacheFile(opts.homeOverride),
       claudeBin: opts.claudeBin,
       force: opts.force ?? false,
       onWarning: opts.onWarning,

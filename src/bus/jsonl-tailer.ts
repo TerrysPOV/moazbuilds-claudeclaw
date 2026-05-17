@@ -329,7 +329,9 @@ export class JsonlTailer {
     }
     if (Array.isArray(content)) {
       // tool_result blocks live inside user messages — §5.2 + Spike 0.2.
-      // Mirrors `src/runner.ts:923-934` extraction.
+      // Mirrors `src/runner.ts` tool_result extraction inside `onToolEvent`
+      // (the `if (block.type === 'tool_result')` loop — search by name as
+      // line numbers drift).
       const results = extractToolResults(content);
       if (results.length === 0) {
         // Array content with no tool_results — unusual but observed
