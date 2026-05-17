@@ -1175,6 +1175,26 @@ const DIR_SCOPE_PROMPT = [
   "If a request requires accessing files outside the project, refuse and explain why.",
 ].join("\n");
 
+/**
+ * Band-aid for #105 — see the call site in `run()` for full context.
+ *
+ * Constrains the model's user-facing reply to plain prose so the PTY
+ * sentinel-echo parser can extract textual content rather than TUI box
+ * chrome from rendered markdown blocks. Temporary; remove with the PTY
+ * runtime when the Bus runtime (epic #107, spec PR #106) becomes default.
+ */
+const PTY_OUTPUT_FORMAT_CONSTRAINT = [
+  "OUTPUT FORMAT CONSTRAINT (response surface limitation):",
+  "Your final user-facing reply MUST be plain prose. The reply is captured through a text-only transport that cannot render markdown.",
+  "Do NOT use in your final reply:",
+  "  - Backtick code fences (```...``` or single `...`) — write paths and commands plainly, e.g. /home/x/file.png NOT `/home/x/file.png`",
+  "  - Markdown bullets (`*`, `-`, `+`) at the start of lines",
+  "  - Numbered list items (`1.`, `2.`)",
+  "  - Block quotes (`>` at start of lines)",
+  "  - Horizontal rules (`---`)",
+  "This constraint applies ONLY to your final response text. You may still use markdown freely inside tool inputs and internal reasoning.",
+].join("\n");
+
 export async function ensureProjectClaudeMd(): Promise<void> {
   // Preflight-only initialization: never rewrite an existing project CLAUDE.md.
   if (existsSync(PROJECT_CLAUDE_MD)) return;
@@ -1703,6 +1723,25 @@ async function execClaude(
     if (memoryInstructions) appendParts.push(memoryInstructions);
 
     if (security.level !== "unrestricted") appendParts.push(DIR_SCOPE_PROMPT);
+
+    // Band-aid for #105 — the PTY sentinel-echo parser captures the TUI
+    // rendered form of the model's reply, not the underlying assistant text.
+    // When the model emits markdown structure (backticks, code fences, bullets,
+    // numbered lists, block quotes), the TUI renders them inside framed
+    // visual elements and the parser extracts box-chrome glyphs instead of
+    // textual content. Empirically observed: a reply of `Saved to
+    // `/path/to/file.png`` (clean in JSONL) came back through Discord as
+    // `*↓1`.
+    //
+    // Constrain the assistant output to plain prose when PTY parsing is the
+    // surface translation layer. This is a workaround, not a fix — the proper
+    // fix is the Bus runtime (issue #107 epic, spec PR #106) which reads the
+    // JSONL directly and doesn't depend on TUI rendering. Remove this block
+    // when `runtime: bus` becomes the default.
+    if (settings.pty.enabled) {
+      appendParts.push(PTY_OUTPUT_FORMAT_CONSTRAINT);
+    }
+
     if (appendParts.length > 0) {
       args.push("--append-system-prompt", appendParts.join("\n\n"));
     }
