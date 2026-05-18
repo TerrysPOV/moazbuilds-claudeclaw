@@ -65,8 +65,11 @@ describe("pty-output-parser — sentinel flow (synthetic)", () => {
     now += 5000;
     expect(tick(parser, now)).toEqual([]);
 
-    // First response byte arrives. Now the quiet window can be counted.
-    feed(parser, new TextEncoder().encode("a"), now);
+    // First response byte arrives — must include an activity indicator
+    // so the strengthened gate (added in fix/pty-premature-sentinel) is
+    // also satisfied. `●` (U+25CF, the assistant-marker glyph) is one
+    // of the indicators the parser scans for.
+    feed(parser, new TextEncoder().encode("● a"), now);
     expect(parser.sawByteSinceTurnStart).toBe(true);
 
     // Within the quiet window after that byte → still no quiet.
@@ -96,9 +99,10 @@ describe("pty-output-parser — sentinel flow (synthetic)", () => {
     expect(startEv).toEqual({ type: "turn-start", offset: parser.totalBytes });
     expect(parser.state).toBe("accumulating");
 
-    // Response trickles in.
+    // Response trickles in — include `●` (assistant marker) so the
+    // activity-indicator gate is satisfied alongside the byte-seen gate.
     now += 10;
-    expect(feed(parser, enc.encode("ack"), now)).toEqual([]);
+    expect(feed(parser, enc.encode("● ack"), now)).toEqual([]);
     expect(parser.state).toBe("accumulating");
 
     // tick fires before the quiet window elapses → no event.
@@ -136,7 +140,9 @@ describe("pty-output-parser — sentinel flow (synthetic)", () => {
 
     let now = 1000;
     startTurn(parser, uuid, sentinelBytes, now);
-    feed(parser, enc.encode("first chunk"), now);
+    // Include `●` so the activity-indicator gate is satisfied — the
+    // debounce test isn't about gating, but quiet can't fire without it.
+    feed(parser, enc.encode("● first chunk"), now);
 
     // Quiet window elapses → quiet fires.
     now += 200;
@@ -293,6 +299,163 @@ describe("pty-output-parser — sentinel flow (synthetic)", () => {
     expect(parser.state).toBe("idle");
     expect(parser.totalBytes).toBe(totalAfter);
     expect(parser.pendingBaseOffset).toBe(totalAfter);
+  });
+
+  // ─── Activity-indicator gate (fix/pty-premature-sentinel) ─────────────────
+  //
+  // Strengthens issue #87 to cover the 2026-05-18 Discord-screenshot
+  // failure: after a long idle period, a new turn produced "Ha, yeah..."
+  // (the PREVIOUS turn's response) + the prompt envelope echo, with no
+  // new claude response. Root cause: bytes flowed (so #87's
+  // sawByteSinceTurnStart gate passed) but they were pure TUI redraws —
+  // claude hadn't started generating tokens. quiet fired, supervisor
+  // wrote the sentinel, claude echoed the sentinel without ever
+  // producing a marker, and the parser returned stale buffer content as
+  // the response.
+  //
+  // The fix: gate quiet on having seen an actual activity indicator
+  // (spinner glyph ✻ ✶ ✳ ✢ ✽ ✺ ✷ ◉ OR assistant marker ● ⏺) since
+  // turn start. Pure TUI redraws don't satisfy the gate.
+
+  test("repro #119/2026-05-18: quiet does NOT fire when only TUI redraws arrive", () => {
+    const enc = new TextEncoder();
+    const parser = createParser({ quietWindowMs: 100 });
+    const uuid = "uuid-redraw";
+    const sentinelBytes = encodeSentinel(buildSentinel(uuid));
+
+    let now = 1000;
+    startTurn(parser, uuid, sentinelBytes, now);
+
+    // Bytes arrive — but they're the prompt-envelope echo + scrollback
+    // re-render, with no spinner and no assistant marker. This matches
+    // the screenshot's captured buffer.
+    feed(
+      parser,
+      enc.encode(
+        "Ha, yeah — no lag at all that time. Feels snappy today.\n\n" +
+          "❯ [2026-05-18 13:53:45 UTC+1]\n" +
+          "[Discord DM]\n" +
+          "[Discord from terryspov_98385]\n" +
+          "Message: So remind me the current preview url and confirm this is for PR5\n",
+      ),
+      now,
+    );
+    expect(parser.sawByteSinceTurnStart).toBe(true);
+    expect(parser.sawActivityIndicatorThisTurn).toBe(false);
+
+    // Quiet window elapses. Pre-fix this would fire `quiet`; post-fix
+    // it must not — claude hasn't actually started responding.
+    now += 200;
+    expect(tick(parser, now)).toEqual([]);
+    now += 5000;
+    expect(tick(parser, now)).toEqual([]);
+  });
+
+  test("quiet fires once a spinner glyph appears (✻ during generation)", () => {
+    const enc = new TextEncoder();
+    const parser = createParser({ quietWindowMs: 100 });
+    const uuid = "uuid-spinner";
+    const sentinelBytes = encodeSentinel(buildSentinel(uuid));
+
+    let now = 1000;
+    startTurn(parser, uuid, sentinelBytes, now);
+
+    // Initial redraw bytes — gate still closed.
+    feed(parser, enc.encode("Reticulating "), now);
+    expect(parser.sawActivityIndicatorThisTurn).toBe(false);
+    now += 200;
+    expect(tick(parser, now)).toEqual([]);
+
+    // Spinner appears → gate opens.
+    feed(parser, enc.encode("✻ thinking"), now);
+    expect(parser.sawActivityIndicatorThisTurn).toBe(true);
+
+    // Quiet window elapses → quiet now fires.
+    const qEvs = tick(parser, now + 200);
+    expect(qEvs.length).toBe(1);
+    expect(qEvs[0]!.type).toBe("quiet");
+  });
+
+  test("quiet fires once an assistant marker (●) appears", () => {
+    const enc = new TextEncoder();
+    const parser = createParser({ quietWindowMs: 100 });
+    const uuid = "uuid-marker";
+    const sentinelBytes = encodeSentinel(buildSentinel(uuid));
+
+    let now = 1000;
+    startTurn(parser, uuid, sentinelBytes, now);
+
+    // Plain text only — gate stays closed.
+    feed(parser, enc.encode("some pre-response noise"), now);
+    expect(parser.sawActivityIndicatorThisTurn).toBe(false);
+    now += 200;
+    expect(tick(parser, now)).toEqual([]);
+
+    // Assistant marker arrives → gate opens.
+    feed(parser, enc.encode("\n● Done."), now);
+    expect(parser.sawActivityIndicatorThisTurn).toBe(true);
+    const qEvs = tick(parser, now + 200);
+    expect(qEvs.length).toBe(1);
+  });
+
+  test("activity indicator straddling a chunk boundary is still detected", () => {
+    // `●` is U+25CF = E2 97 8F. Feed the first byte in chunk A and the
+    // remaining two in chunk B. The carryover should keep the parser
+    // alive across the split.
+    const parser = createParser({ quietWindowMs: 100 });
+    const uuid = "uuid-split";
+    const sentinelBytes = encodeSentinel(buildSentinel(uuid));
+
+    let now = 1000;
+    startTurn(parser, uuid, sentinelBytes, now);
+
+    feed(parser, new Uint8Array([0xe2]), now);
+    expect(parser.sawActivityIndicatorThisTurn).toBe(false);
+    feed(parser, new Uint8Array([0x97, 0x8f]), now);
+    expect(parser.sawActivityIndicatorThisTurn).toBe(true);
+  });
+
+  test("startTurn resets the activity-indicator flag between turns", () => {
+    const enc = new TextEncoder();
+    const parser = createParser({ quietWindowMs: 100 });
+
+    // Turn 1: sees a `●` marker.
+    const u1 = "uuid-turn-1";
+    const s1 = encodeSentinel(buildSentinel(u1));
+    startTurn(parser, u1, s1, 1000);
+    feed(parser, enc.encode("● response"), 1010);
+    expect(parser.sawActivityIndicatorThisTurn).toBe(true);
+    markSentinelWritten(parser);
+    feed(parser, s1, 1020);
+    resetTurn(parser);
+
+    // Turn 2: state should be cleared.
+    const u2 = "uuid-turn-2";
+    const s2 = encodeSentinel(buildSentinel(u2));
+    startTurn(parser, u2, s2, 2000);
+    expect(parser.sawActivityIndicatorThisTurn).toBe(false);
+
+    // Plain text — gate stays closed.
+    feed(parser, enc.encode("plain text"), 2010);
+    expect(parser.sawActivityIndicatorThisTurn).toBe(false);
+    expect(tick(parser, 2200)).toEqual([]);
+  });
+
+  test("·  (U+00B7 middle-dot) does NOT trip the gate — too common in normal text", () => {
+    // Middle-dot appears in TUI footers (`Opus · 1M context · /effort`)
+    // and in legitimate body text. If we counted it as an activity
+    // indicator, the gate would false-positive on idle TUI redraws.
+    const enc = new TextEncoder();
+    const parser = createParser({ quietWindowMs: 100 });
+    const uuid = "uuid-middledot";
+    const sentinelBytes = encodeSentinel(buildSentinel(uuid));
+
+    let now = 1000;
+    startTurn(parser, uuid, sentinelBytes, now);
+    feed(parser, enc.encode("Opus 4.7 · 1M context · /effort"), now);
+    expect(parser.sawActivityIndicatorThisTurn).toBe(false);
+    now += 200;
+    expect(tick(parser, now)).toEqual([]);
   });
 });
 

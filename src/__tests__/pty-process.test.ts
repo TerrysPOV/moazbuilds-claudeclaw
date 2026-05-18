@@ -190,6 +190,13 @@ describe("PtyProcess — _waitForReadySettle two-phase (issue #84)", () => {
 // the new flow without invoking real claude.
 
 describe("PtyProcess — runTurn sentinel-echo (clean boundary)", () => {
+  // NOTE: prompts include `●` (U+25CF, claude's assistant-message
+  // marker glyph) because the parser's activity-indicator gate (added
+  // in fix/pty-premature-sentinel) refuses to fire `quiet` until a
+  // spinner / marker glyph has been seen. Real claude emits these in
+  // its TUI; `/bin/cat` doesn't, so we slip one into the prompt and
+  // let cat echo it back to satisfy the gate.
+
   test("cat echoes the sentinel back → cleanBoundary=true", async () => {
     const proc = await spawnPty(
       baseOpts({
@@ -199,7 +206,7 @@ describe("PtyProcess — runTurn sentinel-echo (clean boundary)", () => {
         sentinelMaxWaitMs: 5000,
       }),
     );
-    const result = await proc.runTurn("hello world", { timeoutMs: 5000 });
+    const result = await proc.runTurn("● hello world", { timeoutMs: 5000 });
     expect(result.cleanBoundary).toBe(true);
     // cat echoes the prompt; the response should contain it.
     expect(result.text.toLowerCase()).toContain("hello world");
@@ -217,7 +224,7 @@ describe("PtyProcess — runTurn sentinel-echo (clean boundary)", () => {
         sentinelMaxWaitMs: 5000,
       }),
     );
-    const longPrompt = "x".repeat(500);
+    const longPrompt = `● ${"x".repeat(500)}`;
     const result = await proc.runTurn(longPrompt, { timeoutMs: 5000 });
     expect(result.cleanBoundary).toBe(true);
     expect(result.text).toContain("x".repeat(20));
@@ -234,7 +241,7 @@ describe("PtyProcess — runTurn sentinel-echo (clean boundary)", () => {
       }),
     );
     let chunkBytes = 0;
-    const result = await proc.runTurn("streaming-test-payload", {
+    const result = await proc.runTurn("● streaming-test-payload", {
       timeoutMs: 5000,
       onChunk: (s) => {
         chunkBytes += s.length;
@@ -256,10 +263,15 @@ describe("PtyProcess — runTurn sentinel max-wait fallback", () => {
     //
     // The PTY's kernel cooked-mode echo would still echo our writes, so we
     // disable it via `stty -echo` first.
+    // `printf '●'` emits the assistant-marker byte sequence so the
+    // parser's activity-indicator gate opens (added in
+    // fix/pty-premature-sentinel). Without it, quiet would never fire
+    // and the test would time out at the hard timeoutMs instead of
+    // exercising the sentinel-max-wait path.
     const proc = await spawnPty(
       baseOpts({
         _commandOverride: "/bin/sh",
-        _argsOverride: ["-c", "stty -echo; sleep 5"],
+        _argsOverride: ["-c", "stty -echo; printf '\\xe2\\x97\\x8f'; sleep 5"],
         quietWindowMs: 50,
         sentinelMaxWaitMs: 250,
       }),
@@ -284,12 +296,15 @@ describe("PtyProcess — runTurn sentinel max-wait fallback", () => {
     // writes don't trivially come back). `printf 'response-bytes'` emits
     // bytes that the parser accumulates AFTER the turn starts. Then sleep
     // burns time until sentinelMaxWaitMs fires.
+    // `\xe2\x97\x8f` = `●` (U+25CF) — assistant-marker glyph the
+    // parser's activity-indicator gate scans for (added in
+    // fix/pty-premature-sentinel).
     const proc = await spawnPty(
       baseOpts({
         _commandOverride: "/bin/sh",
         _argsOverride: [
           "-c",
-          "echo BANNER_BANNER_BANNER_PRETURN; stty -echo; printf 'response-bytes-during-turn'; sleep 5",
+          "echo BANNER_BANNER_BANNER_PRETURN; stty -echo; printf '\\xe2\\x97\\x8f response-bytes-during-turn'; sleep 5",
         ],
         quietWindowMs: 100,
         sentinelMaxWaitMs: 400,
@@ -346,7 +361,7 @@ describe("PtyProcess — sentinel UUID override hook", () => {
         _sentinelUuidOverride: () => "pinned-uuid-1234",
       }),
     );
-    const result = await proc.runTurn("hi", { timeoutMs: 5000 });
+    const result = await proc.runTurn("● hi", { timeoutMs: 5000 });
     expect(result.cleanBoundary).toBe(true);
     await proc.dispose();
   });
@@ -363,10 +378,13 @@ describe("PtyProcess — concurrency", () => {
         turnIdleTimeoutMs: 300,
       }),
     );
-    const t1 = proc.runTurn("first", { timeoutMs: 5000 });
+    // `●` so cat's echo trips the activity-indicator gate; without it the
+    // first turn never completes and the test times out instead of
+    // exercising the concurrency rejection.
+    const t1 = proc.runTurn("● first", { timeoutMs: 5000 });
     let err: unknown;
     try {
-      await proc.runTurn("second", { timeoutMs: 5000 });
+      await proc.runTurn("● second", { timeoutMs: 5000 });
     } catch (e) {
       err = e;
     }

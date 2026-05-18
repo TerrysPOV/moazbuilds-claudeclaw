@@ -105,6 +105,32 @@ export interface Parser {
    *  observed at least one byte after turn start, so quiet truly means
    *  "claude was responding and has stopped." */
   sawByteSinceTurnStart: boolean;
+  /** Whether claude's TUI has emitted any "I am actively responding"
+   *  indicator since the turn started — a spinner glyph (✻ ✶ ✳ ✢ ✽
+   *  ✺ ✷ · ◉) or an assistant-message marker (● ⏺).
+   *
+   *  Strengthens issue #87's `sawByteSinceTurnStart` gate. The original
+   *  gate only required ANY byte after turn start, which was enough to
+   *  catch the empty-silence variant of the bug. But it missed a second
+   *  failure mode where the PTY emits bytes that are PURELY TUI redraws
+   *  (input-area echo of the new prompt envelope, resumed-session
+   *  scrollback) without claude having actually begun generating a
+   *  response. Quiet fired, supervisor wrote the sentinel, claude
+   *  echoed the sentinel without ever producing tokens, and the
+   *  captured "response" was last-turn content + the new prompt
+   *  envelope. See discord screenshot 2026-05-18 13:53 for the bug
+   *  signature.
+   *
+   *  Failure mode under this gate: if claude truly has crashed or gone
+   *  silent, `quiet` never fires and the supervisor's `sentinelMaxWaitMs`
+   *  (default 30s) times the turn out. That's the correct outcome —
+   *  visible failure beats returning garbage. */
+  sawActivityIndicatorThisTurn: boolean;
+  /** Carryover for activity-indicator byte-sequence scanning. The
+   *  indicators are all 2-3 UTF-8 bytes; we keep up to 2 bytes from the
+   *  previous chunk so a byte sequence straddling a chunk boundary
+   *  still gets matched. */
+  activityScanCarry: Uint8Array;
   /** Carry-over from previous chunks needed to detect a sentinel that
    *  straddles a chunk boundary. At most `sentinelBytes.length - 1` bytes. */
   pending: Uint8Array;
@@ -125,6 +151,8 @@ export function createParser(opts?: { quietWindowMs?: number }): Parser {
     quietWindowMs: opts?.quietWindowMs ?? DEFAULT_QUIET_WINDOW_MS,
     quietEmitted: false,
     sawByteSinceTurnStart: false,
+    sawActivityIndicatorThisTurn: false,
+    activityScanCarry: new Uint8Array(0),
     pending: new Uint8Array(0),
     pendingBaseOffset: 0,
   };
@@ -153,6 +181,8 @@ export function startTurn(
   parser.lastByteAt = now;
   parser.quietEmitted = false;
   parser.sawByteSinceTurnStart = false;
+  parser.sawActivityIndicatorThisTurn = false;
+  parser.activityScanCarry = new Uint8Array(0);
   parser.pending = new Uint8Array(0);
   parser.pendingBaseOffset = parser.totalBytes;
   return { type: "turn-start", offset: parser.turnStartOffset };
@@ -176,6 +206,9 @@ export function feed(parser: Parser, chunk: Uint8Array, now: number): ParserEven
   parser.quietEmitted = false; // any new byte resets the quiet emitter
   if (parser.state === "accumulating" || parser.state === "awaiting-sentinel") {
     parser.sawByteSinceTurnStart = true;
+    // Activity-indicator scan — strengthens issue #87's gate so the
+    // sentinel isn't written when the only bytes seen are TUI redraws.
+    scanForActivityIndicator(parser, chunk);
   }
 
   // We only scan for the sentinel after the supervisor has actually written
@@ -237,6 +270,17 @@ export function tick(parser: Parser, now: number): ParserEvent[] {
   // sentinel-found, and the turn returns with only the TUI splash + prompt
   // echo as the "response" — model output never had a chance to arrive.
   if (!parser.sawByteSinceTurnStart) return [];
+  // Strengthened gate: even when bytes ARE flowing, they may be pure TUI
+  // redraws (prompt-envelope echo, resumed-session scrollback) with no
+  // actual response in progress. The fix from the 2026-05-18 Discord
+  // screenshot — claude had been idle ~1h23m and the new turn returned
+  // last-turn content + the new prompt envelope. Wait for a real
+  // activity indicator (spinner or assistant marker) before treating
+  // silence as "claude is done." If claude has crashed or simply
+  // doesn't respond, this gate keeps quiet from firing and the
+  // supervisor's `sentinelMaxWaitMs` (default 30s) fails the turn
+  // visibly — better than returning garbage.
+  if (!parser.sawActivityIndicatorThisTurn) return [];
   if (now - parser.lastByteAt < parser.quietWindowMs) return [];
   parser.quietEmitted = true;
   return [{ type: "quiet", offset: parser.totalBytes }];
@@ -265,6 +309,8 @@ export function resetTurn(parser: Parser): void {
   parser.sentinelOffset = 0;
   parser.lastByteAt = 0;
   parser.quietEmitted = false;
+  parser.sawActivityIndicatorThisTurn = false;
+  parser.activityScanCarry = new Uint8Array(0);
   parser.pending = new Uint8Array(0);
   parser.pendingBaseOffset = parser.totalBytes;
 }
@@ -280,6 +326,91 @@ export function buildSentinel(uuid: string): string {
 /** Encode a sentinel string into bytes (UTF-8 / ASCII-safe). */
 export function encodeSentinel(sentinel: string): Uint8Array {
   return new TextEncoder().encode(sentinel);
+}
+
+// ─── Activity-indicator scan ─────────────────────────────────────────────────
+
+/**
+ * UTF-8 byte sequences for the glyphs claude's TUI uses to signal "I am
+ * actively producing output."
+ *
+ * Spinner family (per the `terminatorRe` in `extractResponseText`):
+ *   ✻ U+273B (E2 9C BB)
+ *   ✶ U+2736 (E2 9C B6)
+ *   ✳ U+2733 (E2 9C B3)
+ *   ✢ U+2722 (E2 9C A2)
+ *   ✽ U+273D (E2 9C BD)
+ *   ✺ U+273A (E2 9C BA)
+ *   ✷ U+2737 (E2 9C B7)
+ *   ◉ U+25C9 (E2 97 89)
+ *
+ * Assistant-message markers (claude prints these at the start of each
+ * new assistant turn):
+ *   ● U+25CF (E2 97 8F)
+ *   ⏺ U+23FA (E2 8F BA)
+ *
+ * NOT included: `·` U+00B7. Too common as middle-dot punctuation in
+ * normal text + TUI footers to be a reliable "claude is responding"
+ * signal; including it would false-positive on idle TUI redraws.
+ */
+const ACTIVITY_INDICATOR_BYTES: readonly Uint8Array[] = [
+  new Uint8Array([0xe2, 0x9c, 0xbb]), // ✻
+  new Uint8Array([0xe2, 0x9c, 0xb6]), // ✶
+  new Uint8Array([0xe2, 0x9c, 0xb3]), // ✳
+  new Uint8Array([0xe2, 0x9c, 0xa2]), // ✢
+  new Uint8Array([0xe2, 0x9c, 0xbd]), // ✽
+  new Uint8Array([0xe2, 0x9c, 0xba]), // ✺
+  new Uint8Array([0xe2, 0x9c, 0xb7]), // ✷
+  new Uint8Array([0xe2, 0x97, 0x89]), // ◉
+  new Uint8Array([0xe2, 0x97, 0x8f]), // ●
+  new Uint8Array([0xe2, 0x8f, 0xba]), // ⏺
+];
+
+/**
+ * Longest indicator length in bytes — used to size the carryover for
+ * chunk-boundary handling. All current indicators are 3 bytes, so the
+ * carry needs to hold up to 2 bytes from the previous chunk to catch a
+ * sequence split across chunks.
+ */
+const ACTIVITY_CARRY_MAX = 2;
+
+/**
+ * Scan `chunk` (combined with any prior carry) for any activity
+ * indicator byte sequence. Updates `parser.sawActivityIndicatorThisTurn`
+ * if found, and updates `parser.activityScanCarry` so the next chunk
+ * picks up a sequence split across the boundary.
+ *
+ * Cheap: the activity-indicator set is small (10 sequences) and we only
+ * scan when the flag is unset. Once seen, this becomes a no-op for the
+ * rest of the turn.
+ */
+function scanForActivityIndicator(parser: Parser, chunk: Uint8Array): void {
+  if (parser.sawActivityIndicatorThisTurn) return;
+  if (chunk.length === 0) return;
+
+  // Combine with carry so a split-byte sequence at the chunk boundary is
+  // still detectable.
+  const carry = parser.activityScanCarry;
+  const buf = carry.length === 0 ? chunk : concatBytes(carry, chunk);
+
+  for (const seq of ACTIVITY_INDICATOR_BYTES) {
+    if (indexOfBytes(buf, seq) >= 0) {
+      parser.sawActivityIndicatorThisTurn = true;
+      parser.activityScanCarry = new Uint8Array(0);
+      return;
+    }
+  }
+
+  // No hit — keep the tail (up to ACTIVITY_CARRY_MAX bytes) as carry.
+  const tailLen = Math.min(ACTIVITY_CARRY_MAX, buf.length);
+  parser.activityScanCarry = buf.slice(buf.length - tailLen);
+}
+
+function concatBytes(a: Uint8Array, b: Uint8Array): Uint8Array {
+  const out = new Uint8Array(a.length + b.length);
+  out.set(a, 0);
+  out.set(b, a.length);
+  return out;
 }
 
 // ─── Byte-level search ───────────────────────────────────────────────────────
