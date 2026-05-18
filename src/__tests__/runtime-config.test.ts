@@ -79,3 +79,96 @@ describe("parseSettings — runtime field (Sprint 5.1)", () => {
     expect(getSettings().runtime).toBe("bus");
   });
 });
+
+describe("parseSettings — agents field (Sprint 5.2a)", () => {
+  it("defaults to empty array when the field is absent", async () => {
+    await writeRawSettings({});
+    await reloadSettings();
+    expect(getSettings().agents).toEqual([]);
+  });
+
+  it("accepts a minimal entry (id only)", async () => {
+    await writeRawSettings({ agents: [{ id: "triage" }] });
+    await reloadSettings();
+    expect(getSettings().agents).toEqual([{ id: "triage" }]);
+  });
+
+  it("preserves all optional fields when set", async () => {
+    await writeRawSettings({
+      agents: [
+        {
+          id: "research",
+          cwd: "/srv/research",
+          permission_mode: "bypassPermissions",
+          supervision: "pty-stdin",
+          system_prompt_file: "/etc/cc/research.md",
+          memory_file: "/etc/cc/research-memory.md",
+          mcp_config: "/etc/cc/research-mcp.json",
+        },
+      ],
+    });
+    await reloadSettings();
+    expect(getSettings().agents[0]).toMatchObject({
+      id: "research",
+      cwd: "/srv/research",
+      permission_mode: "bypassPermissions",
+      supervision: "pty-stdin",
+      system_prompt_file: "/etc/cc/research.md",
+      memory_file: "/etc/cc/research-memory.md",
+      mcp_config: "/etc/cc/research-mcp.json",
+    });
+  });
+
+  it("drops entries missing or with invalid id", async () => {
+    await writeRawSettings({
+      agents: [
+        { id: "ok-1" },
+        { id: "" },
+        { cwd: "/no/id" },
+        { id: "Has-Caps-And-Periods.bad" },
+        { id: "ok_2" },
+      ],
+    });
+    await reloadSettings();
+    expect(getSettings().agents.map((a) => a.id)).toEqual(["ok-1", "ok_2"]);
+  });
+
+  it("dedupes by id keeping the first occurrence", async () => {
+    await writeRawSettings({
+      agents: [
+        { id: "triage", cwd: "/first" },
+        { id: "triage", cwd: "/second" },
+      ],
+    });
+    await reloadSettings();
+    expect(getSettings().agents).toEqual([{ id: "triage", cwd: "/first" }]);
+  });
+
+  it("drops invalid permission_mode and supervision but keeps the rest", async () => {
+    await writeRawSettings({
+      agents: [
+        {
+          id: "triage",
+          permission_mode: "all-the-powers",
+          supervision: "windows-fancy",
+          cwd: "/srv",
+        },
+      ],
+    });
+    await reloadSettings();
+    expect(getSettings().agents[0]).toEqual({ id: "triage", cwd: "/srv" });
+  });
+
+  it("falls back to empty array when the field is not an array", async () => {
+    await writeRawSettings({ agents: "triage" });
+    await reloadSettings();
+    expect(getSettings().agents).toEqual([]);
+  });
+
+  it("enforces 36-char id cap (sun_path budget)", async () => {
+    const tooLong = "a".repeat(37);
+    await writeRawSettings({ agents: [{ id: tooLong }, { id: "a".repeat(36) }] });
+    await reloadSettings();
+    expect(getSettings().agents.map((a) => a.id)).toEqual(["a".repeat(36)]);
+  });
+});
