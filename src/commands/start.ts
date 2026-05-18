@@ -520,10 +520,24 @@ export async function start(args: string[] = []) {
           console.warn(`[${ts()}] Bus adapter "${name}" failed to mount: ${msg}`);
         }
         handle.attachAdapters(adapters);
+
+        // Sprint 5.2c: wire BusScheduler with heartbeat + jobs against
+        // the first spawned agent (matches legacy single-global-agent
+        // shape). The handle's stop() lifecycle owns scheduler
+        // teardown alongside adapters.
+        const { wireBusScheduler } = await import("../bus/scheduler-wiring");
+        const schedulerHandle = await wireBusScheduler({
+          bus,
+          defaultAgentId: handle.spawnedAgentIds[0] ?? null,
+          heartbeat: settings.heartbeat,
+          jobs,
+          timezoneOffsetMinutes: settings.timezoneOffsetMinutes,
+        });
+        handle.attachScheduler(schedulerHandle);
       } catch (wireErr) {
-        // Adapter wiring threw — stop the handle (which already owns
-        // the bus + agents) before re-throwing to the outer catch so
-        // the daemon falls back to legacy with everything torn down.
+        // Adapter / scheduler wiring threw — stop the handle (which
+        // already owns the bus + agents + whatever was attached
+        // before this throw) before re-throwing to the outer catch.
         try {
           await handle.stop();
         } catch (stopErr) {
@@ -1121,7 +1135,11 @@ export async function start(args: string[] = []) {
   // Install plugins without blocking daemon startup.
   startPreflightInBackground(process.cwd());
 
-  if (currentSettings.heartbeat.enabled) scheduleHeartbeat();
+  // Sprint 5.2c: when the Bus runtime is mounted, the legacy heartbeat
+  // tick is skipped — `wireBusScheduler` already registered the
+  // heartbeat against the Bus scheduler so firing it again here would
+  // double-trigger.
+  if (currentSettings.heartbeat.enabled && !skipLegacyAdapters) scheduleHeartbeat();
 
   // --- Hot-reload loop (every 30s) ---
   setInterval(async () => {

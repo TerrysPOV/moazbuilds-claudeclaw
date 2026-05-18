@@ -69,9 +69,30 @@ export interface BusRuntimeHandle {
    */
   attachAdapters(adapters: readonly MountedAdapter[]): void;
   /**
-   * Tear down adapters + agents + bus in reverse-construction order.
-   * Idempotent; call as many times as you want.
+   * Register a BusScheduler handle with the stop lifecycle. Sprint
+   * 5.2c (PR #125). The scheduler is constructed AFTER mount returns
+   * (so it can dispatch through the live bus) and registered here so
+   * `handle.stop()` cancels every trigger + stops the scheduler
+   * before tearing down agents + bus. Only one scheduler can be
+   * attached; subsequent calls overwrite the previous one (and stop
+   * the previous one first so timers don't leak).
    */
+  attachScheduler(scheduler: AttachedScheduler | null): void;
+  /**
+   * Tear down adapters + scheduler + agents + bus in reverse-
+   * construction order. Idempotent; call as many times as you want.
+   */
+  stop(): Promise<void>;
+}
+
+/**
+ * Minimal shape `attachScheduler` expects — the concrete
+ * `BusSchedulerHandle` from `scheduler-wiring.ts` satisfies it. Kept
+ * minimal here so `runtime-mount` doesn't pull a transitive
+ * dependency on the scheduler module (which would cycle if the
+ * scheduler ever needs the mount).
+ */
+export interface AttachedScheduler {
   stop(): Promise<void>;
 }
 
@@ -216,6 +237,11 @@ export async function mountBusRuntime(
     // `attachAdapters`. Backwards-compatible: `opts.adapters` still
     // accepted for callers that wired before mount.
     const adapters: MountedAdapter[] = opts.adapters ? [...opts.adapters] : [];
+    // Sprint 5.2c (PR #125): the daemon attaches a `BusScheduler`
+    // handle after mount so heartbeat + cron triggers are torn down
+    // alongside adapters + agents + bus. Only one scheduler can be
+    // attached at a time.
+    let attachedScheduler: AttachedScheduler | null = null;
     const spawnedLabel = spawned.length === 0 ? "no agents" : `agents=[${spawned.join(", ")}]`;
     const adaptersLabel =
       adapters.length === 0
@@ -251,12 +277,43 @@ export async function mountBusRuntime(
         }
         for (const a of more) adapters.push(a);
       },
+      attachScheduler(scheduler) {
+        if (stopped) {
+          // Same defence as attachAdapters: tear down immediately on
+          // microtask so the late scheduler doesn't leak its timers.
+          if (scheduler) {
+            Promise.resolve()
+              .then(() => scheduler.stop())
+              .catch((err) => logger.error("[bus-runtime] post-stop attachScheduler", err));
+          }
+          return;
+        }
+        // Replacing an existing scheduler stops the previous one
+        // first so its timers don't leak.
+        if (attachedScheduler && attachedScheduler !== scheduler) {
+          const prev = attachedScheduler;
+          Promise.resolve()
+            .then(() => prev.stop())
+            .catch((err) => logger.error("[bus-runtime] previous scheduler.stop()", err));
+        }
+        attachedScheduler = scheduler;
+      },
       async stop() {
         if (stopped) return;
         stopped = true;
         // Adapters first: stop inbound traffic so nothing new hits the
         // bus while we're tearing down agents. Sprint 5.2b.
         await stopBusAdapters(adapters, logger);
+        // Scheduler next: cancel every recurring trigger so heartbeats
+        // / crons don't fire mid-teardown. Sprint 5.2c.
+        if (attachedScheduler) {
+          try {
+            await attachedScheduler.stop();
+          } catch (err) {
+            logger.error("[bus-runtime] scheduler.stop() failed", err);
+          }
+          attachedScheduler = null;
+        }
         // Detach the slash handler so any closure in `wireSlashCommands`
         // can't reach a torn-down SessionManager.
         try {
