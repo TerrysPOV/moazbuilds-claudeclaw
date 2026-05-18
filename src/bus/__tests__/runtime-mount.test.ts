@@ -545,6 +545,86 @@ describe("mountBusRuntime — attachAdapters", () => {
     expect(stopOrder).toEqual(["telegram", "discord"]);
   });
 
+  it("attachScheduler is torn down on handle.stop (Sprint 5.2c)", async () => {
+    const bus = createFakeBus();
+    const sm = new FakeSessionManager();
+    let schedulerStopped = false;
+    const fakeScheduler = {
+      stop: async () => {
+        schedulerStopped = true;
+      },
+    };
+    const handle = await mountBusRuntime({
+      bus,
+      sessionManager: sm,
+      logger: SILENT_LOGGER,
+    });
+    handle.attachScheduler(fakeScheduler);
+    await handle.stop();
+    expect(schedulerStopped).toBe(true);
+  });
+
+  it("attachScheduler(null) when no scheduler is attached is safe", async () => {
+    const bus = createFakeBus();
+    const sm = new FakeSessionManager();
+    const handle = await mountBusRuntime({
+      bus,
+      sessionManager: sm,
+      logger: SILENT_LOGGER,
+    });
+    handle.attachScheduler(null);
+    await handle.stop();
+  });
+
+  it("replacing the scheduler stops the previous one to avoid timer leaks", async () => {
+    const bus = createFakeBus();
+    const sm = new FakeSessionManager();
+    let firstStopped = false;
+    let secondStopped = false;
+    const first = {
+      stop: async () => {
+        firstStopped = true;
+      },
+    };
+    const second = {
+      stop: async () => {
+        secondStopped = true;
+      },
+    };
+    const handle = await mountBusRuntime({
+      bus,
+      sessionManager: sm,
+      logger: SILENT_LOGGER,
+    });
+    handle.attachScheduler(first);
+    handle.attachScheduler(second);
+    // First scheduler's stop is scheduled on microtask queue.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(firstStopped).toBe(true);
+    await handle.stop();
+    expect(secondStopped).toBe(true);
+  });
+
+  it("attachScheduler after stop() schedules teardown so the scheduler doesn't leak", async () => {
+    const bus = createFakeBus();
+    const sm = new FakeSessionManager();
+    let stopped = false;
+    const fakeScheduler = {
+      stop: async () => {
+        stopped = true;
+      },
+    };
+    const handle = await mountBusRuntime({
+      bus,
+      sessionManager: sm,
+      logger: SILENT_LOGGER,
+    });
+    await handle.stop();
+    handle.attachScheduler(fakeScheduler);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(stopped).toBe(true);
+  });
+
   it("attachAdapters after stop() schedules teardown so adapters don't leak", async () => {
     const bus = createFakeBus();
     const sm = new FakeSessionManager();
