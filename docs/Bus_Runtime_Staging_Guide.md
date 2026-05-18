@@ -101,10 +101,12 @@ Two non-obvious points:
   Web UI adapter mounts INSTEAD when `web.bus` is set — different code
   path entirely.
 - `web.bus.bind` can re-use the legacy port (4632) since the legacy
-  listener is off, OR you can run them in parallel during the soak by
-  picking a fresh port for `bind` (e.g. `127.0.0.1:7878`) and leaving
-  `web.enabled: true` plus the legacy dashboard on 4632. Useful if you
-  want side-by-side comparison during the first hour.
+  listener is off. **Side-by-side legacy + Bus Web UI is NOT
+  supported** — when the Bus mount succeeds, `start.ts` gates off
+  every legacy adapter (including `startWebUi`) regardless of
+  `web.enabled`. If you want to compare behaviour, do it across
+  daemon restarts (flip `runtime`, restart, compare) rather than in
+  one process.
 
 ## Step 2 — restart the daemon
 
@@ -122,8 +124,17 @@ The startup banner should now include:
 That `adapters=[discord, webui]` line confirms `wireBusAdapters` saw the
 token + routing for each platform and mounted them. **If you see
 `Bus mount failed; legacy surfaces only`**, the daemon fell back —
-inspect the preceding log lines for the cause and the rollback is
-`mv settings.json.bak-pre-bus-* settings.json && claudeclaw start`.
+inspect the preceding log lines for the cause. To roll back, restore
+the backup from step 1 (full path because the daemon was launched from
+`/home/claw/project`, so the timestamped backups live under
+`.claude/claudeclaw/`):
+
+```sh
+cd /home/claw/project
+cp .claude/claudeclaw/settings.json.bak-pre-bus-<timestamp> \
+   .claude/claudeclaw/settings.json
+claudeclaw stop && claudeclaw start
+```
 
 ## Step 3 — smoke tests
 
