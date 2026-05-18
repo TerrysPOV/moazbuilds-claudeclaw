@@ -81,6 +81,41 @@ export class BranchManager {
     await this.git.revert(commitSha, ["--no-edit"]);
   }
 
+  /**
+   * Fast-forward-merge a proposal branch back into the base branch (master / main).
+   *
+   * Without this step, every \ commits to \ and leaves
+   * the base branch stale — operators see pplied\ in the tuner but    * on master shows nothing. The branch itself is kept after merge so the
+   * audit trail (one branch per proposal) survives.
+   *
+   * Best-effort: if the merge cannot fast-forward (base branch has diverged
+   * between the proposal branch creation and now), we log and continue rather
+   * than aborting the apply — the operator can resolve manually.
+   */
+  async mergeProposalBranchIntoBase(proposalId: number, baseBranch = 'main'): Promise<{ merged: boolean; reason?: string }> {
+    const proposalBranch = this.branchName(proposalId);
+    const branches = await this.git.branchLocal();
+    const candidates = [baseBranch, 'master', 'main'];
+    const resolved = candidates.find(b => branches.all.includes(b));
+    if (!resolved) {
+      return { merged: false, reason: `base branch not found (tried ${candidates.join(", ")})` };
+    }
+    if (!branches.all.includes(proposalBranch)) {
+      return { merged: false, reason: `proposal branch ${proposalBranch} not found` };
+    }
+    try {
+      await this.git.checkout(resolved);
+      // --ff-only: fast-forward only. If the base branch advanced since the
+      // proposal branched off, this fails and we surface that — never silently
+      // resolve a divergent merge.
+      await this.git.merge([proposalBranch, '--ff-only']);
+      return { merged: true };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { merged: false, reason: msg.slice(0, 200) };
+    }
+  }
+
   async listProposalBranches(): Promise<string[]> {
     const branches = await this.git.branchLocal();
     return branches.all.filter((b) => b.startsWith("tune/proposal-"));
