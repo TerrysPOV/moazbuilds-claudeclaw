@@ -205,21 +205,17 @@ describe("mountBusRuntime — happy path (injected fakes)", () => {
     expect(errors.length).toBe(2);
   });
 
-  it("stop() is idempotent — second call is safe even with a real BusCore", async () => {
-    // The previous "doesn't throw" test only proved that a permissive
-    // fake doesn't throw. This one closes the gap by routing through the
-    // real production code path: the handle delegates to whichever bus
-    // it was constructed with, and our fake records both calls.
+  it("stop() is idempotent — second call is a no-op (handle-level dedupe)", async () => {
+    // Sprint 5.2a tightened the idempotency guard: the handle now tracks
+    // a `stopped` flag so a second stop() call returns immediately
+    // without re-stopping agents or the bus. This protects against
+    // double-stop noise in shutdown paths (SIGTERM + SIGINT racing).
     const bus = createFakeBus();
     const sm = new SessionManager();
     const h = await mountBusRuntime({ bus, sessionManager: sm, logger: SILENT_LOGGER });
     await h.stop();
     await h.stop();
-    // Each handle.stop() invocation calls bus.setSlashCommandHandler(null)
-    // and bus.stop() once — two invocations = two of each on the fake.
-    // The real BusCoreImpl is guarded internally; the handle doesn't add
-    // its own once-flag because the guarantee is provided by callees.
-    expect(bus.stopCalls()).toBe(2);
+    expect(bus.stopCalls()).toBe(1);
   });
 });
 
@@ -305,5 +301,190 @@ describe("mountBusRuntime — real UDS path", () => {
     } finally {
       await handle.stop();
     }
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────── */
+/* Auto-spawn (Sprint 5.2a)                                                */
+/* ────────────────────────────────────────────────────────────────────── */
+
+import type { AgentConfig, BusOrigin } from "../types";
+import type { AgentProcess } from "../session-agent-process";
+
+interface FakeSessionManagerOptions {
+  /** Index (0-based) at which spawnAgent should throw. */
+  failSpawnAtIndex?: number;
+}
+
+interface FakeAgentRecord {
+  config: AgentConfig;
+  origin: BusOrigin;
+  stopped: boolean;
+}
+
+class FakeSessionManager extends SessionManager {
+  public readonly spawnLog: FakeAgentRecord[] = [];
+  public readonly stopLog: string[] = [];
+  private spawnIndex = 0;
+  constructor(private fakeOpts: FakeSessionManagerOptions = {}) {
+    super();
+  }
+  async spawnAgent(agent: AgentConfig, origin: BusOrigin): Promise<AgentProcess> {
+    const i = this.spawnIndex++;
+    if (this.fakeOpts.failSpawnAtIndex === i) {
+      throw new Error(`fake spawn failure at index ${i}`);
+    }
+    const record: FakeAgentRecord = { config: agent, origin, stopped: false };
+    this.spawnLog.push(record);
+    return {
+      onData: () => () => {},
+      onExit: () => () => {},
+      send_prompt: async () => {},
+      send_slash: async () => {},
+      kill: async () => {},
+    } as unknown as AgentProcess;
+  }
+  async stop(agent_id: string): Promise<void> {
+    this.stopLog.push(agent_id);
+    const rec = this.spawnLog.find((r) => r.config.id === agent_id);
+    if (rec) rec.stopped = true;
+  }
+  getAgent(): undefined {
+    return undefined;
+  }
+}
+
+function cfg(id: string, overrides: Partial<AgentConfig> = {}): AgentConfig {
+  return {
+    id,
+    cwd: "/tmp/proj",
+    session_id: `sess-${id}`,
+    permission_mode: "plan",
+    ...overrides,
+  };
+}
+
+describe("mountBusRuntime — auto-spawn happy path", () => {
+  let handle: BusRuntimeHandle | null = null;
+
+  afterEach(async () => {
+    if (handle) {
+      await handle.stop();
+      handle = null;
+    }
+  });
+
+  it("spawns every declared agent in order and reports them on the handle", async () => {
+    const bus = createFakeBus();
+    const sm = new FakeSessionManager();
+    handle = await mountBusRuntime({
+      bus,
+      sessionManager: sm,
+      agents: [cfg("triage"), cfg("research"), cfg("ops")],
+      logger: SILENT_LOGGER,
+    });
+    expect(sm.spawnLog.map((r) => r.config.id)).toEqual(["triage", "research", "ops"]);
+    expect(handle.spawnedAgentIds).toEqual(["triage", "research", "ops"]);
+  });
+
+  it("defaults spawnOrigin to 'system' (matches the spec heartbeat tag)", async () => {
+    const bus = createFakeBus();
+    const sm = new FakeSessionManager();
+    handle = await mountBusRuntime({
+      bus,
+      sessionManager: sm,
+      agents: [cfg("triage")],
+      logger: SILENT_LOGGER,
+    });
+    expect(sm.spawnLog[0]?.origin).toBe("system");
+  });
+
+  it("honours spawnOrigin override", async () => {
+    const bus = createFakeBus();
+    const sm = new FakeSessionManager();
+    handle = await mountBusRuntime({
+      bus,
+      sessionManager: sm,
+      agents: [cfg("discord-agent")],
+      spawnOrigin: "discord",
+      logger: SILENT_LOGGER,
+    });
+    expect(sm.spawnLog[0]?.origin).toBe("discord");
+  });
+
+  it("scaffold mode (no agents) leaves spawnedAgentIds empty", async () => {
+    const bus = createFakeBus();
+    const sm = new FakeSessionManager();
+    handle = await mountBusRuntime({ bus, sessionManager: sm, logger: SILENT_LOGGER });
+    expect(handle.spawnedAgentIds).toEqual([]);
+    expect(sm.spawnLog).toEqual([]);
+  });
+});
+
+describe("mountBusRuntime — auto-spawn rollback", () => {
+  it("stops successfully-spawned agents in reverse order when a later spawn throws", async () => {
+    const bus = createFakeBus();
+    // Fail the THIRD spawn — agents 0 + 1 should be stopped on the way out.
+    const sm = new FakeSessionManager({ failSpawnAtIndex: 2 });
+    await expect(
+      mountBusRuntime({
+        bus,
+        sessionManager: sm,
+        agents: [cfg("a"), cfg("b"), cfg("c"), cfg("d")],
+        logger: SILENT_LOGGER,
+      }),
+    ).rejects.toThrow(/failed to spawn agent="c"/);
+    // Rollback order is reverse-construction.
+    expect(sm.stopLog).toEqual(["b", "a"]);
+    // Bus was started, then torn down via the outer catch.
+    expect(bus.startCalls()).toBe(1);
+    expect(bus.stopCalls()).toBe(1);
+  });
+
+  it("does not call sessionManager.stop when the first spawn fails immediately", async () => {
+    const bus = createFakeBus();
+    const sm = new FakeSessionManager({ failSpawnAtIndex: 0 });
+    await expect(
+      mountBusRuntime({
+        bus,
+        sessionManager: sm,
+        agents: [cfg("only")],
+        logger: SILENT_LOGGER,
+      }),
+    ).rejects.toThrow(/failed to spawn agent="only"/);
+    expect(sm.stopLog).toEqual([]);
+    // Bus still has to be stopped — it was started before the spawn loop.
+    expect(bus.stopCalls()).toBe(1);
+  });
+});
+
+describe("mountBusRuntime — stop() with agents", () => {
+  it("stops every spawned agent in reverse order before bus.stop", async () => {
+    const bus = createFakeBus();
+    const sm = new FakeSessionManager();
+    const h = await mountBusRuntime({
+      bus,
+      sessionManager: sm,
+      agents: [cfg("a"), cfg("b"), cfg("c")],
+      logger: SILENT_LOGGER,
+    });
+    await h.stop();
+    expect(sm.stopLog).toEqual(["c", "b", "a"]);
+    expect(bus.stopCalls()).toBe(1);
+  });
+
+  it("stop() is idempotent — second call is a no-op", async () => {
+    const bus = createFakeBus();
+    const sm = new FakeSessionManager();
+    const h = await mountBusRuntime({
+      bus,
+      sessionManager: sm,
+      agents: [cfg("a")],
+      logger: SILENT_LOGGER,
+    });
+    await h.stop();
+    await h.stop();
+    expect(sm.stopLog).toEqual(["a"]); // stopped exactly once
+    expect(bus.stopCalls()).toBe(1);
   });
 });

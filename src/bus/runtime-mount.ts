@@ -1,37 +1,33 @@
 /**
- * Bus runtime daemon mount (Sprint 5.1).
+ * Bus runtime daemon mount.
  *
  * Spec: `docs/ClaudeClaw_Plus_Bus_Architecture_Spec.md` §10 Sprint 5 +
  * §5.3 / §5.4. This is the entrypoint that wires the Sprint 1-4 Bus
  * components into a running daemon when `settings.runtime === "bus"`.
  *
- * Sprint 5.1 scope (intentional — kept minimal for reviewability):
- *   - Construct + start `BusCore` with its UDS / TCP-fallback IPC server.
- *   - Construct `SessionManager` so future spawn calls are addressable.
- *   - Install slash-command relay via `wireSlashCommands` (the seam BusCore
- *     exposed in Sprint 4).
- *   - Return a teardown handle the daemon can call on SIGTERM.
+ * Sprint 5.1 (PR #118) shipped the scaffold:
+ *   - BusCore with UDS / TCP-fallback IPC server.
+ *   - SessionManager (constructed only).
+ *   - Slash-command relay via `wireSlashCommands`.
+ *   - Teardown handle.
  *
- * Deferred to Sprint 5.2 (next PR — needs routing-config schema):
- *   - Adapter wiring (DiscordAdapter / TelegramAdapter / SlackAdapter /
- *     WebUiAdapter). Each needs `{channel_id → agent_id}` routing config
- *     that does not yet exist in `settings.json`. Mounting them today
- *     without that config would either silent-drop traffic or require
- *     synthesising a routing layer ad-hoc.
- *   - Auto-spawn of named agents — same reason. Need an `agents: []`
- *     settings block.
- *   - `BusScheduler` for cron/heartbeat — same reason. The legacy
- *     heartbeat config maps to a single agent today; the Bus model wants
- *     per-agent heartbeats.
+ * Sprint 5.2a (this PR) adds:
+ *   - Auto-spawn of named agents from `settings.agents` (resolved into
+ *     `AgentConfig` via `resolveBusAgentConfigs`).
+ *   - `BusRuntimeHandle.stop()` now stops every spawned agent in addition
+ *     to tearing down BusCore.
+ *   - Rollback of partial mounts: if agent N+1 fails to spawn, agents
+ *     0..N are stopped before the error is re-thrown.
  *
- * Why this split: Sprint 5.1's job is to prove the Bus stack can boot
- * inside the daemon without breaking the v1 (`runtime: "pty"`) path.
- * Adapter routing + auto-spawn are non-trivial config-schema decisions
- * better handled in their own PR with operator review.
+ * Sprint 5.2b will follow with adapter wiring (Discord / Telegram /
+ * Slack / WebUi) using a routing-config schema; Sprint 5.2c adds
+ * `BusScheduler` integration. This file stays small by keeping
+ * routing + scheduling as future responsibilities.
  */
 
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { AgentConfig, BusOrigin } from "./types";
 import { BusCoreImpl, type BusCore } from "./core";
 import { SessionManager } from "./session-manager";
 import { wireSlashCommands } from "./wiring";
@@ -39,11 +35,21 @@ import { wireSlashCommands } from "./wiring";
 export interface BusRuntimeHandle {
   /** The mounted BusCore. Adapters / tests subscribe via this. */
   bus: BusCore;
-  /** The mounted SessionManager. Future `spawnAgent` calls go here. */
+  /** The mounted SessionManager. Adapters call `getAgent()` etc. on this. */
   sessionManager: SessionManager;
   /** The resolved UDS path the IPC server bound to. Logged at start. */
   socketPath: string;
-  /** Tear down in reverse-construction order. Idempotent. */
+  /**
+   * The list of agents successfully spawned by `mountBusRuntime`. Empty
+   * when the caller passed no agents (Sprint 5.1 scaffold mode). The
+   * daemon uses this in logs and the order doubles as the stop order
+   * (reverse-iterated for symmetry with construction).
+   */
+  spawnedAgentIds: readonly string[];
+  /**
+   * Tear down agents + bus in reverse-construction order. Idempotent;
+   * call as many times as you want.
+   */
   stop(): Promise<void>;
 }
 
@@ -54,6 +60,24 @@ export interface MountBusRuntimeOptions {
    * to the path `SessionManager` will tell spawned agents to dial.
    */
   socketPath?: string;
+  /**
+   * Agents to auto-spawn at mount time. Each entry is the spawnable
+   * `AgentConfig` shape (post-resolution). Empty / absent = mount the
+   * stack with no agents (Sprint 5.1 scaffold mode).
+   *
+   * Origin tag: each agent is associated with a `BusOrigin` for the
+   * spawn call's supervision-mode default. `"system"` is the most
+   * generic — operators can override the supervision mode per-agent if
+   * they need to.
+   */
+  agents?: readonly AgentConfig[];
+  /**
+   * Default `BusOrigin` for the `spawnAgent` call when an agent's
+   * `supervision` field isn't set. Defaults to `"system"` which biases
+   * toward `pty-stdin` (see `defaultSupervisionFor` in
+   * `src/bus/types.ts`).
+   */
+  spawnOrigin?: BusOrigin;
   /**
    * Test seam: inject a pre-built `BusCore` (lets the smoke test exercise
    * the mount path without binding a real UDS).
@@ -101,12 +125,15 @@ export async function mountBusRuntime(
 ): Promise<BusRuntimeHandle> {
   const logger = opts.logger ?? console;
   const socketPath = resolveDaemonSocketPath(opts.socketPath);
+  const origin: BusOrigin = opts.spawnOrigin ?? "system";
 
   const bus: BusCore = opts.bus ?? new BusCoreImpl({ socketPath });
   const sessionManager: SessionManager =
     opts.sessionManager ?? new SessionManager({ busSocketPath: socketPath });
 
   let busStarted = false;
+  const spawned: string[] = [];
+
   try {
     await bus.start();
     busStarted = true;
@@ -116,13 +143,48 @@ export async function mountBusRuntime(
     // through the SessionManager's per-agent process handle.
     wireSlashCommands(bus, sessionManager);
 
-    logger.info(`[bus-runtime] mounted; socket=${socketPath}`);
+    // Auto-spawn declared agents. Sequential rather than parallel so
+    // log output stays readable + spawn failures surface against a
+    // known agent id rather than an unrelated parallel reject.
+    for (const agent of opts.agents ?? []) {
+      try {
+        await sessionManager.spawnAgent(agent, origin);
+        spawned.push(agent.id);
+        logger.info(`[bus-runtime] spawned agent=${agent.id}`);
+      } catch (err) {
+        // Stop any already-spawned agents in reverse order before
+        // bubbling. The outer catch handles bus teardown.
+        for (let i = spawned.length - 1; i >= 0; i--) {
+          try {
+            await sessionManager.stop(spawned[i]);
+          } catch (stopErr) {
+            logger.error(`[bus-runtime] rollback: failed to stop agent=${spawned[i]}`, stopErr);
+          }
+        }
+        spawned.length = 0;
+        throw new Error(
+          `[bus-runtime] failed to spawn agent="${agent.id}": ${err instanceof Error ? err.message : String(err)}`,
+          { cause: err },
+        );
+      }
+    }
 
+    const spawnedLabel = spawned.length === 0 ? "no agents" : `agents=[${spawned.join(", ")}]`;
+    logger.info(`[bus-runtime] mounted; socket=${socketPath}; ${spawnedLabel}`);
+
+    let stopped = false;
     return {
       bus,
       sessionManager,
       socketPath,
+      get spawnedAgentIds() {
+        // Snapshot via getter so the handle reflects the current state
+        // even after stop() empties the list.
+        return [...spawned];
+      },
       async stop() {
+        if (stopped) return;
+        stopped = true;
         // Detach the slash handler first so any in-flight adapter event
         // can't reach a torn-down SessionManager.
         try {
@@ -130,26 +192,41 @@ export async function mountBusRuntime(
         } catch (err) {
           logger.error("[bus-runtime] setSlashCommandHandler(null) failed", err);
         }
+        // Stop every spawned agent BEFORE the bus IPC server closes so
+        // claude children get a clean `/quit` rather than an aborted
+        // socket. Reverse order mirrors construction.
+        for (let i = spawned.length - 1; i >= 0; i--) {
+          const id = spawned[i];
+          try {
+            await sessionManager.stop(id);
+          } catch (err) {
+            logger.error(`[bus-runtime] sessionManager.stop(${id}) failed`, err);
+          }
+        }
+        spawned.length = 0;
         try {
           await bus.stop();
         } catch (err) {
           logger.error("[bus-runtime] bus.stop() failed", err);
         }
-        // SessionManager has no global `stop()` — agent cleanup happens
-        // per-agent via `sessionManager.stop(agent_id)`. Sprint 5.2 will
-        // own the daemon-wide stop semantics once auto-spawn lands.
       },
     };
   } catch (err) {
     if (busStarted) {
-      // Mirror the happy-path teardown order documented on `stop()`:
-      // detach the slash handler first so any closure `wireSlashCommands`
-      // installed before throwing can't reach a torn-down SessionManager,
-      // then stop the bus. PR #117 5-agent review (Agent #2 #1).
+      // Mirror the happy-path teardown order: detach handler, stop any
+      // surviving agents (already cleared above on spawn failure, but
+      // belt-and-braces), then stop the bus.
       try {
         bus.setSlashCommandHandler(null);
       } catch {
         /* ignore — surfacing the original error matters more. */
+      }
+      for (let i = spawned.length - 1; i >= 0; i--) {
+        try {
+          await sessionManager.stop(spawned[i]);
+        } catch {
+          /* ignore */
+        }
       }
       try {
         await bus.stop();

@@ -452,24 +452,45 @@ export async function start(args: string[] = []) {
     setPluginManager(pluginManager);
   }
 
-  // Bus runtime mount (Sprint 5.1) — opt-in via `settings.runtime: "bus"`.
+  // Bus runtime mount (Sprint 5.1 + 5.2a) — opt-in via `settings.runtime: "bus"`.
   //
-  // Scope: this mounts BusCore + SessionManager + slash-relay so the IPC
-  // server is listening and SessionManager is addressable. Adapter wiring
-  // (Discord/Telegram/Slack/WebUi) and auto-spawn are intentionally deferred
-  // to Sprint 5.2 (next PR) where they land alongside the routing-config
-  // schema. Until then the Bus stack runs as a parallel no-op surface and
-  // the legacy command modules below carry all live traffic.
+  // 5.1 scope: mounts BusCore + SessionManager + slash-relay so the IPC
+  // server is listening and SessionManager is addressable.
+  // 5.2a addition: resolves `settings.agents` into spawnable AgentConfigs
+  // and auto-spawns one `claude` per entry. Failure of any spawn rolls
+  // back the others and falls back to legacy surfaces (so the daemon
+  // never half-mounts and orphans claude children).
+  //
+  // Adapter wiring (Discord/Telegram/Slack/WebUi) and `BusScheduler`
+  // integration still land in 5.2b/c. Until then the Bus stack runs
+  // alongside the legacy command modules — they still carry all live
+  // inbound traffic from messaging platforms.
+  let busRuntimeSpawnedAgents: readonly string[] = [];
   if (settings.runtime === "bus") {
     try {
       const { mountBusRuntime } = await import("../bus/runtime-mount");
-      busRuntimeHandle = await mountBusRuntime();
+      const { resolveBusAgentConfigs } = await import("../bus/agent-resolver");
+      const resolved = await resolveBusAgentConfigs(settings.agents, {
+        defaultCwd: process.cwd(),
+      });
+      const failures = resolved.filter((r) => r.config === null);
+      if (failures.length > 0) {
+        const ids = failures.map((f) => f.entry.id).join(", ");
+        throw new Error(`failed to resolve agent config(s): ${ids}`);
+      }
+      const agentConfigs = resolved
+        .map((r) => r.config)
+        .filter((c): c is NonNullable<typeof c> => c !== null);
+      const handle = await mountBusRuntime({ agents: agentConfigs });
+      busRuntimeHandle = handle;
+      busRuntimeSpawnedAgents = handle.spawnedAgentIds;
     } catch (err) {
       console.error(
         `[${ts()}] Bus runtime: mount failed — falling back to legacy command surfaces only`,
         err,
       );
       busRuntimeHandle = null;
+      busRuntimeSpawnedAgents = [];
     }
   }
 
@@ -513,9 +534,17 @@ export async function start(args: string[] = []) {
       `  Claude CLI: ${cliProbe.version} (NOT in PTY parser's known-good list; turn-boundary detection may degrade — check .planning/pty-migration/SPEC.md §2)`,
     );
   }
-  console.log(
-    `  Runtime: ${settings.runtime}${settings.runtime === "bus" && busRuntimeHandle ? " (Bus stack mounted)" : settings.runtime === "bus" ? " (Bus mount failed; legacy surfaces only)" : ""}`,
-  );
+  if (settings.runtime === "bus" && busRuntimeHandle) {
+    const agentsLabel =
+      busRuntimeSpawnedAgents.length === 0
+        ? "no agents declared"
+        : `agents=[${busRuntimeSpawnedAgents.join(", ")}]`;
+    console.log(`  Runtime: bus (Bus stack mounted, ${agentsLabel})`);
+  } else if (settings.runtime === "bus") {
+    console.log(`  Runtime: bus (Bus mount failed; legacy surfaces only)`);
+  } else {
+    console.log(`  Runtime: ${settings.runtime}`);
+  }
   console.log(`  Security: ${settings.security.level}`);
   if (settings.security.allowedTools.length > 0)
     console.log(`    + allowed: ${settings.security.allowedTools.join(", ")}`);

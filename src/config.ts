@@ -188,6 +188,9 @@ const DEFAULT_SETTINGS: Settings = {
   // Default `pty` keeps v1 behaviour byte-identical. Sprint 5.4 will flip
   // this to `bus` after staging validation.
   runtime: "pty",
+  // Default no agents. Operators who opt in to `runtime: "bus"` declare
+  // agents explicitly. Spec §5.3 / §10 Sprint 5.2.
+  agents: [],
   plugins: {},
   memorySearch: {},
 };
@@ -422,6 +425,45 @@ export interface PtyConfig {
  */
 export type RuntimeMode = "pty" | "bus";
 
+/**
+ * Operator-facing supervision picker. Mirrors the spec's internal
+ * `SupervisionMode` but kept as a separate config string so settings.json
+ * remains a stable surface even if the internal enum changes.
+ */
+export type BusSupervisionMode = "pty-stdin" | "tmux" | "process" | "process-stream-json";
+
+/**
+ * One Bus runtime agent declared in `settings.agents`. The daemon
+ * auto-spawns one `claude` per entry at startup when `runtime: "bus"`.
+ *
+ * `id` is the only required field — defaults keep settings.json terse
+ * for the common single-agent case.
+ */
+export interface BusAgentSettings {
+  /**
+   * Stable slug. Becomes part of the UDS socket path on macOS (≤36 chars
+   * after the bus.sock prefix) and the `agents/<id>/session.json`
+   * directory. Required.
+   */
+  id: string;
+  /** Working directory the spawned claude runs in. Defaults to `process.cwd()`. */
+  cwd?: string;
+  /** Permission mode for the spawned claude. Defaults to `"plan"`. */
+  permission_mode?: "plan" | "bypassPermissions" | "default";
+  /**
+   * Override the supervision picker. Default is mode-dependent (see
+   * `defaultSupervisionFor` in `src/bus/types.ts`). Operators rarely
+   * need to set this.
+   */
+  supervision?: BusSupervisionMode;
+  /** Path to a system-prompt addendum appended to claude's system prompt. */
+  system_prompt_file?: string;
+  /** Path to a per-agent MEMORY.md surfaced to the spawned claude. */
+  memory_file?: string;
+  /** Path to a per-agent MCP config (extra MCP servers). */
+  mcp_config?: string;
+}
+
 export interface Settings {
   model: string;
   api: string;
@@ -446,6 +488,13 @@ export interface Settings {
    * in `settings.json`.
    */
   runtime: RuntimeMode;
+  /**
+   * Bus runtime agent declarations. Only consulted when `runtime: "bus"`;
+   * `runtime: "pty"` ignores this field entirely. Empty list = the daemon
+   * mounts the Bus stack but spawns no agents (operator wires them via
+   * REST/CLI later). See `BusAgentSettings` for the per-agent shape.
+   */
+  agents: BusAgentSettings[];
   pty: PtyConfig;
   mcp: McpConfig;
   watchdog: WatchdogSettings;
@@ -745,6 +794,7 @@ function parseSettings(raw: Record<string, any>, discordUserIds?: string[]): Set
           : 30_000,
     },
     runtime: parseRuntimeMode(raw.runtime),
+    agents: parseBusAgents(raw.agents),
     mcp: parseMcpConfig(raw.mcp, raw.web?.enabled),
     watchdog: parseWatchdogConfig(raw.watchdog),
     plugins: parsePlugins(raw.plugins),
@@ -783,6 +833,100 @@ function parseRuntimeMode(raw: unknown): RuntimeMode {
     `[config] settings.runtime="${raw}" is not a valid mode (expected "pty" | "bus"); falling back to "pty"`,
   );
   return "pty";
+}
+
+/** Allowed values for `BusAgentSettings.permission_mode`. */
+const VALID_PERMISSION_MODES = new Set<"plan" | "bypassPermissions" | "default">([
+  "plan",
+  "bypassPermissions",
+  "default",
+]);
+
+/** Allowed values for `BusAgentSettings.supervision`. */
+const VALID_SUPERVISION_MODES = new Set<BusSupervisionMode>([
+  "pty-stdin",
+  "tmux",
+  "process",
+  "process-stream-json",
+]);
+
+/**
+ * Slug constraint for `BusAgentSettings.id`. Kebab-case alphanumeric +
+ * `-` / `_`. We're stricter than the spec's "any string" because the
+ * value lands in UDS socket paths (sun_path budget) and on-disk dirs
+ * (`agents/<id>/...`). The 36-char cap protects the macOS sun_path budget
+ * (spec §5.4 — final UDS path ≤96B, leaves ~36 chars after the typical
+ * `/Users/<user>/.claudeclaw/run/bus-<id>.sock` prefix).
+ */
+const AGENT_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,35}$/;
+
+/**
+ * Parse `settings.agents`. Operator-facing surface — invalid entries log
+ * a warning and are dropped rather than crashing the daemon. Sprint 5.2.
+ *
+ * Validation:
+ *   - `id` required, matches `AGENT_ID_PATTERN`, unique across the list.
+ *   - `permission_mode` must be one of the valid trio (else fall back to
+ *     `"plan"`).
+ *   - `supervision` must be a known mode (else drop the field — internal
+ *     `defaultSupervisionFor` picks one).
+ *   - `cwd` / `system_prompt_file` / `memory_file` / `mcp_config` must be
+ *     non-empty strings if present (else drop the field).
+ */
+function parseBusAgents(raw: unknown): BusAgentSettings[] {
+  if (!Array.isArray(raw)) return [];
+  const out: BusAgentSettings[] = [];
+  const seen = new Set<string>();
+  for (let i = 0; i < raw.length; i++) {
+    const entry = raw[i];
+    if (!entry || typeof entry !== "object") {
+      console.warn(`[config] settings.agents[${i}] is not an object; skipping`);
+      continue;
+    }
+    const id = (entry as { id?: unknown }).id;
+    if (typeof id !== "string" || !AGENT_ID_PATTERN.test(id)) {
+      console.warn(
+        `[config] settings.agents[${i}].id=${JSON.stringify(id)} is invalid (expect [a-z0-9][a-z0-9_-]{0,35}); skipping`,
+      );
+      continue;
+    }
+    if (seen.has(id)) {
+      console.warn(`[config] settings.agents[${i}] duplicate id "${id}"; skipping`);
+      continue;
+    }
+    seen.add(id);
+
+    const e = entry as Record<string, unknown>;
+    const parsed: BusAgentSettings = { id };
+    if (typeof e.cwd === "string" && e.cwd.trim().length > 0) parsed.cwd = e.cwd.trim();
+    if (typeof e.permission_mode === "string") {
+      const pm = e.permission_mode.trim() as "plan" | "bypassPermissions" | "default";
+      if (VALID_PERMISSION_MODES.has(pm)) parsed.permission_mode = pm;
+      else
+        console.warn(
+          `[config] settings.agents[${i}].permission_mode="${e.permission_mode}" invalid; falling back to "plan"`,
+        );
+    }
+    if (typeof e.supervision === "string") {
+      const sv = e.supervision.trim() as BusSupervisionMode;
+      if (VALID_SUPERVISION_MODES.has(sv)) parsed.supervision = sv;
+      else
+        console.warn(
+          `[config] settings.agents[${i}].supervision="${e.supervision}" invalid; dropping (will use default)`,
+        );
+    }
+    if (typeof e.system_prompt_file === "string" && e.system_prompt_file.trim().length > 0) {
+      parsed.system_prompt_file = e.system_prompt_file.trim();
+    }
+    if (typeof e.memory_file === "string" && e.memory_file.trim().length > 0) {
+      parsed.memory_file = e.memory_file.trim();
+    }
+    if (typeof e.mcp_config === "string" && e.mcp_config.trim().length > 0) {
+      parsed.mcp_config = e.mcp_config.trim();
+    }
+    out.push(parsed);
+  }
+  return out;
 }
 
 /**
