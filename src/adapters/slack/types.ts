@@ -45,6 +45,19 @@ export interface SlackAdapterOptions {
    * caught the same regression; we preserve the documented semantics here.
    */
   allowedUserIds: string[];
+  /**
+   * Channel ids where messages from OTHER bots (event.bot_id set) are
+   * passed through to claude instead of being silently dropped. Issue
+   * #121 port of upstream PR #210. Empty list (default) preserves the
+   * original Sprint 4 behaviour — all bot-authored events are dropped.
+   */
+  allowBots?: string[];
+  /**
+   * Optional bot-id allow-list (`B…` ids). When non-empty, both the
+   * channel AND the bot id must match before pass-through. Empty list
+   * (default) accepts any bot in an allowBots channel.
+   */
+  allowBotIds?: string[];
   /** Routing config. Slack has no DMs-as-channels distinction the same way
    * Discord does — DMs are just channels of type `im`. We map by channel
    * id flat. Thread routing inherits the parent channel's agent_id unless
@@ -115,10 +128,52 @@ export interface SlackMessageEvent {
   text: string;
   /** Slack sets this for bot-authored messages. */
   bot_id?: string;
-  /** `message_changed`, `file_share`, etc. */
+  /**
+   * Bot-friendly display name when present (Issue #121 port of upstream
+   * PR #210 review-feedback commit). Falls through username → bot_id
+   * for the prompt's `user_id` tag when no human `user` is set.
+   */
+  username?: string;
+  /** Slack's nested bot profile; we read `bot_profile.name` for display. */
+  bot_profile?: { name?: string };
+  /** `message_changed`, `file_share`, `bot_message`, etc. */
   subtype?: string;
   /** File attachments (images, voice, docs). */
   files?: SlackFile[];
+  /**
+   * Block Kit blocks — Slack's modern rich-content format. Issue #121
+   * port of upstream PR #211: when `text` is empty, we walk these to
+   * recover the human-readable content from monitoring tools (Gatus,
+   * Grafana, etc.) that post via blocks instead of `text`.
+   */
+  blocks?: SlackBlockKitMessageBlock[];
+  /**
+   * Legacy attachments — older bots (PagerDuty, some Datadog flows)
+   * post structured payloads here. Same fallback path as `blocks`.
+   */
+  attachments?: SlackInboundAttachment[];
+}
+
+/**
+ * Subset of Slack's Block Kit shape that holds human-readable text.
+ * Distinct from `SlackBlock` (outbound — for the permission Block Kit
+ * builders) because inbound block payloads use slightly different
+ * field names + recursive `elements`.
+ */
+export interface SlackBlockKitMessageBlock {
+  type: string;
+  text?: { type: string; text: string };
+  fields?: Array<{ type?: string; text: string }>;
+  elements?: Array<{ type: string; text?: { type: string; text: string } }>;
+}
+
+/** Legacy `attachments[]` shape — the chain a bot might fill. */
+export interface SlackInboundAttachment {
+  text?: string;
+  fallback?: string;
+  pretext?: string;
+  title?: string;
+  fields?: Array<{ title: string; value: string }>;
 }
 
 export interface SlackFile {
