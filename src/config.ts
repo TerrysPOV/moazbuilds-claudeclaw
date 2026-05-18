@@ -185,6 +185,9 @@ const DEFAULT_SETTINGS: Settings = {
   },
   watchdog: { maxConsecutiveTimeouts: null, maxRuntimeSeconds: null },
   session: { autoRotate: false, maxMessages: 50, maxAgeHours: 24, summaryPath: "" },
+  // Default `pty` keeps v1 behaviour byte-identical. Sprint 5.4 will flip
+  // this to `bus` after staging validation.
+  runtime: "pty",
   plugins: {},
   memorySearch: {},
 };
@@ -408,6 +411,17 @@ export interface PtyConfig {
   sentinelMaxWaitMs: number;
 }
 
+/**
+ * Daemon runtime selector. `pty` is the legacy stack (PTY supervisor +
+ * `claude -p` for non-PTY paths) and remains the v1 default. `bus` mounts
+ * the Sprint 1-4 Bus stack (BusCore + SessionManager + per-surface
+ * adapters + JSONL tailer) per spec §10 Sprint 5.
+ *
+ * The two runtimes share neither IPC nor state — the switch happens at
+ * daemon startup in `src/commands/start.ts`.
+ */
+export type RuntimeMode = "pty" | "bus";
+
 export interface Settings {
   model: string;
   api: string;
@@ -425,6 +439,13 @@ export interface Settings {
   apiToken?: string;
   sessionTimeoutMs: number;
   timeouts: TimeoutsConfig;
+  /**
+   * Daemon runtime selector. Defaults to `"pty"` for v1 compatibility.
+   * Sprint 5.4 will flip the default to `"bus"` after Hetzner staging
+   * validation; until then operators opt in by setting this to `"bus"`
+   * in `settings.json`.
+   */
+  runtime: RuntimeMode;
   pty: PtyConfig;
   mcp: McpConfig;
   watchdog: WatchdogSettings;
@@ -723,6 +744,7 @@ function parseSettings(raw: Record<string, any>, discordUserIds?: string[]): Set
           ? Number(raw.pty.sentinelMaxWaitMs)
           : 30_000,
     },
+    runtime: parseRuntimeMode(raw.runtime),
     mcp: parseMcpConfig(raw.mcp, raw.web?.enabled),
     watchdog: parseWatchdogConfig(raw.watchdog),
     plugins: parsePlugins(raw.plugins),
@@ -744,6 +766,24 @@ function parseSettings(raw: Record<string, any>, discordUserIds?: string[]): Set
 
 const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
 const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
+
+const VALID_RUNTIMES: ReadonlySet<RuntimeMode> = new Set(["pty", "bus"]);
+
+/**
+ * Parse `settings.runtime`. Unknown / missing values fall back to the
+ * v1-compatible `"pty"` default. Unknown values are logged so operators
+ * notice typos (e.g. `runtime: "buss"`) rather than silently sliding back
+ * to PTY.
+ */
+function parseRuntimeMode(raw: unknown): RuntimeMode {
+  if (typeof raw !== "string" || raw.length === 0) return "pty";
+  const trimmed = raw.trim() as RuntimeMode;
+  if (VALID_RUNTIMES.has(trimmed)) return trimmed;
+  console.warn(
+    `[config] settings.runtime="${raw}" is not a valid mode (expected "pty" | "bus"); falling back to "pty"`,
+  );
+  return "pty";
+}
 
 /**
  * Parse the `mcp` block from a raw settings object (SPEC §5).

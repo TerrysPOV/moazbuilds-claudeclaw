@@ -443,12 +443,34 @@ export async function start(args: string[] = []) {
   let web: WebServerHandle | null = null;
   let discordStopGateway: (() => void) | null = null;
   let slackStopFn: (() => void) | null = null;
+  let busRuntimeHandle: { stop(): Promise<void> } | null = null;
 
   // Plugin system — initialize before gateway start
   const pluginManager = new PluginManager(process.cwd());
   if (Object.keys(settings.plugins).length > 0) {
     await pluginManager.loadAll(settings.plugins);
     setPluginManager(pluginManager);
+  }
+
+  // Bus runtime mount (Sprint 5.1) — opt-in via `settings.runtime: "bus"`.
+  //
+  // Scope: this mounts BusCore + SessionManager + slash-relay so the IPC
+  // server is listening and SessionManager is addressable. Adapter wiring
+  // (Discord/Telegram/Slack/WebUi) and auto-spawn are intentionally deferred
+  // to Sprint 5.2 (next PR) where they land alongside the routing-config
+  // schema. Until then the Bus stack runs as a parallel no-op surface and
+  // the legacy command modules below carry all live traffic.
+  if (settings.runtime === "bus") {
+    try {
+      const { mountBusRuntime } = await import("../bus/runtime-mount");
+      busRuntimeHandle = await mountBusRuntime();
+    } catch (err) {
+      console.error(
+        `[${ts()}] Bus runtime: mount failed — falling back to legacy command surfaces only`,
+        err,
+      );
+      busRuntimeHandle = null;
+    }
   }
 
   let mcpProxyStarted: Promise<void> = Promise.resolve();
@@ -461,6 +483,13 @@ export async function start(args: string[] = []) {
     if (discordStopGateway) discordStopGateway();
     if (slackStopFn) slackStopFn();
     if (web) web.stop();
+    if (busRuntimeHandle) {
+      try {
+        await busRuntimeHandle.stop();
+      } catch (err) {
+        console.error("[bus-runtime] shutdown failed", err);
+      }
+    }
     await teardownStatusline();
     await cleanupPidFile();
     process.exit(0);
@@ -484,6 +513,9 @@ export async function start(args: string[] = []) {
       `  Claude CLI: ${cliProbe.version} (NOT in PTY parser's known-good list; turn-boundary detection may degrade — check .planning/pty-migration/SPEC.md §2)`,
     );
   }
+  console.log(
+    `  Runtime: ${settings.runtime}${settings.runtime === "bus" && busRuntimeHandle ? " (Bus stack mounted)" : settings.runtime === "bus" ? " (Bus mount failed; legacy surfaces only)" : ""}`,
+  );
   console.log(`  Security: ${settings.security.level}`);
   if (settings.security.allowedTools.length > 0)
     console.log(`    + allowed: ${settings.security.allowedTools.join(", ")}`);
