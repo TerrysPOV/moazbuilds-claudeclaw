@@ -31,6 +31,8 @@ import type { AgentConfig, BusOrigin } from "./types";
 import { BusCoreImpl, type BusCore } from "./core";
 import { SessionManager } from "./session-manager";
 import { wireSlashCommands } from "./wiring";
+import type { MountedAdapter } from "./adapter-wiring";
+import { stopBusAdapters } from "./adapter-wiring";
 
 export interface BusRuntimeHandle {
   /** The mounted BusCore. Adapters / tests subscribe via this. */
@@ -47,8 +49,28 @@ export interface BusRuntimeHandle {
    */
   spawnedAgentIds: readonly string[];
   /**
-   * Tear down agents + bus in reverse-construction order. Idempotent;
-   * call as many times as you want.
+   * The adapters whose lifecycle is owned by this handle. Sprint 5.2b
+   * (PR #123) Codex P2 fold-in: the daemon now wires adapters AFTER
+   * `mountBusRuntime` returns (so adapters never poll before the bus
+   * IPC server + agents are live) and registers them via
+   * `attachAdapters` for `stop()` to tear down. Empty until at least
+   * one `attachAdapters` call.
+   */
+  mountedAdapterNames: readonly MountedAdapter["name"][];
+  /**
+   * Register adapters with the handle's stop lifecycle. Sprint 5.2b
+   * (PR #123) Codex P1/P2 fold-in: callers wire adapters AFTER the
+   * bus is mounted; this method lets the handle own teardown even
+   * though construction happened outside the mount function.
+   *
+   * Multiple calls accumulate — operators can register subsets in
+   * different phases if needed. Adapters are stopped in reverse
+   * REGISTRATION order on stop().
+   */
+  attachAdapters(adapters: readonly MountedAdapter[]): void;
+  /**
+   * Tear down adapters + agents + bus in reverse-construction order.
+   * Idempotent; call as many times as you want.
    */
   stop(): Promise<void>;
 }
@@ -72,12 +94,27 @@ export interface MountBusRuntimeOptions {
    */
   agents?: readonly AgentConfig[];
   /**
-   * Default `BusOrigin` for the `spawnAgent` call when an agent's
-   * `supervision` field isn't set. Defaults to `"system"` which biases
-   * toward `pty-stdin` (see `defaultSupervisionFor` in
-   * `src/bus/types.ts`).
+   * `BusOrigin` tag passed to `sessionManager.spawnAgent(agent, origin)`.
+   * The agent's resolved `supervision` field takes precedence over the
+   * origin-based picker (Codex P1 fold-in from PR #122 — see
+   * `resolveBusAgentConfig` for why the resolver now defaults
+   * supervision to `pty-stdin` directly).
+   *
+   * Defaults to `"cli"` — a real `BusOrigin` value that's
+   * uncategorised among the channel-driven set, so the picker behaviour
+   * stays predictable for agents that DO leave supervision unset.
    */
   spawnOrigin?: BusOrigin;
+  /**
+   * Adapters already mounted by the daemon (Sprint 5.2b). The mount
+   * function does not construct adapters itself — the daemon wires
+   * them via `wireBusAdapters` and passes the result in here so the
+   * `BusRuntimeHandle.stop()` lifecycle owns them.
+   *
+   * Stop ordering on shutdown: adapters first (so live traffic stops
+   * reaching the bus), then agents (clean `/quit`), then bus IPC.
+   */
+  adapters?: readonly MountedAdapter[];
   /**
    * Test seam: inject a pre-built `BusCore` (lets the smoke test exercise
    * the mount path without binding a real UDS).
@@ -96,8 +133,13 @@ export interface MountBusRuntimeOptions {
  * this resolution for child processes (see `resolveBusSocketPath` in
  * `session-manager.ts`); both functions must stay in sync so the
  * spawned `claude` connects to the path the daemon is listening on.
+ *
+ * Exported so callers that construct `BusCore` + `SessionManager`
+ * eagerly (e.g. `start.ts` when wiring adapters before mount) can use
+ * the exact same path the mount would have computed. Without this,
+ * adapters and agents would dial different sockets.
  */
-function resolveDaemonSocketPath(override?: string): string {
+export function resolveDaemonSocketPath(override?: string): string {
   if (override) return override;
   const fromEnv = process.env.CCAW_BUS_SOCK;
   if (fromEnv && fromEnv.length > 0) return fromEnv;
@@ -125,7 +167,7 @@ export async function mountBusRuntime(
 ): Promise<BusRuntimeHandle> {
   const logger = opts.logger ?? console;
   const socketPath = resolveDaemonSocketPath(opts.socketPath);
-  const origin: BusOrigin = opts.spawnOrigin ?? "system";
+  const origin: BusOrigin = opts.spawnOrigin ?? "cli";
 
   const bus: BusCore = opts.bus ?? new BusCoreImpl({ socketPath });
   const sessionManager: SessionManager =
@@ -169,8 +211,17 @@ export async function mountBusRuntime(
       }
     }
 
+    // Adapters list is now MUTABLE — Sprint 5.2b (PR #123) Codex P2
+    // fold-in lets the caller register adapters AFTER mount returns via
+    // `attachAdapters`. Backwards-compatible: `opts.adapters` still
+    // accepted for callers that wired before mount.
+    const adapters: MountedAdapter[] = opts.adapters ? [...opts.adapters] : [];
     const spawnedLabel = spawned.length === 0 ? "no agents" : `agents=[${spawned.join(", ")}]`;
-    logger.info(`[bus-runtime] mounted; socket=${socketPath}; ${spawnedLabel}`);
+    const adaptersLabel =
+      adapters.length === 0
+        ? "no adapters"
+        : `adapters=[${adapters.map((a) => a.name).join(", ")}]`;
+    logger.info(`[bus-runtime] mounted; socket=${socketPath}; ${spawnedLabel}; ${adaptersLabel}`);
 
     let stopped = false;
     return {
@@ -182,10 +233,31 @@ export async function mountBusRuntime(
         // even after stop() empties the list.
         return [...spawned];
       },
+      get mountedAdapterNames() {
+        return adapters.map((a) => a.name);
+      },
+      attachAdapters(more) {
+        if (stopped) {
+          // The handle has already torn down; tearing down the new
+          // adapters immediately is the safest reaction so they don't
+          // leak. Schedule on the microtask queue so the call itself
+          // stays sync.
+          for (const a of more) {
+            Promise.resolve()
+              .then(() => a.stop())
+              .catch((err) => logger.error(`[bus-runtime] post-stop attach: ${a.name}`, err));
+          }
+          return;
+        }
+        for (const a of more) adapters.push(a);
+      },
       async stop() {
         if (stopped) return;
         stopped = true;
-        // Detach the slash handler first so any in-flight adapter event
+        // Adapters first: stop inbound traffic so nothing new hits the
+        // bus while we're tearing down agents. Sprint 5.2b.
+        await stopBusAdapters(adapters, logger);
+        // Detach the slash handler so any closure in `wireSlashCommands`
         // can't reach a torn-down SessionManager.
         try {
           bus.setSlashCommandHandler(null);

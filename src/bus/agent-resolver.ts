@@ -46,10 +46,16 @@ export interface ResolveAgentOptions {
  * Defaults applied:
  *   - `cwd` ← `opts.defaultCwd ?? process.cwd()`
  *   - `permission_mode` ← `"plan"`
- *   - `session_id` ← existing `agents/<id>/session.json` value, else
- *     a fresh UUID persisted on first call.
- *   - `supervision` ← undefined (SessionManager will pick via
- *     `defaultSupervisionFor`).
+ *   - `session_id` ← existing `agents/<id>/session.json` value, else a
+ *     fresh UUID persisted on first call.
+ *   - `supervision` ← `"pty-stdin"` (Codex P1 fold-in from PR #122).
+ *     Bus-runtime agents need PTY-backed supervision to receive
+ *     `notifications/claude/channel` payloads that adapter-driven traffic
+ *     depends on. Sprint 5.2a left this implicit via
+ *     `defaultSupervisionFor(spawnOrigin)`, but the default origin
+ *     pathway resolved to `process-stream-json` — no channel notifications.
+ *     Defaulting at resolve time makes the supervision pick
+ *     origin-independent and adapter-safe.
  */
 export async function resolveBusAgentConfig(
   entry: BusAgentSettings,
@@ -63,11 +69,11 @@ export async function resolveBusAgentConfig(
     cwd,
     session_id,
     permission_mode: entry.permission_mode ?? "plan",
+    supervision: (entry.supervision as SupervisionMode | undefined) ?? "pty-stdin",
   };
   if (entry.system_prompt_file) config.system_prompt_file = entry.system_prompt_file;
   if (entry.memory_file) config.memory_file = entry.memory_file;
   if (entry.mcp_config) config.mcp_config = entry.mcp_config;
-  if (entry.supervision) config.supervision = entry.supervision as SupervisionMode;
   return config;
 }
 
