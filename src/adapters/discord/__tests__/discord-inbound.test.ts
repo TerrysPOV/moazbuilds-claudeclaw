@@ -49,19 +49,18 @@ describe("DiscordAdapter — lifecycle", () => {
     expect(h.gateway.stopped).toBe(true);
   });
 
-  it("rejects construction with no gateway", () => {
-    expect(
-      () =>
-        new DiscordAdapter({
-          bus: h.bus,
-          token: "t",
-          allowedUserIds: [],
-          routing: { channels: {} },
-          // The constructor throws if `gateway` is missing — exercise that guard.
-          gateway: undefined,
-          restApi: h.rest,
-        }),
-    ).toThrow();
+  it("auto-constructs gateway + restApi when none injected", () => {
+    // Production callers only pass bus + token + routing; the adapter
+    // builds its own DiscordGateway + DiscordRestApi from the token.
+    // Tests inject fakes (see `startAdapter`) to bypass the network —
+    // this case exercises the bare construction path doesn't throw.
+    const a = new DiscordAdapter({
+      bus: h.bus,
+      token: "fake-token",
+      allowedUserIds: [],
+      routing: { channels: {} },
+    });
+    expect(a).toBeDefined();
   });
 });
 
