@@ -158,6 +158,34 @@ try {
 // `src/heartbeat-windows.ts` so `wireBusScheduler` can reuse it. The
 // legacy heartbeat tick still imports + calls these.
 
+/**
+ * Stable digest of the jobs that affect scheduler behaviour. Two job
+ * lists with identical digests can re-use the existing in-memory
+ * scheduler; different digests trigger the hot-reload path.
+ *
+ * Fields covered:
+ *   - `name` — keying / log labels.
+ *   - `schedule` — cron expression.
+ *   - `prompt` — payload sent at each fire.
+ *   - `enabled` — when toggled to false, the Bus scheduler must drop
+ *     the trigger. Defaults to true when missing.
+ *   - `agent` — when changed, the Bus scheduler must reroute. Defaults
+ *     to "" when missing (matches the daemon's "use first agent"
+ *     fallback).
+ *
+ * Codex P1 on PR #126: pre-fix this only covered schedule + prompt,
+ * so flipping `enabled` or rerouting `agent` left stale triggers
+ * firing until daemon restart.
+ *
+ * Exported for unit testing.
+ */
+export function computeJobsDigest(jobs: readonly Job[]): string {
+  return jobs
+    .map((j) => `${j.name}:${j.schedule}:${j.prompt}:${j.enabled !== false}:${j.agent ?? ""}`)
+    .sort()
+    .join("|");
+}
+
 function nextAllowedHeartbeatAt(
   config: HeartbeatConfig,
   timezoneOffsetMinutes: number,
@@ -1146,15 +1174,15 @@ export async function start(args: string[] = []) {
         currentSettings.web.port = web.port;
       }
 
-      // Detect job changes
-      const jobNames = newJobs
-        .map((j) => `${j.name}:${j.schedule}:${j.prompt}`)
-        .sort()
-        .join("|");
-      const oldJobNames = currentJobs
-        .map((j) => `${j.name}:${j.schedule}:${j.prompt}`)
-        .sort()
-        .join("|");
+      // Detect job changes. Digest covers every field the schedulers
+      // consume: schedule + prompt for both paths, plus `enabled` and
+      // `agent` which the Bus scheduler uses to decide whether the job
+      // fires AND which agent it dispatches to (Codex P1 on PR #126 —
+      // `enabled: false` toggles and `agent` reroutes were silently
+      // ignored, so the in-memory scheduler kept stale triggers until
+      // restart).
+      const jobNames = computeJobsDigest(newJobs);
+      const oldJobNames = computeJobsDigest(currentJobs);
       if (jobNames !== oldJobNames) {
         console.log(`[${ts()}] Jobs reloaded: ${newJobs.length} job(s)`);
         newJobs.forEach((j) => {
