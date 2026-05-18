@@ -1196,9 +1196,9 @@ describe("createSlackApi — fetch timeout (PR #117 review)", () => {
     try {
       const { createSlackApi } = await import("../api");
       const api = createSlackApi("fake-token", { timeoutMs: 25 });
-      await expect(
-        api.postMessage({ channel: "C1", text: "hi" }),
-      ).rejects.toThrow(/timeout after 25ms/);
+      await expect(api.postMessage({ channel: "C1", text: "hi" })).rejects.toThrow(
+        /timeout after 25ms/,
+      );
       expect(abortedFromOutside).toBe(true);
     } finally {
       globalThis.fetch = realFetch;
