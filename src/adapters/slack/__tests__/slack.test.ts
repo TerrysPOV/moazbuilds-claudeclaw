@@ -238,16 +238,27 @@ async function startAdapter(
 }
 
 function msg(over: Partial<SlackMessageEvent> = {}): SlackMessageEvent {
+  // Honour explicit `user: undefined` (used by bot-message tests) — `??`
+  // would otherwise back-fill the default. `in` check distinguishes
+  // "key absent" from "key present with undefined".
+  const user = "user" in over ? over.user : "U42";
   return {
     type: over.type ?? "message",
     channel: over.channel ?? "C100",
-    user: over.user ?? "U42",
+    user,
     ts: over.ts ?? "1700000000.000100",
     text: over.text ?? "hello",
     thread_ts: over.thread_ts,
     bot_id: over.bot_id,
     subtype: over.subtype,
     files: over.files,
+    // Issue #121 fields — forward when set so the new test cases can
+    // exercise allowBots, block / attachment extraction, and per-bot
+    // display-name routing.
+    username: over.username,
+    bot_profile: over.bot_profile,
+    blocks: over.blocks,
+    attachments: over.attachments,
   };
 }
 
@@ -1203,5 +1214,424 @@ describe("createSlackApi — fetch timeout (PR #117 review)", () => {
     } finally {
       globalThis.fetch = realFetch;
     }
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────── */
+/* Issue #121 — upstream Slack feature port                                */
+/* ────────────────────────────────────────────────────────────────────── */
+
+import { extractTextFromAttachments, extractTextFromBlocks, sanitiseBotText } from "../index";
+
+describe("Issue #121 — Codex P1 on PR #129: self-bot feedback-loop guard", () => {
+  // Without this guard, our own chat.postMessage replies come back
+  // as bot_message events. In an allowBots channel they would be
+  // re-ingested as fresh prompts — feedback loop.
+
+  it("drops events where event.bot_id === selfBotId, even in allowBots channels", async () => {
+    adapter = await startAdapter({
+      allowBots: ["C100"],
+      selfBotId: "B-us",
+    });
+    socket.push(
+      eventsEnvelope(
+        msg({
+          channel: "C100",
+          user: undefined,
+          bot_id: "B-us",
+          text: "I just posted this myself!",
+        }),
+      ),
+    );
+    await new Promise((r) => setTimeout(r, 30));
+    expect(bus.prompts).toHaveLength(0);
+  });
+
+  it("drops events where event.user === selfUserId", async () => {
+    adapter = await startAdapter({
+      allowBots: ["C100"],
+      selfUserId: "U-us",
+    });
+    socket.push(
+      eventsEnvelope(
+        msg({
+          channel: "C100",
+          user: "U-us",
+          text: "we somehow got back our own user-authored msg",
+        }),
+      ),
+    );
+    await new Promise((r) => setTimeout(r, 30));
+    expect(bus.prompts).toHaveLength(0);
+  });
+
+  it("still passes through OTHER bots in allowBots channels", async () => {
+    adapter = await startAdapter({
+      allowBots: ["C100"],
+      selfBotId: "B-us",
+    });
+    socket.push(
+      eventsEnvelope(
+        msg({
+          channel: "C100",
+          user: undefined,
+          bot_id: "B-monitor",
+          text: "alert from another bot",
+        }),
+      ),
+    );
+    await waitFor(() => bus.prompts.length > 0);
+    expect(bus.prompts[0]?.text).toBe("alert from another bot");
+  });
+
+  it("warns at start when allowBots is set but neither selfBotId nor selfUserId is set", async () => {
+    const warnings: string[] = [];
+    const adapt = new SlackAdapter({
+      bus,
+      token: FAKE_BOT_TOKEN,
+      signingSecret: FAKE_SIGNING_SECRET,
+      allowedUserIds: [],
+      allowBots: ["C100"],
+      // selfBotId / selfUserId deliberately omitted
+      routing: { channels: { C100: "triage" } },
+      api,
+      logger: { ...SILENT_LOGGER, warn: (m: string) => warnings.push(m) },
+    });
+    await adapt.start();
+    await adapt.stop();
+    expect(warnings.some((w) => w.includes("feedback loop"))).toBe(true);
+  });
+
+  it("does NOT warn when allowBots is empty (no loop risk)", async () => {
+    const warnings: string[] = [];
+    const adapt = new SlackAdapter({
+      bus,
+      token: FAKE_BOT_TOKEN,
+      signingSecret: FAKE_SIGNING_SECRET,
+      allowedUserIds: [],
+      routing: { channels: { C100: "triage" } },
+      api,
+      logger: { ...SILENT_LOGGER, warn: (m: string) => warnings.push(m) },
+    });
+    await adapt.start();
+    await adapt.stop();
+    expect(warnings.some((w) => w.includes("feedback loop"))).toBe(false);
+  });
+});
+
+describe("Issue #121 — upstream PR #210 allowBots + allowBotIds", () => {
+  it("drops bot messages by default (no allowBots config)", async () => {
+    adapter = await startAdapter();
+    socket.push(
+      eventsEnvelope(
+        msg({
+          channel: "C100",
+          user: undefined,
+          bot_id: "B-monitor",
+          text: "alert: cpu pegged",
+        }),
+      ),
+    );
+    await new Promise((r) => setTimeout(r, 30));
+    expect(bus.prompts).toHaveLength(0);
+  });
+
+  it("passes through bot messages when channel is in allowBots", async () => {
+    adapter = await startAdapter({ allowBots: ["C100"] });
+    socket.push(
+      eventsEnvelope(
+        msg({
+          channel: "C100",
+          user: undefined,
+          bot_id: "B-monitor",
+          text: "alert: cpu pegged",
+        }),
+      ),
+    );
+    await waitFor(() => bus.prompts.length > 0);
+    expect(bus.prompts[0]?.text).toBe("alert: cpu pegged");
+    expect(bus.prompts[0]?.user_id).toBe("B-monitor");
+    expect((bus.prompts[0]?.metadata as Record<string, unknown>).bot_id).toBe("B-monitor");
+  });
+
+  it("bypasses allowedUserIds for bot-allowed traffic", async () => {
+    // Tight allow-list — would normally drop anyone but U42.
+    adapter = await startAdapter({
+      allowedUserIds: ["U42"],
+      allowBots: ["C100"],
+    });
+    socket.push(
+      eventsEnvelope(msg({ channel: "C100", user: undefined, bot_id: "B-monitor", text: "alert" })),
+    );
+    await waitFor(() => bus.prompts.length > 0);
+    expect(bus.prompts).toHaveLength(1);
+  });
+
+  it("allowBotIds narrows to specific bot ids when set", async () => {
+    adapter = await startAdapter({
+      allowBots: ["C100"],
+      allowBotIds: ["B-trusted"],
+    });
+    // Allowed channel but the wrong bot id — drop.
+    socket.push(
+      eventsEnvelope(
+        msg({ channel: "C100", user: undefined, bot_id: "B-stranger", text: "alert" }),
+      ),
+    );
+    // Allowed channel + correct bot id — pass.
+    socket.push(
+      eventsEnvelope(
+        msg({ channel: "C100", user: undefined, bot_id: "B-trusted", text: "trusted alert" }),
+      ),
+    );
+    await waitFor(() => bus.prompts.length > 0);
+    expect(bus.prompts).toHaveLength(1);
+    expect(bus.prompts[0]?.text).toBe("trusted alert");
+  });
+
+  it("prefers bot_profile.name → username → bot_id for user_id label", async () => {
+    adapter = await startAdapter({ allowBots: ["C100"] });
+    socket.push(
+      eventsEnvelope(
+        msg({
+          channel: "C100",
+          user: undefined,
+          bot_id: "B-monitor",
+          bot_profile: { name: "Grafana" },
+          username: "fallback-name",
+          text: "alert",
+        }),
+      ),
+    );
+    await waitFor(() => bus.prompts.length > 0);
+    expect(bus.prompts[0]?.user_id).toBe("Grafana");
+  });
+
+  it("accepts bot_message subtype only for allowed bot channels", async () => {
+    adapter = await startAdapter({
+      allowBots: ["C100"],
+      routing: { channels: { C100: "triage", C200: "research" } },
+    });
+    socket.push(
+      eventsEnvelope(
+        msg({
+          channel: "C100",
+          subtype: "bot_message",
+          user: undefined,
+          bot_id: "B-bot",
+          text: "alert from bot_message",
+        }),
+      ),
+    );
+    socket.push(
+      eventsEnvelope(
+        msg({
+          channel: "C200",
+          subtype: "bot_message",
+          user: undefined,
+          bot_id: "B-bot",
+          text: "should be dropped — channel not in allowBots",
+        }),
+      ),
+    );
+    await waitFor(() => bus.prompts.length > 0);
+    expect(bus.prompts).toHaveLength(1);
+    expect(bus.prompts[0]?.text).toBe("alert from bot_message");
+  });
+});
+
+describe("Issue #121 — upstream PR #211 block/attachment extraction", () => {
+  it("extractTextFromBlocks walks text + fields + elements", () => {
+    const result = extractTextFromBlocks([
+      { type: "section", text: { type: "mrkdwn", text: "title" } },
+      {
+        type: "section",
+        fields: [
+          { type: "mrkdwn", text: "Status: red" },
+          { type: "mrkdwn", text: "Host: web-01" },
+        ],
+      },
+      {
+        type: "actions",
+        elements: [{ type: "button", text: { type: "plain_text", text: "Ack" } }],
+      },
+    ]);
+    expect(result).toContain("title");
+    expect(result).toContain("Status: red");
+    expect(result).toContain("Host: web-01");
+    expect(result).toContain("Ack");
+  });
+
+  it("extractTextFromAttachments joins pretext + title + text + fields", () => {
+    const result = extractTextFromAttachments([
+      {
+        pretext: "ALERT",
+        title: "CPU > 90%",
+        text: "web-01 has been over 90% for 5 minutes",
+        fields: [
+          { title: "Severity", value: "P1" },
+          { title: "Host", value: "web-01" },
+        ],
+      },
+    ]);
+    expect(result).toContain("ALERT");
+    expect(result).toContain("CPU > 90%");
+    expect(result).toContain("web-01");
+    expect(result).toContain("Severity:");
+    expect(result).toContain("P1");
+  });
+
+  it("falls back to blocks when event.text is empty", async () => {
+    adapter = await startAdapter({ allowBots: ["C100"] });
+    socket.push(
+      eventsEnvelope(
+        msg({
+          channel: "C100",
+          user: undefined,
+          bot_id: "B-monitor",
+          text: "",
+          blocks: [{ type: "section", text: { type: "mrkdwn", text: "from blocks" } }],
+        }),
+      ),
+    );
+    await waitFor(() => bus.prompts.length > 0);
+    expect(bus.prompts[0]?.text).toBe("from blocks");
+  });
+
+  it("falls back to attachments when blocks AND text are empty", async () => {
+    adapter = await startAdapter({ allowBots: ["C100"] });
+    socket.push(
+      eventsEnvelope(
+        msg({
+          channel: "C100",
+          user: undefined,
+          bot_id: "B-monitor",
+          text: "",
+          attachments: [{ text: "from attachments" }],
+        }),
+      ),
+    );
+    await waitFor(() => bus.prompts.length > 0);
+    expect(bus.prompts[0]?.text).toBe("from attachments");
+  });
+
+  it("text wins over blocks/attachments when all three present", async () => {
+    adapter = await startAdapter({ allowBots: ["C100"] });
+    socket.push(
+      eventsEnvelope(
+        msg({
+          channel: "C100",
+          user: undefined,
+          bot_id: "B-monitor",
+          text: "primary text",
+          blocks: [{ type: "section", text: { type: "mrkdwn", text: "block text" } }],
+          attachments: [{ text: "attachment text" }],
+        }),
+      ),
+    );
+    await waitFor(() => bus.prompts.length > 0);
+    expect(bus.prompts[0]?.text).toBe("primary text");
+  });
+});
+
+describe("Issue #121 — upstream PR #214 replyThreadTs routing for bots", () => {
+  it("non-thread bot message records owner under event.ts as the synthetic thread", async () => {
+    adapter = await startAdapter({ allowBots: ["C100"] });
+    socket.push(
+      eventsEnvelope(
+        msg({
+          channel: "C100",
+          user: undefined,
+          bot_id: "B-monitor",
+          ts: "1700000000.123",
+          text: "alert",
+        }),
+      ),
+    );
+    await waitFor(() => bus.prompts.length > 0);
+    // @ts-expect-error — inspect private state for the assertion.
+    expect(adapter.threadOwners.get("C100:1700000000.123")).toBe("triage");
+  });
+
+  it("subsequent reply in the bot's synthetic thread routes to the same agent", async () => {
+    adapter = await startAdapter({
+      allowBots: ["C100"],
+      routing: { channels: { C100: "triage", C200: "research" } },
+    });
+    socket.push(
+      eventsEnvelope(
+        msg({
+          channel: "C100",
+          user: undefined,
+          bot_id: "B-monitor",
+          ts: "T100.alert",
+          text: "alert",
+        }),
+      ),
+    );
+    await waitFor(() => bus.prompts.length === 1);
+
+    socket.push(
+      eventsEnvelope(
+        msg({
+          channel: "C100",
+          user: "U42",
+          ts: "T100.reply",
+          thread_ts: "T100.alert",
+          text: "looking into it",
+        }),
+      ),
+    );
+    await waitFor(() => bus.prompts.length === 2);
+    expect(bus.prompts[1]?.agent_id).toBe("triage");
+  });
+});
+
+describe("sanitiseBotText", () => {
+  it("strips [react:emoji] directives", () => {
+    expect(sanitiseBotText("hello [react:🔥] world")).toBe("hello  world");
+  });
+
+  it("replaces [[slack_buttons:...]] with a placeholder", () => {
+    expect(sanitiseBotText("alert [[slack_buttons:ack,deny]]")).toContain("[buttons removed]");
+  });
+
+  it("trims trailing whitespace after removals", () => {
+    expect(sanitiseBotText("alert [react:🔥]  ")).toBe("alert");
+  });
+
+  it("leaves plain text untouched", () => {
+    expect(sanitiseBotText("CPU at 95%")).toBe("CPU at 95%");
+  });
+
+  it("sanitises bot-allowed prompts end-to-end", async () => {
+    adapter = await startAdapter({ allowBots: ["C100"] });
+    socket.push(
+      eventsEnvelope(
+        msg({
+          channel: "C100",
+          user: undefined,
+          bot_id: "B-monitor",
+          text: "alert [react:🔥]",
+        }),
+      ),
+    );
+    await waitFor(() => bus.prompts.length > 0);
+    expect(bus.prompts[0]?.text).toBe("alert");
+  });
+
+  it("does NOT sanitise human messages (preserves operator intent)", async () => {
+    adapter = await startAdapter({ allowBots: ["C100"] });
+    socket.push(
+      eventsEnvelope(
+        msg({
+          channel: "C100",
+          user: "U42",
+          text: "what's the latest [react:🔥]",
+        }),
+      ),
+    );
+    await waitFor(() => bus.prompts.length > 0);
+    expect(bus.prompts[0]?.text).toContain("[react:🔥]");
   });
 });

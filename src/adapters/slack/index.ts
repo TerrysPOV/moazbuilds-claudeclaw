@@ -26,7 +26,9 @@ import {
   type SlackApi,
   type SlackBlock,
   type SlackBlockActionsPayload,
+  type SlackBlockKitMessageBlock,
   type SlackEventsApiEnvelope,
+  type SlackInboundAttachment,
   type SlackMessageEvent,
   type SlackSocketEnvelope,
   type SlackSocketLike,
@@ -68,6 +70,16 @@ export class SlackAdapter {
   private readonly api: SlackApi;
   private readonly socket: SlackSocketLike | null;
   private readonly allowedUserIds: ReadonlySet<string>;
+  /** Issue #121 port of upstream PR #210: per-channel bot pass-through. */
+  private readonly allowBots: ReadonlySet<string>;
+  private readonly allowBotIds: ReadonlySet<string>;
+  /**
+   * Self-id guard — drop events authored by this adapter's own Slack
+   * app to prevent a feedback loop when `allowBots` is enabled
+   * (Issue #121 Codex P1).
+   */
+  private readonly selfBotId: string | null;
+  private readonly selfUserId: string | null;
   private readonly channels: Record<string, string>;
   private readonly threadAgentId: string | undefined;
   private readonly logger: Pick<Console, "warn" | "info" | "error">;
@@ -121,6 +133,21 @@ export class SlackAdapter {
     this.api = opts.api ?? createSlackApi(opts.token);
     this.socket = opts.socket ?? null;
     this.allowedUserIds = new Set(opts.allowedUserIds);
+    this.allowBots = new Set(opts.allowBots ?? []);
+    this.allowBotIds = new Set(opts.allowBotIds ?? []);
+    this.selfBotId = opts.selfBotId ?? null;
+    this.selfUserId = opts.selfUserId ?? null;
+    // Codex P1 on PR #129: warn loudly when allowBots is on but no
+    // self-id is configured. Without it, our own chat.postMessage
+    // replies feed back as bot_message events and would re-ingest as
+    // fresh prompts. We can't safely refuse to start (operator may
+    // not be using bot pass-through), but the warning makes the
+    // failure mode obvious before it bites in production.
+    if (this.allowBots.size > 0 && !this.selfBotId && !this.selfUserId) {
+      (opts.logger ?? console).warn(
+        "[slack-adapter] allowBots is configured but neither selfBotId nor selfUserId is set — our own chat.postMessage replies will be re-ingested as fresh prompts, creating a feedback loop. Set slack.selfBotId (from auth.test).",
+      );
+    }
     this.channels = { ...opts.routing.channels };
     this.threadAgentId = opts.routing.threadAgentId;
     this.logger = opts.logger ?? console;
@@ -323,20 +350,57 @@ export class SlackAdapter {
   /* ──────────────────────────── message handler ─────────────────── */
 
   private async handleMessageEvent(event: SlackMessageEvent): Promise<void> {
-    // Drop bots + non-file_share subtypes (legacy `slack.ts:940-950`). No
-    // allowBots support in Sprint 4 — operators using that pattern stay on
-    // the PTY runtime.
-    if (event.bot_id) return;
-    if (event.subtype && event.subtype !== "file_share") return;
-    if (!event.user) return;
+    // Issue #121 port of upstream PRs #210, #211, #214.
+    //
+    // PR #210: per-channel bot pass-through. Replace the blanket
+    // `event.bot_id → drop` gate with allowBots-aware logic.
+    // PR #211: when `event.text` is empty, fall through to blocks /
+    // attachments before discarding.
+    // PR #214: non-thread bot messages route via
+    // `replyThreadTs = event.thread_ts ?? event.ts` so subsequent
+    // replies in the synthetic thread find the agent owner.
 
-    const userId = event.user;
+    // Self-bot guard FIRST (Codex P1 on PR #129). Drop any event
+    // authored by this adapter's own Slack app to prevent a feedback
+    // loop where our `chat.postMessage` replies get re-ingested as
+    // fresh prompts. Must run BEFORE the allowBots logic — otherwise
+    // an unprotected allowBots channel would loop forever.
+    if (this.selfBotId && event.bot_id === this.selfBotId) return;
+    if (this.selfUserId && event.user === this.selfUserId) return;
+
     const channelId = event.channel;
+    const channelAllowsBots = !!event.bot_id && this.allowBots.has(channelId);
+    const botIdAllowed =
+      this.allowBotIds.size === 0 || (!!event.bot_id && this.allowBotIds.has(event.bot_id));
+    const isBotAllowed = channelAllowsBots && botIdAllowed;
 
-    // Allow-list — empty = allow all (legacy `slack.ts:976` semantics; PR
-    // #113 review caught Discord/Telegram regressing to "empty = deny").
-    // Slack is multi-channel so we silent-skip — no "Unauthorized." DM.
-    if (this.allowedUserIds.size > 0 && !this.allowedUserIds.has(userId)) {
+    // Bot gate. Drop bot traffic unless the channel + bot id both
+    // match the allow-list. Empty-`user` events with no `bot_id`
+    // remain dropped (system events, join/leave, etc).
+    if (event.bot_id) {
+      if (!isBotAllowed) return;
+    } else if (!event.user) {
+      return;
+    }
+
+    // Subtype gate. `file_share` always allowed; `bot_message` allowed
+    // only when this event is an allowed bot.
+    if (
+      event.subtype &&
+      event.subtype !== "file_share" &&
+      !(isBotAllowed && event.subtype === "bot_message")
+    ) {
+      return;
+    }
+
+    // userId fallback chain: human user → bot display name → bot id.
+    // Used for the `sendPrompt.user_id` tag.
+    const userId = event.user ?? event.bot_profile?.name ?? event.username ?? event.bot_id ?? "";
+
+    // Allow-list — empty = allow all (legacy `slack.ts:976` semantics).
+    // Bot-allowed traffic bypasses this gate per upstream PR #210 — bots
+    // don't have a human userId to check.
+    if (!isBotAllowed && this.allowedUserIds.size > 0 && !this.allowedUserIds.has(userId)) {
       return;
     }
 
@@ -345,8 +409,16 @@ export class SlackAdapter {
       this.logger.warn(`[slack-adapter] unrouted channel=${channelId} — skip`);
       return;
     }
+
+    // PR #214 fold-in: for bot messages NOT in a thread, the bot's reply
+    // will create a thread under event.ts. Record owner under
+    // replyThreadTs so subsequent replies in that synthetic thread route
+    // to the same agent.
+    const replyThreadTs = event.thread_ts ?? event.ts;
     if (event.thread_ts) {
       this.recordThreadOwner(`${channelId}:${event.thread_ts}`, agentId);
+    } else if (isBotAllowed) {
+      this.recordThreadOwner(`${channelId}:${replyThreadTs}`, agentId);
     }
 
     // Pending request_human → route reply as ask_answer. Composite key per
@@ -368,8 +440,23 @@ export class SlackAdapter {
       return;
     }
 
+    // PR #211 fold-in: when `text` is empty, recover content from
+    // blocks → attachments before discarding. Bot alerts (Gatus,
+    // Grafana, etc) often post via blocks with empty `text`.
+    let textBody = event.text ?? "";
+    if (textBody.length === 0 && event.blocks && event.blocks.length > 0) {
+      textBody = extractTextFromBlocks(event.blocks);
+    }
+    if (textBody.length === 0 && event.attachments && event.attachments.length > 0) {
+      textBody = extractTextFromAttachments(event.attachments);
+    }
+    // Sanitize bot-sourced text — the prompt-injection surface is real
+    // when arbitrary monitoring tools post into our channels. Matches
+    // upstream PR #210's `sanitizeUserInput` treatment.
+    if (isBotAllowed) textBody = sanitiseBotText(textBody);
+
     const hasFiles = Array.isArray(event.files) && event.files.length > 0;
-    const trimmed = (event.text ?? "").trim();
+    const trimmed = textBody.trim();
     if (!trimmed && !hasFiles) return;
 
     // Sprint 4 forwards file metadata only — download/transcription is a
@@ -377,6 +464,7 @@ export class SlackAdapter {
     const metadata: Record<string, unknown> = {
       ts: event.ts,
       ...(event.thread_ts ? { thread_ts: event.thread_ts } : {}),
+      ...(isBotAllowed ? { bot_id: event.bot_id ?? "", bot_name: userId } : {}),
       ...(hasFiles && event.files
         ? {
             files: event.files.map((f) => ({
@@ -598,6 +686,73 @@ export class SlackAdapter {
       this.logger.error("[slack-adapter] chat.postMessage threw", err);
     }
   }
+}
+
+/* ────────────────────────────────────────────────────────────────────── */
+/* Issue #121 — upstream Slack feature helpers                             */
+/* ────────────────────────────────────────────────────────────────────── */
+
+/**
+ * Walk a Block Kit message-block tree and return the human-readable
+ * text concatenated with newlines. Recovers content from bot alerts
+ * that post via `event.blocks` with an empty `event.text` (Gatus,
+ * Grafana, etc). Issue #121 port of upstream PR #211.
+ *
+ * Exported for unit testing.
+ */
+export function extractTextFromBlocks(blocks: readonly SlackBlockKitMessageBlock[]): string {
+  const parts: string[] = [];
+  for (const block of blocks) {
+    if (block.text?.text) parts.push(block.text.text);
+    if (block.fields) {
+      for (const f of block.fields) {
+        if (f.text) parts.push(f.text);
+      }
+    }
+    if (block.elements) {
+      for (const el of block.elements) {
+        if (el.text?.text) parts.push(el.text.text);
+      }
+    }
+  }
+  return parts.filter((p) => p.length > 0).join("\n");
+}
+
+/**
+ * Legacy attachments-shape text recovery. Joined chain:
+ * `pretext` → `title` → `text` → each field as `title:\nvalue`.
+ * Issue #121 port of upstream PR #211.
+ *
+ * Exported for unit testing.
+ */
+export function extractTextFromAttachments(attachments: readonly SlackInboundAttachment[]): string {
+  return attachments
+    .map((a) =>
+      [a.pretext, a.title, a.text, ...(a.fields?.map((f) => `${f.title}:\n${f.value}`) ?? [])]
+        .filter((p): p is string => typeof p === "string" && p.length > 0)
+        .join("\n"),
+    )
+    .filter((p) => p.length > 0)
+    .join("\n");
+}
+
+/**
+ * Strip directive-like markers that could be used by a third-party bot
+ * (or a compromised one) to inject control sequences the Bus adapter
+ * understands. Currently scrubs:
+ *   - `[react:<emoji>]` — Telegram-style reaction directive
+ *   - `[[slack_buttons:...]]` / `[[slack_select:...]]` — legacy Slack
+ *     interactivity hints
+ *
+ * Matches upstream `sanitizeUserInput` in `src/commands/slack.ts`.
+ * Exported for unit testing.
+ */
+export function sanitiseBotText(text: string): string {
+  return text
+    .replace(/\[react:[^\]]*\]/gi, "")
+    .replace(/\[\[slack_buttons:[^\]]*\]\]/gi, "[buttons removed]")
+    .replace(/\[\[slack_select:[^\]]*\]\]/gi, "[select removed]")
+    .trim();
 }
 
 // Re-exports for ergonomic test imports.
