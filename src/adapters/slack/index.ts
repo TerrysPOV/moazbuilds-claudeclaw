@@ -73,6 +73,13 @@ export class SlackAdapter {
   /** Issue #121 port of upstream PR #210: per-channel bot pass-through. */
   private readonly allowBots: ReadonlySet<string>;
   private readonly allowBotIds: ReadonlySet<string>;
+  /**
+   * Self-id guard — drop events authored by this adapter's own Slack
+   * app to prevent a feedback loop when `allowBots` is enabled
+   * (Issue #121 Codex P1).
+   */
+  private readonly selfBotId: string | null;
+  private readonly selfUserId: string | null;
   private readonly channels: Record<string, string>;
   private readonly threadAgentId: string | undefined;
   private readonly logger: Pick<Console, "warn" | "info" | "error">;
@@ -128,6 +135,19 @@ export class SlackAdapter {
     this.allowedUserIds = new Set(opts.allowedUserIds);
     this.allowBots = new Set(opts.allowBots ?? []);
     this.allowBotIds = new Set(opts.allowBotIds ?? []);
+    this.selfBotId = opts.selfBotId ?? null;
+    this.selfUserId = opts.selfUserId ?? null;
+    // Codex P1 on PR #129: warn loudly when allowBots is on but no
+    // self-id is configured. Without it, our own chat.postMessage
+    // replies feed back as bot_message events and would re-ingest as
+    // fresh prompts. We can't safely refuse to start (operator may
+    // not be using bot pass-through), but the warning makes the
+    // failure mode obvious before it bites in production.
+    if (this.allowBots.size > 0 && !this.selfBotId && !this.selfUserId) {
+      (opts.logger ?? console).warn(
+        "[slack-adapter] allowBots is configured but neither selfBotId nor selfUserId is set — our own chat.postMessage replies will be re-ingested as fresh prompts, creating a feedback loop. Set slack.selfBotId (from auth.test).",
+      );
+    }
     this.channels = { ...opts.routing.channels };
     this.threadAgentId = opts.routing.threadAgentId;
     this.logger = opts.logger ?? console;
@@ -339,6 +359,14 @@ export class SlackAdapter {
     // PR #214: non-thread bot messages route via
     // `replyThreadTs = event.thread_ts ?? event.ts` so subsequent
     // replies in the synthetic thread find the agent owner.
+
+    // Self-bot guard FIRST (Codex P1 on PR #129). Drop any event
+    // authored by this adapter's own Slack app to prevent a feedback
+    // loop where our `chat.postMessage` replies get re-ingested as
+    // fresh prompts. Must run BEFORE the allowBots logic — otherwise
+    // an unprotected allowBots channel would loop forever.
+    if (this.selfBotId && event.bot_id === this.selfBotId) return;
+    if (this.selfUserId && event.user === this.selfUserId) return;
 
     const channelId = event.channel;
     const channelAllowsBots = !!event.bot_id && this.allowBots.has(channelId);

@@ -58,6 +58,23 @@ export interface SlackAdapterOptions {
    * (default) accepts any bot in an allowBots channel.
    */
   allowBotIds?: string[];
+  /**
+   * The bot id (`B…`) of THIS adapter's own Slack app. Issue #121
+   * Codex P1 fold-in: when `allowBots` is non-empty, our own
+   * `chat.postMessage` replies come back as `bot_message` events
+   * and — without this guard — would be re-ingested as fresh
+   * prompts, creating a feedback loop. Set this to the value Slack's
+   * `auth.test` returns for `bot_id`. The adapter skips any inbound
+   * event where `event.bot_id === selfBotId` BEFORE any pass-through
+   * check.
+   */
+  selfBotId?: string;
+  /**
+   * The bot user id (`U…`) of THIS adapter's own Slack app. Same
+   * loop-prevention purpose as `selfBotId` — covers events where
+   * Slack only sets `user` (not `bot_id`) for app-authored messages.
+   */
+  selfUserId?: string;
   /** Routing config. Slack has no DMs-as-channels distinction the same way
    * Discord does — DMs are just channels of type `im`. We map by channel
    * id flat. Thread routing inherits the parent channel's agent_id unless

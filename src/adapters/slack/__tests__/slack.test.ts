@@ -1223,6 +1223,102 @@ describe("createSlackApi — fetch timeout (PR #117 review)", () => {
 
 import { extractTextFromAttachments, extractTextFromBlocks, sanitiseBotText } from "../index";
 
+describe("Issue #121 — Codex P1 on PR #129: self-bot feedback-loop guard", () => {
+  // Without this guard, our own chat.postMessage replies come back
+  // as bot_message events. In an allowBots channel they would be
+  // re-ingested as fresh prompts — feedback loop.
+
+  it("drops events where event.bot_id === selfBotId, even in allowBots channels", async () => {
+    adapter = await startAdapter({
+      allowBots: ["C100"],
+      selfBotId: "B-us",
+    });
+    socket.push(
+      eventsEnvelope(
+        msg({
+          channel: "C100",
+          user: undefined,
+          bot_id: "B-us",
+          text: "I just posted this myself!",
+        }),
+      ),
+    );
+    await new Promise((r) => setTimeout(r, 30));
+    expect(bus.prompts).toHaveLength(0);
+  });
+
+  it("drops events where event.user === selfUserId", async () => {
+    adapter = await startAdapter({
+      allowBots: ["C100"],
+      selfUserId: "U-us",
+    });
+    socket.push(
+      eventsEnvelope(
+        msg({
+          channel: "C100",
+          user: "U-us",
+          text: "we somehow got back our own user-authored msg",
+        }),
+      ),
+    );
+    await new Promise((r) => setTimeout(r, 30));
+    expect(bus.prompts).toHaveLength(0);
+  });
+
+  it("still passes through OTHER bots in allowBots channels", async () => {
+    adapter = await startAdapter({
+      allowBots: ["C100"],
+      selfBotId: "B-us",
+    });
+    socket.push(
+      eventsEnvelope(
+        msg({
+          channel: "C100",
+          user: undefined,
+          bot_id: "B-monitor",
+          text: "alert from another bot",
+        }),
+      ),
+    );
+    await waitFor(() => bus.prompts.length > 0);
+    expect(bus.prompts[0]?.text).toBe("alert from another bot");
+  });
+
+  it("warns at start when allowBots is set but neither selfBotId nor selfUserId is set", async () => {
+    const warnings: string[] = [];
+    const adapt = new SlackAdapter({
+      bus,
+      token: FAKE_BOT_TOKEN,
+      signingSecret: FAKE_SIGNING_SECRET,
+      allowedUserIds: [],
+      allowBots: ["C100"],
+      // selfBotId / selfUserId deliberately omitted
+      routing: { channels: { C100: "triage" } },
+      api,
+      logger: { ...SILENT_LOGGER, warn: (m: string) => warnings.push(m) },
+    });
+    await adapt.start();
+    await adapt.stop();
+    expect(warnings.some((w) => w.includes("feedback loop"))).toBe(true);
+  });
+
+  it("does NOT warn when allowBots is empty (no loop risk)", async () => {
+    const warnings: string[] = [];
+    const adapt = new SlackAdapter({
+      bus,
+      token: FAKE_BOT_TOKEN,
+      signingSecret: FAKE_SIGNING_SECRET,
+      allowedUserIds: [],
+      routing: { channels: { C100: "triage" } },
+      api,
+      logger: { ...SILENT_LOGGER, warn: (m: string) => warnings.push(m) },
+    });
+    await adapt.start();
+    await adapt.stop();
+    expect(warnings.some((w) => w.includes("feedback loop"))).toBe(false);
+  });
+});
+
 describe("Issue #121 — upstream PR #210 allowBots + allowBotIds", () => {
   it("drops bot messages by default (no allowBots config)", async () => {
     adapter = await startAdapter();
