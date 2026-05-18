@@ -48,6 +48,22 @@ export abstract class TunableSubject {
   currentStateHash(): string {
     return "";
   }
+
+  /**
+   * Optional: produce the inverse-patch `applied_content` for `target`
+   * before apply() runs. When undefined, the pipeline falls back to reading
+   * `target` from disk. Overriders return a string (the inverse content) —
+   * cron serializes the prior JobSpec, hook captures the prior file bytes.
+   */
+  snapshotInverse?(target: string): Promise<string>;
+
+  /**
+   * Optional: per-subject health probe consulted by the apply pipeline's
+   * observation window. When undefined for a high/medium-risk subject, the
+   * pipeline logs a boot warning and the auto-revert path is effectively
+   * disabled (the default pipeline probe is fail-open).
+   */
+  healthProbe?(target: string): Promise<{ failed: boolean; errors: string[] }>;
 }
 
 export abstract class Adapter {

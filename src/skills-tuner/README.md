@@ -272,3 +272,81 @@ The `src/` tree is pure TypeScript ESM. Tests live in `tests/unit/` and
 ## License
 
 MIT
+
+
+---
+
+## Schedulers (pluggable scheduling layer)
+
+Some TunableSubjects (`wisecron`, future `cron`) need to create and manage
+recurring jobs on the host OS. To support Linux + macOS + containers without
+hardcoding any one platform, the tuner ships a pluggable `SchedulerBackend`
+abstraction.
+
+### Built-in backends
+
+| Backend | Host | Artifact | Notes |
+|---|---|---|---|
+| `systemd-user` | Linux with systemd-user | `~/.config/systemd/user/<name>.{timer,service}` | Auto-activates via `systemctl --user`. Injects DBUS env for subprocess contexts. |
+| `crontab-posix` | Linux/macOS/BSD with `crontab` | line tagged `# wisecron:<name>` in user crontab; mirror in `~/.config/cron/crontab.snapshot` | The active table is root-managed; the sidecar is what we version. |
+| `in-process` | any host | none (lives in the tuner process) | Universal fallback for containers / serverless / dev. Rehydrate from `~/.config/tuner/in-process-jobs.json` at startup. |
+
+### Auto-detection
+
+`detectBackend()` probes registered backends in order and returns the first
+one that says `detect() === true`. The default order is `systemd-user` →
+`crontab-posix` → `in-process`. Override via env:
+
+```bash
+WISECRON_BACKEND=crontab-posix tuner compose-job ...
+```
+
+### Compose a job from the CLI
+
+```bash
+tuner compose-job \
+  --name trader-check \
+  --description "every 20 minutes on weekdays 9am-4pm Eastern" \
+  --command "/home/u/check-trader.sh"
+```
+
+The CLI uses the configured LLM to translate the description into the
+backend's native schedule grammar (`OnCalendar=` for systemd, 5-field cron
+for POSIX). Use `--dry` to render without writing.
+
+### Adding a new backend
+
+Implement `SchedulerBackend` from `src/skills-tuner/schedulers/base.ts`
+and register it in `src/skills-tuner/schedulers/registry.ts`. The
+`detect()` method must be non-throwing and fast (<500ms). Backends are
+expected to be idempotent on `name` (refuse duplicate create) and
+to no-op cleanly when `remove()` is called on a missing job.
+
+Out of scope for this iteration (community contributions welcome):
+- `LaunchdBackend` for macOS native (`~/Library/LaunchAgents/*.plist`)
+- `TaskSchedulerBackend` for Windows (`schtasks` / PowerShell)
+- `KubernetesCronJobBackend` for k8s clusters
+
+
+---
+
+## WiseCron — intelligent cron monitoring
+
+The `wisecron` subject scans the user crontab on each tick, classifies each
+entry (criticality + tag set), and proposes targeted changes:
+
+- **log_path_missing** — a cron without a redirect; proposal adds `>> <logDir>/<name>.log 2>&1`
+- **stale_log** — the cron has not written its log in N times its expected interval
+- **schedule_outside_relevance** — a tagged-trading job runs 24/7 instead of market hours
+- **redundant_schedule** — two crons running the same script at different intervals
+- **elevated_error_rate** — log shows >50%% error-keyword density in the recent window
+
+`apply()` modifies the crontab in place (text-level edit + `crontab` CLI). Each
+apply commits to a `tune/proposal-<id>` audit branch in the git_repo, then
+fast-forward-merges into the base branch (master/main).
+
+Configure via `subjects.wisecron` in `~/.config/tuner/config.yaml`:
+
+Risk tier: medium. Auto-merge is disabled by default — operators approve each
+proposal explicitly via the chosen UI adapter (Telegram inline buttons, CLI,
+or direct `tuner apply <id> <alt>`).
