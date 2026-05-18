@@ -452,24 +452,32 @@ export async function start(args: string[] = []) {
     setPluginManager(pluginManager);
   }
 
-  // Bus runtime mount (Sprint 5.1 + 5.2a) — opt-in via `settings.runtime: "bus"`.
+  // Bus runtime mount (Sprint 5.1 + 5.2a + 5.2b) — opt-in via `settings.runtime: "bus"`.
   //
-  // 5.1 scope: mounts BusCore + SessionManager + slash-relay so the IPC
-  // server is listening and SessionManager is addressable.
-  // 5.2a addition: resolves `settings.agents` into spawnable AgentConfigs
-  // and auto-spawns one `claude` per entry. Failure of any spawn rolls
-  // back the others and falls back to legacy surfaces (so the daemon
-  // never half-mounts and orphans claude children).
+  // 5.1: BusCore + SessionManager + slash-relay (IPC server listening).
+  // 5.2a: auto-spawn `claude` per `settings.agents` entry.
+  // 5.2b (this PR): adapter wiring — Discord/Telegram/Slack/WebUi
+  //   instantiated from per-platform `busRouting` config + token, then
+  //   passed into `mountBusRuntime` so the handle's stop() owns them.
+  //   When the Bus mount succeeds, the legacy `initTelegram` / `initDiscord`
+  //   / `initSlack` / legacy `startWebUi` blocks below are SKIPPED so
+  //   inbound traffic is delivered only once.
   //
-  // Adapter wiring (Discord/Telegram/Slack/WebUi) and `BusScheduler`
-  // integration still land in 5.2b/c. Until then the Bus stack runs
-  // alongside the legacy command modules — they still carry all live
-  // inbound traffic from messaging platforms.
+  // 5.2c follow-up: `BusScheduler` integration for heartbeat/cron.
+  //
+  // Failure semantics: a mount failure (resolution, spawn, or adapter
+  // wiring) logs an error and falls back to the legacy adapters so the
+  // daemon doesn't half-mount.
   let busRuntimeSpawnedAgents: readonly string[] = [];
+  let busRuntimeAdapterNames: readonly string[] = [];
   if (settings.runtime === "bus") {
     try {
-      const { mountBusRuntime } = await import("../bus/runtime-mount");
+      const { mountBusRuntime, resolveDaemonSocketPath } = await import("../bus/runtime-mount");
       const { resolveBusAgentConfigs } = await import("../bus/agent-resolver");
+      const { wireBusAdapters } = await import("../bus/adapter-wiring");
+      const { BusCoreImpl } = await import("../bus/core");
+      const { SessionManager } = await import("../bus/session-manager");
+
       const resolved = await resolveBusAgentConfigs(settings.agents, {
         defaultCwd: process.cwd(),
       });
@@ -481,9 +489,29 @@ export async function start(args: string[] = []) {
       const agentConfigs = resolved
         .map((r) => r.config)
         .filter((c): c is NonNullable<typeof c> => c !== null);
-      const handle = await mountBusRuntime({ agents: agentConfigs });
+
+      // Build BusCore + SessionManager eagerly so adapters can attach to
+      // the SAME instances mountBusRuntime then takes ownership of.
+      // Adapters subscribe in their `start()` — happy to be called
+      // before `bus.start()` since subscribe doesn't require the IPC
+      // server to be bound. socketPath is shared via `resolveDaemonSocketPath`
+      // so adapters, agents, and the IPC server all dial the same path.
+      const socketPath = resolveDaemonSocketPath();
+      const bus = new BusCoreImpl({ socketPath });
+      const sessionManager = new SessionManager({ busSocketPath: socketPath });
+      const { adapters, errors } = await wireBusAdapters({ bus, settings });
+      for (const [name, msg] of Object.entries(errors)) {
+        console.warn(`[${ts()}] Bus adapter "${name}" failed to mount: ${msg}`);
+      }
+      const handle = await mountBusRuntime({
+        bus,
+        sessionManager,
+        agents: agentConfigs,
+        adapters,
+      });
       busRuntimeHandle = handle;
       busRuntimeSpawnedAgents = handle.spawnedAgentIds;
+      busRuntimeAdapterNames = handle.mountedAdapterNames;
     } catch (err) {
       console.error(
         `[${ts()}] Bus runtime: mount failed — falling back to legacy command surfaces only`,
@@ -491,8 +519,15 @@ export async function start(args: string[] = []) {
       );
       busRuntimeHandle = null;
       busRuntimeSpawnedAgents = [];
+      busRuntimeAdapterNames = [];
     }
   }
+  // Legacy adapter gate (Sprint 5.2b): when the Bus mount succeeded, the
+  // legacy initTelegram / initDiscord / initSlack / legacy Web UI startup
+  // below MUST be skipped so each platform's inbound traffic is handled
+  // only by the Bus adapter. The variable is hoisted so the existing
+  // `await initTelegram(...)` call sites further down can guard on it.
+  const skipLegacyAdapters = busRuntimeHandle !== null;
 
   let mcpProxyStarted: Promise<void> = Promise.resolve();
 
@@ -539,7 +574,11 @@ export async function start(args: string[] = []) {
       busRuntimeSpawnedAgents.length === 0
         ? "no agents declared"
         : `agents=[${busRuntimeSpawnedAgents.join(", ")}]`;
-    console.log(`  Runtime: bus (Bus stack mounted, ${agentsLabel})`);
+    const adaptersLabel =
+      busRuntimeAdapterNames.length === 0
+        ? "no adapters"
+        : `adapters=[${busRuntimeAdapterNames.join(", ")}]`;
+    console.log(`  Runtime: bus (Bus stack mounted, ${agentsLabel}, ${adaptersLabel})`);
   } else if (settings.runtime === "bus") {
     console.log(`  Runtime: bus (Bus mount failed; legacy surfaces only)`);
   } else {
@@ -602,8 +641,14 @@ export async function start(args: string[] = []) {
     }
   }
 
-  await initTelegram(currentSettings.telegram.token, currentSettings.telegram.receiveEnabled);
-  if (!telegramToken) console.log("  Telegram: not configured");
+  if (skipLegacyAdapters) {
+    console.log(
+      `  Telegram: handled by Bus adapter${busRuntimeAdapterNames.includes("telegram") ? "" : " (not configured)"}`,
+    );
+  } else {
+    await initTelegram(currentSettings.telegram.token, currentSettings.telegram.receiveEnabled);
+    if (!telegramToken) console.log("  Telegram: not configured");
+  }
 
   // --- Gateway event processor ---
   // Wire up the event processor for gateway v2 path (Discord/Telegram → event log → processor → runUserMessage)
@@ -638,8 +683,14 @@ export async function start(args: string[] = []) {
     }
   }
 
-  await initDiscord(currentSettings.discord.token);
-  if (!discordToken) console.log("  Discord: not configured");
+  if (skipLegacyAdapters) {
+    console.log(
+      `  Discord: handled by Bus adapter${busRuntimeAdapterNames.includes("discord") ? "" : " (not configured)"}`,
+    );
+  } else {
+    await initDiscord(currentSettings.discord.token);
+    if (!discordToken) console.log("  Discord: not configured");
+  }
 
   // --- Slack ---
   let slackSendToUser: ((userId: string, text: string) => Promise<void>) | null = null;
@@ -666,8 +717,14 @@ export async function start(args: string[] = []) {
     }
   }
 
-  await initSlack(currentSettings.slack.botToken, currentSettings.slack.appToken);
-  if (!slackBotToken) console.log("  Slack: not configured");
+  if (skipLegacyAdapters) {
+    console.log(
+      `  Slack: handled by Bus adapter${busRuntimeAdapterNames.includes("slack") ? "" : " (not configured)"}`,
+    );
+  } else {
+    await initSlack(currentSettings.slack.botToken, currentSettings.slack.appToken);
+    if (!slackBotToken) console.log("  Slack: not configured");
+  }
 
   // Wire channel senders into plugin runtime so plugins can send messages
   if (pluginManager.hasPlugins) {
@@ -854,12 +911,19 @@ export async function start(args: string[] = []) {
     throw lastError;
   }
 
-  if (webEnabled) {
+  if (webEnabled && !skipLegacyAdapters) {
     currentSettings.web.enabled = true;
     web = startWebWithFallback(currentSettings.web.host, webPort);
     currentSettings.web.port = web.port;
     console.log(
       `[${new Date().toLocaleTimeString()}] Web UI listening on http://${web.host}:${web.port}`,
+    );
+  } else if (webEnabled && skipLegacyAdapters) {
+    // The Bus Web UI adapter (when configured via `settings.web.bus`) is
+    // already mounted by `wireBusAdapters`. We skip the legacy dashboard
+    // to avoid two HTTP listeners trying to claim the same port.
+    console.log(
+      `[${new Date().toLocaleTimeString()}] Web UI: handled by Bus adapter${busRuntimeAdapterNames.includes("webui") ? "" : " (not configured)"}`,
     );
   }
 
@@ -1096,14 +1160,20 @@ export async function start(args: string[] = []) {
       }
       currentJobs = newJobs;
 
-      // Telegram changes
-      await initTelegram(newSettings.telegram.token, newSettings.telegram.receiveEnabled);
+      if (!skipLegacyAdapters) {
+        // Telegram changes
+        await initTelegram(newSettings.telegram.token, newSettings.telegram.receiveEnabled);
 
-      // Discord changes
-      await initDiscord(newSettings.discord.token);
+        // Discord changes
+        await initDiscord(newSettings.discord.token);
 
-      // Slack changes
-      await initSlack(newSettings.slack.botToken, newSettings.slack.appToken);
+        // Slack changes
+        await initSlack(newSettings.slack.botToken, newSettings.slack.appToken);
+      }
+      // Note: when `skipLegacyAdapters` is true, the Bus adapters are
+      // long-lived (mounted at boot via `wireBusAdapters`) and don't
+      // currently hot-reload on settings changes. Sprint 5.2c follow-up
+      // wires a settings-watcher into the Bus adapters too.
     } catch (err) {
       console.error(`[${ts()}] Hot-reload error:`, err);
     }

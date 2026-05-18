@@ -210,6 +210,53 @@ export interface HeartbeatConfig {
   forwardToDiscord: boolean;
 }
 
+/**
+ * Bus runtime routing config for Telegram. Only consulted when
+ * `settings.runtime === "bus"`; legacy `runtime: "pty"` ignores this.
+ *
+ * `chats` is the inbound `chat_id → agent_id` map. `defaultAgentId`
+ * catches messages from chats not in the map (omit to silent-drop
+ * unrouted chats).
+ */
+export interface TelegramBusRouting {
+  chats: Record<string, string>;
+  defaultAgentId?: string;
+}
+
+/**
+ * Bus runtime routing config for Discord. Spec §5.5.1. Channels and
+ * threads are matched against guild channel ids; DMs fall through to
+ * `dmAgentId` if set.
+ */
+export interface DiscordBusRouting {
+  channels: Record<string, string>;
+  threads?: Record<string, string>;
+  dmAgentId?: string;
+}
+
+/**
+ * Bus runtime routing config for Slack. Spec §5.5.3. `channels` maps
+ * `channel_id → agent_id`. `threadAgentId` is the override for
+ * thread-only traffic in unrouted channels.
+ */
+export interface SlackBusRouting {
+  channels: Record<string, string>;
+  threadAgentId?: string;
+  /** Optional override for the Events API signing secret. */
+  signingSecret?: string;
+}
+
+/**
+ * Bus runtime config for the Web UI adapter. Spec §5.5.4. Distinct
+ * `bind` so operators can run the Bus Web UI on a different port than
+ * the legacy dashboard without losing either.
+ */
+export interface WebBusConfig {
+  bind?: string;
+  token?: string;
+  allowedAgentIds?: string[];
+}
+
 export interface TelegramConfig {
   token: string;
   allowedUserIds: number[];
@@ -226,6 +273,8 @@ export interface TelegramConfig {
    *  Supported values: tiny, base, small, medium, large-v3, large-v3-turbo (with or without .en suffix).
    *  Ignored when stt.baseUrl is configured. */
   whisperModel?: string;
+  /** Sprint 5.2b: Bus runtime routing. Ignored under runtime=pty. */
+  busRouting?: TelegramBusRouting;
 }
 
 export interface DiscordConfig {
@@ -236,15 +285,21 @@ export interface DiscordConfig {
   channelNames?: Record<string, string>; // channelId -> friendly name for system prompt context
   imageOutputRoots: string[]; // Absolute path prefixes from which image uploads are permitted
   streaming?: boolean; // When true, POST a live preview while Claude is working. Default: false.
+  /** Sprint 5.2b: Bus runtime routing. Ignored under runtime=pty. */
+  busRouting?: DiscordBusRouting;
 }
 
 export interface SlackConfig {
   botToken: string; // xoxb-... bot token
   appToken: string; // xapp-... Socket Mode token
+  /** Slack app signing secret for Events API HTTP verification. Required for Bus runtime HTTP mode. */
+  signingSecret?: string;
   allowedUserIds: string[];
   listenChannels: string[]; // Channel IDs where bot responds without @mention
   allowBots: string[]; // Channel IDs where bot-posted messages are passed through
   allowBotIds: string[]; // Optional: Slack app/bot IDs (B...) that may post; empty = any bot in allowBots channel
+  /** Sprint 5.2b: Bus runtime routing. Ignored under runtime=pty. */
+  busRouting?: SlackBusRouting;
 }
 
 export type SecurityLevel = "locked" | "strict" | "moderate" | "unrestricted";
@@ -526,6 +581,8 @@ export interface WebConfig {
   enabled: boolean;
   host: string;
   port: number;
+  /** Sprint 5.2b: Bus runtime Web UI config. Ignored under runtime=pty. */
+  bus?: WebBusConfig;
 }
 
 export interface SttConfig {
@@ -661,6 +718,9 @@ function parseSettings(raw: Record<string, any>, discordUserIds?: string[]): Set
       ...(typeof raw.telegram?.whisperModel === "string" && raw.telegram.whisperModel.trim()
         ? { whisperModel: raw.telegram.whisperModel.trim() }
         : {}),
+      ...(parseTelegramBusRouting(raw.telegram?.busRouting)
+        ? { busRouting: parseTelegramBusRouting(raw.telegram?.busRouting)! }
+        : {}),
     },
     discord: {
       token:
@@ -693,6 +753,9 @@ function parseSettings(raw: Record<string, any>, discordUserIds?: string[]): Set
           )
         : [],
       streaming: raw.discord?.streaming === true,
+      ...(parseDiscordBusRouting(raw.discord?.busRouting)
+        ? { busRouting: parseDiscordBusRouting(raw.discord?.busRouting)! }
+        : {}),
     },
     slack: {
       botToken:
@@ -709,6 +772,14 @@ function parseSettings(raw: Record<string, any>, discordUserIds?: string[]): Set
         : [],
       allowBots: Array.isArray(raw.slack?.allowBots) ? raw.slack.allowBots.map(String) : [],
       allowBotIds: Array.isArray(raw.slack?.allowBotIds) ? raw.slack.allowBotIds.map(String) : [],
+      ...(typeof raw.slack?.signingSecret === "string" && raw.slack.signingSecret.trim()
+        ? { signingSecret: raw.slack.signingSecret.trim() }
+        : process.env.SLACK_SIGNING_SECRET?.trim()
+          ? { signingSecret: process.env.SLACK_SIGNING_SECRET.trim() }
+          : {}),
+      ...(parseSlackBusRouting(raw.slack?.busRouting)
+        ? { busRouting: parseSlackBusRouting(raw.slack?.busRouting)! }
+        : {}),
     },
     security: {
       level,
@@ -721,6 +792,7 @@ function parseSettings(raw: Record<string, any>, discordUserIds?: string[]): Set
       enabled: raw.web?.enabled ?? false,
       host: raw.web?.host ?? "127.0.0.1",
       port: Number.isFinite(raw.web?.port) ? Number(raw.web.port) : 4632,
+      ...(parseWebBusConfig(raw.web?.bus) ? { bus: parseWebBusConfig(raw.web?.bus)! } : {}),
     },
     stt: {
       baseUrl: typeof raw.stt?.baseUrl === "string" ? raw.stt.baseUrl.trim() : "",
@@ -943,6 +1015,94 @@ function parseBusAgents(raw: unknown): BusAgentSettings[] {
  * plugin, not by parseSettings). The multiplexer's own startup path warns
  * when a shared name has no definition; see SPEC §5 rule 2.
  */
+/**
+ * Parse a `{ key → string }` mapping from a raw object. Drops entries
+ * whose key or value isn't a non-empty string. Returns an empty
+ * object on non-object input.
+ */
+function parseStringMap(raw: unknown): Record<string, string> {
+  if (!raw || typeof raw !== "object") return {};
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof k !== "string" || k.length === 0) continue;
+    if (typeof v !== "string" || v.length === 0) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
+/**
+ * Parse `settings.telegram.busRouting`. Returns `null` when no usable
+ * routing was found (no `chats` and no `defaultAgentId`) so the caller
+ * can omit the field entirely rather than carry an empty object.
+ */
+function parseTelegramBusRouting(raw: unknown): TelegramBusRouting | null {
+  if (!raw || typeof raw !== "object") return null;
+  const chats = parseStringMap((raw as Record<string, unknown>).chats);
+  const defaultAgentId = (raw as Record<string, unknown>).defaultAgentId;
+  const hasDefault = typeof defaultAgentId === "string" && defaultAgentId.length > 0;
+  if (Object.keys(chats).length === 0 && !hasDefault) return null;
+  const out: TelegramBusRouting = { chats };
+  if (hasDefault) out.defaultAgentId = (defaultAgentId as string).trim();
+  return out;
+}
+
+/**
+ * Parse `settings.discord.busRouting`. Same null-when-empty semantics
+ * as `parseTelegramBusRouting`.
+ */
+function parseDiscordBusRouting(raw: unknown): DiscordBusRouting | null {
+  if (!raw || typeof raw !== "object") return null;
+  const channels = parseStringMap((raw as Record<string, unknown>).channels);
+  const threads = parseStringMap((raw as Record<string, unknown>).threads);
+  const dmAgentId = (raw as Record<string, unknown>).dmAgentId;
+  const hasDm = typeof dmAgentId === "string" && dmAgentId.length > 0;
+  if (Object.keys(channels).length === 0 && Object.keys(threads).length === 0 && !hasDm) {
+    return null;
+  }
+  const out: DiscordBusRouting = { channels };
+  if (Object.keys(threads).length > 0) out.threads = threads;
+  if (hasDm) out.dmAgentId = (dmAgentId as string).trim();
+  return out;
+}
+
+/**
+ * Parse `settings.slack.busRouting`. Same null-when-empty semantics.
+ */
+function parseSlackBusRouting(raw: unknown): SlackBusRouting | null {
+  if (!raw || typeof raw !== "object") return null;
+  const channels = parseStringMap((raw as Record<string, unknown>).channels);
+  const threadAgentId = (raw as Record<string, unknown>).threadAgentId;
+  const signingSecret = (raw as Record<string, unknown>).signingSecret;
+  const hasThread = typeof threadAgentId === "string" && threadAgentId.length > 0;
+  const hasSigning = typeof signingSecret === "string" && signingSecret.length > 0;
+  if (Object.keys(channels).length === 0 && !hasThread && !hasSigning) return null;
+  const out: SlackBusRouting = { channels };
+  if (hasThread) out.threadAgentId = (threadAgentId as string).trim();
+  if (hasSigning) out.signingSecret = (signingSecret as string).trim();
+  return out;
+}
+
+/**
+ * Parse `settings.web.bus`. Same null-when-empty semantics — drop the
+ * whole sub-object if nothing usable was set.
+ */
+function parseWebBusConfig(raw: unknown): WebBusConfig | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const bind = typeof r.bind === "string" && r.bind.length > 0 ? r.bind.trim() : null;
+  const token = typeof r.token === "string" && r.token.length > 0 ? r.token.trim() : null;
+  const allowedAgentIds = Array.isArray(r.allowedAgentIds)
+    ? r.allowedAgentIds.filter((s): s is string => typeof s === "string" && s.length > 0)
+    : [];
+  if (!bind && !token && allowedAgentIds.length === 0) return null;
+  const out: WebBusConfig = {};
+  if (bind) out.bind = bind;
+  if (token) out.token = token;
+  if (allowedAgentIds.length > 0) out.allowedAgentIds = allowedAgentIds;
+  return out;
+}
+
 function parseMcpConfig(raw: any, webEnabled: unknown): McpConfig {
   const asStringList = (v: unknown): string[] =>
     Array.isArray(v)

@@ -387,7 +387,13 @@ describe("mountBusRuntime — auto-spawn happy path", () => {
     expect(handle.spawnedAgentIds).toEqual(["triage", "research", "ops"]);
   });
 
-  it("defaults spawnOrigin to 'system' (matches the spec heartbeat tag)", async () => {
+  it("defaults spawnOrigin to 'cli' — a real BusOrigin (Codex P1 fold-in from PR #122)", async () => {
+    // PR #122 Codex review caught that the previous default "system" is
+    // NOT a valid BusOrigin. Beyond the type lie, it also broke the
+    // channel-notification path because `defaultSupervisionFor` falls
+    // through to `process-stream-json` for unknown origins. We now
+    // default to "cli" (valid BusOrigin) AND default `supervision:
+    // "pty-stdin"` at resolve time so the picker is origin-independent.
     const bus = createFakeBus();
     const sm = new FakeSessionManager();
     handle = await mountBusRuntime({
@@ -396,7 +402,7 @@ describe("mountBusRuntime — auto-spawn happy path", () => {
       agents: [cfg("triage")],
       logger: SILENT_LOGGER,
     });
-    expect(sm.spawnLog[0]?.origin).toBe("system");
+    expect(sm.spawnLog[0]?.origin).toBe("cli");
   });
 
   it("honours spawnOrigin override", async () => {

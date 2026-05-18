@@ -22,7 +22,7 @@ import { resolveBusAgentConfig, resolveBusAgentConfigs } from "../agent-resolver
 /* ────────────────────────────────────────────────────────────────────── */
 
 describe("resolveBusAgentConfig — defaults", () => {
-  it("applies defaults for cwd, permission_mode, session_id", async () => {
+  it("applies defaults for cwd, permission_mode, session_id, supervision", async () => {
     const out = await resolveBusAgentConfig(
       { id: "triage" },
       { defaultCwd: "/tmp/proj", resolveSessionId: async () => "uuid-fixed" },
@@ -32,6 +32,7 @@ describe("resolveBusAgentConfig — defaults", () => {
       cwd: "/tmp/proj",
       session_id: "uuid-fixed",
       permission_mode: "plan",
+      supervision: "pty-stdin",
     });
   });
 
@@ -72,6 +73,27 @@ describe("resolveBusAgentConfig — defaults", () => {
       { resolveSessionId: async () => "uuid-fixed" },
     );
     expect(out.supervision).toBe("pty-stdin");
+  });
+
+  it("defaults supervision to 'pty-stdin' (Codex P1 fold-in from PR #122)", async () => {
+    // Bus-runtime agents need PTY-backed supervision for the channel
+    // notification path that adapter-driven traffic depends on. Sprint
+    // 5.2a left this implicit and the spawn-origin pathway resolved to
+    // `process-stream-json` for the default origin. Resolver now sets
+    // `supervision: "pty-stdin"` directly when the entry doesn't override.
+    const out = await resolveBusAgentConfig(
+      { id: "triage" },
+      { resolveSessionId: async () => "uuid-fixed" },
+    );
+    expect(out.supervision).toBe("pty-stdin");
+  });
+
+  it("non-pty supervision override survives the default (e.g. tmux)", async () => {
+    const out = await resolveBusAgentConfig(
+      { id: "triage", supervision: "tmux" },
+      { resolveSessionId: async () => "uuid-fixed" },
+    );
+    expect(out.supervision).toBe("tmux");
   });
 
   it("forwards explicit permission_mode override", async () => {

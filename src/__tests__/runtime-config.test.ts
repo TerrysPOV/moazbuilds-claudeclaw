@@ -172,3 +172,100 @@ describe("parseSettings — agents field (Sprint 5.2a)", () => {
     expect(getSettings().agents.map((a) => a.id)).toEqual(["a".repeat(36)]);
   });
 });
+
+describe("parseSettings — bus routing (Sprint 5.2b)", () => {
+  it("telegram.busRouting parses chats map and defaultAgentId", async () => {
+    await writeRawSettings({
+      telegram: { busRouting: { chats: { "12345": "triage" }, defaultAgentId: "general" } },
+    });
+    await reloadSettings();
+    expect(getSettings().telegram.busRouting).toEqual({
+      chats: { "12345": "triage" },
+      defaultAgentId: "general",
+    });
+  });
+
+  it("telegram.busRouting drops empty routing entirely", async () => {
+    await writeRawSettings({ telegram: { busRouting: {} } });
+    await reloadSettings();
+    expect(getSettings().telegram.busRouting).toBeUndefined();
+  });
+
+  it("discord.busRouting parses channels + threads + dmAgentId", async () => {
+    await writeRawSettings({
+      discord: {
+        busRouting: {
+          channels: { C1: "triage" },
+          threads: { T1: "research" },
+          dmAgentId: "global",
+        },
+      },
+    });
+    await reloadSettings();
+    expect(getSettings().discord.busRouting).toEqual({
+      channels: { C1: "triage" },
+      threads: { T1: "research" },
+      dmAgentId: "global",
+    });
+  });
+
+  it("slack.busRouting parses channels + threadAgentId + signingSecret", async () => {
+    await writeRawSettings({
+      slack: {
+        busRouting: {
+          channels: { C1: "triage" },
+          threadAgentId: "global",
+          signingSecret: "abc123",
+        },
+      },
+    });
+    await reloadSettings();
+    expect(getSettings().slack.busRouting).toEqual({
+      channels: { C1: "triage" },
+      threadAgentId: "global",
+      signingSecret: "abc123",
+    });
+  });
+
+  it("web.bus parses bind + token + allowedAgentIds", async () => {
+    await writeRawSettings({
+      web: {
+        bus: {
+          bind: "127.0.0.1:7878",
+          token: "secret-token",
+          allowedAgentIds: ["triage", "research"],
+        },
+      },
+    });
+    await reloadSettings();
+    expect(getSettings().web.bus).toEqual({
+      bind: "127.0.0.1:7878",
+      token: "secret-token",
+      allowedAgentIds: ["triage", "research"],
+    });
+  });
+
+  it("web.bus drops empty config entirely", async () => {
+    await writeRawSettings({ web: { bus: {} } });
+    await reloadSettings();
+    expect(getSettings().web.bus).toBeUndefined();
+  });
+
+  it("slack.signingSecret is parsed from top-level when present", async () => {
+    await writeRawSettings({ slack: { signingSecret: "top-level-secret" } });
+    await reloadSettings();
+    expect(getSettings().slack.signingSecret).toBe("top-level-secret");
+  });
+
+  it("string-map parser drops non-string keys/values silently", async () => {
+    await writeRawSettings({
+      discord: {
+        busRouting: {
+          channels: { valid: "agent-a", empty: "", noValue: 42, "": "skip-key" },
+        },
+      },
+    });
+    await reloadSettings();
+    expect(getSettings().discord.busRouting).toEqual({ channels: { valid: "agent-a" } });
+  });
+});
