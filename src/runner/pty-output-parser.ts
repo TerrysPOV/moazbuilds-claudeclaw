@@ -105,26 +105,28 @@ export interface Parser {
    *  observed at least one byte after turn start, so quiet truly means
    *  "claude was responding and has stopped." */
   sawByteSinceTurnStart: boolean;
-  /** Whether claude's TUI has emitted any "I am actively responding"
-   *  indicator since the turn started — a spinner glyph (✻ ✶ ✳ ✢ ✽
-   *  ✺ ✷ · ◉) or an assistant-message marker (● ⏺).
+  /** Whether claude's TUI has emitted an active-generation spinner
+   *  glyph since the turn started (✻ ✶ ✳ ✢ ✽ ✺ ✷ ◉). Spinners are
+   *  the only reliable "claude is generating" signal — see the
+   *  `ACTIVITY_INDICATOR_BYTES` comment for why `●`/`⏺` markers and
+   *  `·` middle-dot are deliberately excluded.
    *
    *  Strengthens issue #87's `sawByteSinceTurnStart` gate. The original
    *  gate only required ANY byte after turn start, which was enough to
-   *  catch the empty-silence variant of the bug. But it missed a second
-   *  failure mode where the PTY emits bytes that are PURELY TUI redraws
-   *  (input-area echo of the new prompt envelope, resumed-session
-   *  scrollback) without claude having actually begun generating a
-   *  response. Quiet fired, supervisor wrote the sentinel, claude
-   *  echoed the sentinel without ever producing tokens, and the
-   *  captured "response" was last-turn content + the new prompt
-   *  envelope. See discord screenshot 2026-05-18 13:53 for the bug
-   *  signature.
+   *  catch the empty-silence variant of the bug. But it missed a
+   *  second failure mode where the PTY emits bytes that are PURELY TUI
+   *  redraws (input-area echo of the new prompt envelope,
+   *  resumed-session scrollback) without claude having actually begun
+   *  generating a response. Quiet fired, supervisor wrote the
+   *  sentinel, claude echoed the sentinel without ever producing
+   *  tokens, and the captured "response" was last-turn content + the
+   *  new prompt envelope. See discord screenshot 2026-05-18 13:53 for
+   *  the bug signature.
    *
    *  Failure mode under this gate: if claude truly has crashed or gone
-   *  silent, `quiet` never fires and the supervisor's `sentinelMaxWaitMs`
-   *  (default 30s) times the turn out. That's the correct outcome —
-   *  visible failure beats returning garbage. */
+   *  silent, `quiet` never fires and the supervisor's
+   *  `sentinelMaxWaitMs` (default 30s) times the turn out. That's the
+   *  correct outcome — visible failure beats returning garbage. */
   sawActivityIndicatorThisTurn: boolean;
   /** Carryover for activity-indicator byte-sequence scanning. The
    *  indicators are all 2-3 UTF-8 bytes; we keep up to 2 bytes from the
@@ -331,8 +333,9 @@ export function encodeSentinel(sentinel: string): Uint8Array {
 // ─── Activity-indicator scan ─────────────────────────────────────────────────
 
 /**
- * UTF-8 byte sequences for the glyphs claude's TUI uses to signal "I am
- * actively producing output."
+ * UTF-8 byte sequences for the spinner glyphs claude's TUI emits ONLY
+ * while it is actively producing output. Spinner-only by design — see
+ * the Codex P1 finding on PR #124 for the marker-glyph exclusion.
  *
  * Spinner family (per the `terminatorRe` in `extractResponseText`):
  *   ✻ U+273B (E2 9C BB)
@@ -344,14 +347,24 @@ export function encodeSentinel(sentinel: string): Uint8Array {
  *   ✷ U+2737 (E2 9C B7)
  *   ◉ U+25C9 (E2 97 89)
  *
- * Assistant-message markers (claude prints these at the start of each
- * new assistant turn):
- *   ● U+25CF (E2 97 8F)
- *   ⏺ U+23FA (E2 8F BA)
+ * Deliberately EXCLUDED:
+ *   - `●` U+25CF and `⏺` U+23FA — the assistant-message markers. They
+ *     APPEAR in the TUI status-box row (e.g. `│ ● live │ 🎮 │`) and in
+ *     scrollback re-paints from `--resume`. Matching them anywhere in
+ *     the byte stream lets the gate false-positive on the exact TUI
+ *     redraws this patch is trying to defeat (PR #124 Codex P1). The
+ *     line-anchored `markerRe` in `extractResponseText` only fires
+ *     when the marker is at start-of-line, but at gate-evaluation time
+ *     we're scanning a raw byte stream where newline context is hard
+ *     to reconstruct cheaply — spinner-only is the cleaner discriminator.
+ *   - `·` U+00B7 — too common as TUI footer punctuation (`Opus · 1M
+ *     context · /effort`) and body text.
  *
- * NOT included: `·` U+00B7. Too common as middle-dot punctuation in
- * normal text + TUI footers to be a reliable "claude is responding"
- * signal; including it would false-positive on idle TUI redraws.
+ * Trade-off: a hypothetical extremely-short claude response that never
+ * shows a spinner would fail to open the gate. In practice every
+ * response we've observed (validated against the golden fixture +
+ * Hetzner production traffic) paints the spinner for at least one
+ * frame before the marker — the spinner-only signal is sufficient.
  */
 const ACTIVITY_INDICATOR_BYTES: readonly Uint8Array[] = [
   new Uint8Array([0xe2, 0x9c, 0xbb]), // ✻
@@ -362,8 +375,6 @@ const ACTIVITY_INDICATOR_BYTES: readonly Uint8Array[] = [
   new Uint8Array([0xe2, 0x9c, 0xba]), // ✺
   new Uint8Array([0xe2, 0x9c, 0xb7]), // ✷
   new Uint8Array([0xe2, 0x97, 0x89]), // ◉
-  new Uint8Array([0xe2, 0x97, 0x8f]), // ●
-  new Uint8Array([0xe2, 0x8f, 0xba]), // ⏺
 ];
 
 /**
