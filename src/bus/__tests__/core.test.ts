@@ -221,6 +221,81 @@ describe("BusCore pub/sub", () => {
       /slashCommandHandler/,
     );
   });
+
+  /* ── origin propagation: see PR #133 + Codex P1 follow-up ──────────── */
+
+  it("ingestReply stamps the originating origin/origin_id from the most recent prompt", async () => {
+    bus = createBusCore({ eventLogAppend: createMockEventLog().append });
+    const received: BusEvent[] = [];
+    bus.subscribe({ agent_id: "alpha", topics: ["response.text"] }, (e) => received.push(e));
+
+    await bus.sendPrompt({
+      agent_id: "alpha",
+      origin: "discord",
+      origin_id: "dm-channel-42",
+      user_id: "u1",
+      text: "hi",
+    });
+    bus.ingestReply({ agent_id: "alpha", text: "hi back", intent: "progress" });
+
+    const replies = received.filter((e) => e.topic === "response.text");
+    expect(replies).toHaveLength(1);
+    const payload = replies[0]?.payload as { origin?: string; origin_id?: string };
+    expect(payload.origin).toBe("discord");
+    expect(payload.origin_id).toBe("dm-channel-42");
+  });
+
+  it("clears the cached origin after a 'final' reply so scheduler/cron events don't inherit it (Codex P1 on #133)", async () => {
+    bus = createBusCore({ eventLogAppend: createMockEventLog().append });
+    const received: BusEvent[] = [];
+    bus.subscribe({ agent_id: "alpha", topics: ["response.text"] }, (e) => received.push(e));
+
+    await bus.sendPrompt({
+      agent_id: "alpha",
+      origin: "discord",
+      origin_id: "dm-1",
+      user_id: "u1",
+      text: "first",
+    });
+    bus.ingestReply({ agent_id: "alpha", text: "first reply", intent: "final" });
+    // Simulate an unprompted reply that follows — e.g. a scheduler tick
+    // or a tool-status event with no fresh sendPrompt before it.
+    bus.ingestReply({ agent_id: "alpha", text: "unprompted update", intent: "progress" });
+
+    const replies = received.filter((e) => e.topic === "response.text");
+    expect(replies).toHaveLength(2);
+    const finalReply = replies[0]?.payload as { origin_id?: string };
+    const orphanReply = replies[1]?.payload as { origin_id?: string };
+    // The final reply still carries the prompt's origin (used by the
+    // adapter to route the response back to the DM). The follow-up
+    // unprompted reply must NOT inherit it.
+    expect(finalReply.origin_id).toBe("dm-1");
+    expect(orphanReply.origin_id).toBeUndefined();
+  });
+
+  it("keeps the origin across progress + tool_status events until the final reply", async () => {
+    bus = createBusCore({ eventLogAppend: createMockEventLog().append });
+    const received: BusEvent[] = [];
+    bus.subscribe({ agent_id: "alpha", topics: ["response.text", "response.tool_use"] }, (e) =>
+      received.push(e),
+    );
+
+    await bus.sendPrompt({
+      agent_id: "alpha",
+      origin: "discord",
+      origin_id: "ch-77",
+      user_id: "u1",
+      text: "do a thing",
+    });
+    bus.ingestReply({ agent_id: "alpha", text: "running", intent: "progress" });
+    bus.ingestReply({ agent_id: "alpha", text: "using tool X", intent: "tool_status" });
+    bus.ingestReply({ agent_id: "alpha", text: "done", intent: "final" });
+
+    expect(received).toHaveLength(3);
+    for (const e of received) {
+      expect((e.payload as { origin_id?: string }).origin_id).toBe("ch-77");
+    }
+  });
 });
 
 /* ───────────────────────────────────────────────────────────────────── */

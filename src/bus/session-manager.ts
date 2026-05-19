@@ -120,6 +120,13 @@ function buildChildEnv(agent: AgentConfig, busSocketPath: string): Record<string
   const env = cleanSpawnEnv();
   env.CCAW_AGENT_ID = agent.id;
   env.CCAW_BUS_SOCK = busSocketPath;
+  // Pin the bun runtime path to the daemon's own bun rather than
+  // whatever `which bun` resolves to in the spawned claude's PATH.
+  // Used by `scripts/start-bus-mcp` to launch the plus-bus MCP server.
+  // Codex P2 on PR #133 — without this, restricted-PATH deployments
+  // (e.g. daemons launched via absolute bun path with a stripped PATH)
+  // would fail to start plus-bus.
+  env.CCAW_BUS_BUN_PATH = process.execPath;
   // TCP fallback wiring is a stub in Sprint 1 — values flow through if the
   // daemon set them but we do not synthesise them here.
   //

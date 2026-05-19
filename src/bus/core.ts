@@ -321,6 +321,17 @@ export class BusCoreImpl implements BusCore {
       },
     };
     this.publish(event);
+    // Codex P1 on PR #133: clear the cached origin once the agent has
+    // signalled the turn is done (`intent: "final"`). Without this,
+    // any unprompted reply that follows — scheduler ticks, background
+    // tool_status events, cron-fired jobs without their own sendPrompt
+    // — would inherit the previous prompt's origin and misroute to
+    // whichever DM/channel last asked the agent something. Progress
+    // and tool_status intents keep the origin so mid-stream updates
+    // stay scoped to the originating surface.
+    if (req.intent === "final") {
+      this.lastPromptOrigin.delete(req.agent_id);
+    }
   }
 
   ingestSessionEvent(e: BusEvent): void {
