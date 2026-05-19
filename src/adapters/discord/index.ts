@@ -19,20 +19,25 @@
  *   - Attachment detection: `discord.ts:604` `isImageAttachment` + friends.
  *   - Channel/thread/DM identity: `discord.ts:527` `guildTriggerReason`
  *     + `knownThreads` (188). Externalised here as `router.ts`.
- *   - Gateway connect/heartbeat/reconnect: `discord.ts:1582–1908`. Tests
- *     inject a `FakeDiscordGateway`; production builds will wire a real
- *     gateway in Sprint 4 (see TODO at the bottom of this file).
+ *   - Gateway connect/heartbeat/reconnect: ported into
+ *     `./gateway.ts` (`DiscordGateway` class). Adapter depends on the
+ *     `DiscordGatewayLike` abstraction so tests can inject
+ *     `FakeDiscordGateway`; production constructs `DiscordGateway`
+ *     from the token automatically when no `gateway` is passed.
+ *   - REST surface: ported into `./rest-api.ts`. Same injection /
+ *     auto-construct pattern as the gateway.
  *
- * Sprint 3 deliberately does NOT copy the gateway WS code into this
- * file — that would double-fork the production gateway logic. Instead
- * the adapter depends on `DiscordGatewayLike` and `DiscordRestApiLike`
- * abstractions (see `./types.ts`). Sprint 4 TODO: extract a shared
- * `src/discord/api.ts` + `src/discord/gateway.ts` from the legacy
- * listener so both code paths share one implementation.
+ * Sprint 4 follow-ups (legacy parity not yet ported into the Bus path):
+ * thread rejoin (GUILD_CREATE), slash-command registration, attachment
+ * download + voice transcription, streaming edit-in-place renderer.
+ * These are independent of the gateway lifecycle and can land
+ * incrementally; the staging guide flags which are required for full
+ * legacy parity vs. acceptable-for-staging.
  */
 
 import type { BusCore, Subscription } from "../../bus/core";
 import type { BusEvent, PermissionRequest } from "../../bus/types";
+import { createDiscordGateway } from "./gateway";
 import {
   attachmentMeta,
   buildPermissionButtons,
@@ -41,6 +46,7 @@ import {
   parsePermissionCustomId,
   summariseAttachments,
 } from "./helpers";
+import { createDiscordRestApi } from "./rest-api";
 import { resolveAgentId, uniqueAgentIds, type RoutingConfig } from "./router";
 import type {
   DiscordAdapterOptions,
@@ -106,22 +112,11 @@ export class DiscordAdapter {
     this.logger = opts.logger ?? console;
     this.rateLimitCheck = opts.rateLimitCheck ?? makeDefaultRateLimit();
 
-    if (!opts.gateway) {
-      throw new Error(
-        "DiscordAdapter: `gateway` injection is required in Sprint 3. " +
-          "Shared gateway helper extraction is a Sprint 4 deliverable; " +
-          "until then production callers must construct their own gateway. " +
-          "Tests inject a FakeDiscordGateway.",
-      );
-    }
-    if (!opts.restApi) {
-      throw new Error(
-        "DiscordAdapter: `restApi` injection is required in Sprint 3. " +
-          "See SPRINT_3_PLAN.md — shared REST helpers are a Sprint 4 task.",
-      );
-    }
-    this.gateway = opts.gateway;
-    this.restApi = opts.restApi;
+    // Production callers pass `bus + token + routing`; the adapter
+    // constructs its own real gateway + REST client. Tests inject
+    // `FakeDiscordGateway` / `FakeDiscordRestApi` to bypass the network.
+    this.gateway = opts.gateway ?? createDiscordGateway({ token: this.token, logger: this.logger });
+    this.restApi = opts.restApi ?? createDiscordRestApi({ token: this.token, logger: this.logger });
   }
 
   /* ──────────────────────────── lifecycle ─────────────────────────── */
@@ -463,10 +458,6 @@ export { resolveAgentId, uniqueAgentIds } from "./router";
 /* Sprint 4 TODOs                                                         */
 /* ────────────────────────────────────────────────────────────────────── */
 /*
- *  - Extract `discordApi`, `sendMessage`, gateway connect/heartbeat from
- *    `src/commands/discord.ts` into a shared `src/discord/api.ts` +
- *    `src/discord/gateway.ts`. Right now the adapter requires `gateway`
- *    + `restApi` injection — production callers must wire their own.
  *  - Track originating channel per bus event so responses go ONLY to
  *    the channel the prompt came from (today we fan out to every
  *    channel owned by the agent — fine for single-channel-per-agent,
