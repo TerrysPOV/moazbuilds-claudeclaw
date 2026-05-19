@@ -256,6 +256,13 @@ function detectSessionIdCollision(proc: AgentProcess, windowMs: number): Promise
       resolve(value);
     };
     proc.onData((chunk) => {
+      // Early-exit once the detector has resolved (timeout fired, exit
+      // observed, or marker matched). `PtyAgentProcess.onData` has a
+      // push-only handler array with no removal API, so this listener
+      // stays attached for the proc's lifetime; the cheap flag check
+      // keeps the regex from running on every PTY chunk after the
+      // detection window closes.
+      if (resolved) return;
       if (!markerSeen && SESSION_COLLISION_PATTERN.test(chunk)) {
         markerSeen = true;
       }
