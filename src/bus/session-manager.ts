@@ -28,9 +28,10 @@
  */
 
 import { spawn as nodeSpawnChildProcess } from "node:child_process";
-import { realpathSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { cleanSpawnEnv, withCleanProcessEnv } from "../runner";
 import {
   type AgentProcess,
@@ -144,20 +145,88 @@ function buildChildEnv(agent: AgentConfig, busSocketPath: string): Record<string
 }
 
 /**
- * Build the args list passed to the spawned `claude`. Mirrors §5.3 sample.
+ * Channel name used for the Bus MCP stdio plugin loaded into every
+ * spawned `claude`. The `--dangerously-load-development-channels` value
+ * MUST match an `mcpServers` key in the `--mcp-config` JSON — that
+ * mapping is what tells `claude` which stdio command to start as the
+ * channel-bearing MCP server. Spike 0.6's working probe used a bare
+ * channel name (`probe-channel`); the legacy `plugin:plus-bus@local`
+ * string didn't resolve to anything and silently loaded no channel,
+ * which is why every Sprint 1 e2e test passed (those inject a fake
+ * IPC transport directly) while real `claude` never connected to the
+ * Bus IPC server.
  */
-function buildClaudeArgs(agent: AgentConfig, mode: SupervisionMode): string[] {
+export const PLUS_BUS_CHANNEL = "plus-bus";
+
+/** Absolute path to the Bus MCP server entrypoint we tell `claude` to spawn. */
+function resolveBusMcpServerPath(): string {
+  // `session-manager.ts` lives in `src/bus/`; so does `mcp-server.ts`.
+  // Resolved via `import.meta.url` so it works both for `bun run` against
+  // the TS source (production) and for any future bundled deployment.
+  const here = fileURLToPath(import.meta.url);
+  return join(dirname(here), "mcp-server.ts");
+}
+
+/**
+ * Synthesise the `--mcp-config` JSON `claude` will read at startup. The
+ * config always contains a `plus-bus` entry whose `command`/`args` point
+ * at our Bus MCP server. If the operator supplied their own
+ * `agent.mcp_config` we merge their `mcpServers` map into ours so user
+ * MCPs continue to load alongside Bus IPC. The `plus-bus` key is
+ * reserved — operator entries with the same name are overwritten with a
+ * warning (the bus channel won't function under any other name).
+ *
+ * The synthesised file lives under `os.tmpdir()` and is keyed by pid +
+ * agent id so concurrent daemons / restarts don't clobber each other.
+ */
+export function writeBusMcpConfig(
+  agent: AgentConfig,
+  logger: Pick<Console, "warn"> = console,
+): string {
+  const busEntry = {
+    command: process.execPath, // current bun
+    args: ["run", resolveBusMcpServerPath()],
+  };
+  let mcpServers: Record<string, unknown> = {};
+  if (agent.mcp_config && existsSync(agent.mcp_config)) {
+    try {
+      const parsed = JSON.parse(readFileSync(agent.mcp_config, "utf8")) as {
+        mcpServers?: Record<string, unknown>;
+      };
+      mcpServers = { ...(parsed.mcpServers ?? {}) };
+    } catch (err) {
+      logger.warn(
+        `[bus-session] failed to read operator mcp_config at ${agent.mcp_config}; falling back to bus-only: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+  }
+  if (mcpServers[PLUS_BUS_CHANNEL]) {
+    logger.warn(
+      `[bus-session] operator mcp_config defines a "${PLUS_BUS_CHANNEL}" server — overwriting (reserved name)`,
+    );
+  }
+  mcpServers[PLUS_BUS_CHANNEL] = busEntry;
+  const path = join(tmpdir(), `claudeclaw-bus-mcp-${process.pid}-${agent.id}.json`);
+  writeFileSync(path, JSON.stringify({ mcpServers }, null, 2));
+  return path;
+}
+
+/**
+ * Build the args list passed to the spawned `claude`. Mirrors §5.3 sample.
+ *
+ * Side effect: writes a per-agent `--mcp-config` file to `os.tmpdir()`.
+ * Called once per spawn from `SessionManager.spawnAgent`.
+ */
+export function buildClaudeArgs(agent: AgentConfig, mode: SupervisionMode): string[] {
   const args: string[] = [];
   if (mode === "process-stream-json") {
     args.push("-p", "--input-format=stream-json", "--output-format=stream-json", "--verbose");
   }
-  args.push("--dangerously-load-development-channels", "plugin:plus-bus@local");
+  args.push("--mcp-config", writeBusMcpConfig(agent));
+  args.push("--dangerously-load-development-channels", PLUS_BUS_CHANNEL);
   args.push("--permission-mode", agent.permission_mode ?? "plan");
   if (agent.system_prompt_file) {
     args.push("--append-system-prompt", agent.system_prompt_file);
-  }
-  if (agent.mcp_config) {
-    args.push("--mcp-config", agent.mcp_config);
   }
   args.push("--session-id", agent.session_id);
   return args;
