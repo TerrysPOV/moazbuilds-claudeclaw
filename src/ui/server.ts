@@ -304,6 +304,14 @@ export function startWebUi(opts: StartWebUiOptions): WebServerHandle {
           // Inject a runner that maps `runner(name, prompt, agent)` to
           // `bus.sendPromptAndAwait(agent, prompt)` and keep `fireJob`'s
           // existing storage-lookup + prompt-resolution logic intact.
+          //
+          // Capture bus-mode failures (`ok: false` from the bridge —
+          // timeout, dispatch error) in an out-of-band variable so we
+          // can surface the error on the response. fireJob's `error`
+          // field is only set when the agent/job isn't found; the
+          // runner's failure mode is signalled via exit code + stderr,
+          // which fireJob doesn't propagate up.
+          let busRunnerError: string | undefined;
           const fireOpts = opts.bus
             ? {
                 runner: async (name: string, prompt: string, jobAgent?: string) => {
@@ -313,6 +321,7 @@ export function startWebUi(opts: StartWebUiOptions): WebServerHandle {
                     prompt,
                     { origin: "webui", originId: `job:${name}` },
                   );
+                  if (!out.ok && out.error) busRunnerError = out.error;
                   return {
                     exitCode: out.exitCode,
                     stdout: out.output,
@@ -327,7 +336,7 @@ export function startWebUi(opts: StartWebUiOptions): WebServerHandle {
             success: result.success,
             exitCode: result.exitCode,
             output: result.output,
-            error: result.error,
+            error: result.error ?? busRunnerError,
             agent,
             label,
           });
@@ -397,6 +406,11 @@ export function startWebUi(opts: StartWebUiOptions): WebServerHandle {
           // current session" path.
           let stdout: string;
           let exitCode: number;
+          // Track bus-mode failure so we can surface it on the response
+          // instead of returning `{ok: true}` with empty output —
+          // companion to the chat-error surfacing in start.ts's onChat.
+          let busError: string | undefined;
+          let ok = true;
           if (opts.bus) {
             const out = await opts.bus.sendPromptAndAwait(opts.bus.defaultAgentId, message, {
               origin: "webui",
@@ -404,6 +418,10 @@ export function startWebUi(opts: StartWebUiOptions): WebServerHandle {
             });
             stdout = out.output;
             exitCode = out.exitCode;
+            if (!out.ok) {
+              ok = false;
+              busError = out.error;
+            }
           } else {
             const result = await runUserMessage("inject", message);
             stdout = result.stdout;
@@ -419,7 +437,12 @@ export function startWebUi(opts: StartWebUiOptions): WebServerHandle {
               body: JSON.stringify({ chat_id: chatId, text }),
             }).catch(() => {});
           }
-          return json({ ok: true, result: stdout, exitCode });
+          return json({
+            ok,
+            result: stdout,
+            exitCode,
+            ...(busError ? { error: busError } : {}),
+          });
         } catch (err) {
           return json({ ok: false, error: String(err) }, 500);
         }
