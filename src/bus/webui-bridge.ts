@@ -19,6 +19,25 @@
 import type { BusCore } from "./core";
 import type { BusOrigin } from "./types";
 
+/**
+ * Per-agent mutex tail used to serialize `streamBusPrompt` calls. Codex
+ * P1 on #136: the bus subscriber filter `{agent_id, topics:
+ * ["response.text"]}` doesn't carry a per-prompt correlation id, and
+ * `BusCore.lastPromptOrigin` is last-write-wins, so two prompts in
+ * flight on the same agent can return each other's replies. Serializing
+ * at the bridge guarantees at most one prompt awaits per agent — chat,
+ * fire, and inject from the dashboard now queue rather than racing.
+ *
+ * Tradeoff: a long-running cron job firing through `streamBusPrompt`
+ * would block a follow-up chat. Acceptable: BusScheduler doesn't go
+ * through this bridge (it dispatches via `bus.sendPrompt` directly and
+ * doesn't await), and dashboard interactions are intrinsically
+ * single-user. If we ever route scheduler triggers through this
+ * bridge, swap the mutex for a per-prompt correlation id propagated
+ * from the bus core.
+ */
+const agentMutex = new Map<string, Promise<unknown>>();
+
 export interface StreamBusPromptOptions {
   /** BusOrigin tag attached to the outgoing prompt. Defaults to "webui". */
   origin?: BusOrigin;
@@ -67,6 +86,41 @@ export async function streamBusPrompt(
   agentId: string,
   message: string,
   opts: StreamBusPromptOptions = {},
+): Promise<BusPromptResult> {
+  // Serialize per-agent so the unfiltered `response.text` subscriber
+  // below can't pick up a reply meant for an earlier in-flight prompt.
+  // The mutex tail is a Promise that the previous call resolves when
+  // it finishes; this call awaits it before sending its own prompt.
+  // Callers race each other only on which one enters the queue first,
+  // not on which reply they consume.
+  const prev = agentMutex.get(agentId);
+  let release: () => void = () => undefined;
+  const slot = new Promise<void>((res) => {
+    release = res;
+  });
+  agentMutex.set(agentId, slot);
+  if (prev) {
+    try {
+      await prev;
+    } catch {
+      /* upstream errors don't block our own attempt */
+    }
+  }
+  try {
+    return await runPrompt(bus, agentId, message, opts);
+  } finally {
+    // Only clear the tail slot if no other call has chained onto us;
+    // chained callers will overwrite the map entry themselves.
+    if (agentMutex.get(agentId) === slot) agentMutex.delete(agentId);
+    release();
+  }
+}
+
+function runPrompt(
+  bus: BusCore,
+  agentId: string,
+  message: string,
+  opts: StreamBusPromptOptions,
 ): Promise<BusPromptResult> {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_PROMPT_TIMEOUT_MS;
   let accumulated = "";

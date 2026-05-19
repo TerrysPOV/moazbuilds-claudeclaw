@@ -174,4 +174,55 @@ describe("streamBusPrompt", () => {
     // Subscriber should be closed after resolution.
     expect(bus.state().subscriberCount).toBe(0);
   });
+
+  it("serializes concurrent prompts to the same agent (Codex P1 on #136)", async () => {
+    // The bridge subscribes by agent_id only; without serialization a
+    // second prompt's `final` could resolve the first caller. We assert
+    // the second prompt does NOT start (no subscriber registered)
+    // until the first one resolves.
+    const bus = makeBus();
+    const firstPending = streamBusPrompt(bus, "alpha", "first", { timeoutMs: 2000 });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(bus.state().subscriberCount).toBe(1);
+
+    const secondPending = streamBusPrompt(bus, "alpha", "second", { timeoutMs: 2000 });
+    // Give the second call a tick to enter the queue.
+    await Promise.resolve();
+    await Promise.resolve();
+    // First is still the only subscriber — second is parked on the
+    // mutex tail.
+    expect(bus.state().subscriberCount).toBe(1);
+
+    // A reply lands. With unfiltered subscription this would resolve
+    // whichever caller subscribed first; we assert it's the FIRST call
+    // (the only one with an active subscriber).
+    bus.ingestReply({ agent_id: "alpha", text: "first-reply", intent: "final" });
+    const firstResult = await firstPending;
+    expect(firstResult.output).toBe("first-reply");
+
+    // Now the second call's subscriber registers.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(bus.state().subscriberCount).toBe(1);
+    bus.ingestReply({ agent_id: "alpha", text: "second-reply", intent: "final" });
+    const secondResult = await secondPending;
+    expect(secondResult.output).toBe("second-reply");
+    expect(bus.state().subscriberCount).toBe(0);
+  });
+
+  it("serialization is per-agent (different agents proceed in parallel)", async () => {
+    const bus = makeBus();
+    const aPending = streamBusPrompt(bus, "alpha", "to-alpha", { timeoutMs: 2000 });
+    const bPending = streamBusPrompt(bus, "beta", "to-beta", { timeoutMs: 2000 });
+    await Promise.resolve();
+    await Promise.resolve();
+    // Both subscribers active simultaneously — separate agents.
+    expect(bus.state().subscriberCount).toBe(2);
+    bus.ingestReply({ agent_id: "beta", text: "beta-reply", intent: "final" });
+    bus.ingestReply({ agent_id: "alpha", text: "alpha-reply", intent: "final" });
+    const [a, b] = await Promise.all([aPending, bPending]);
+    expect(a.output).toBe("alpha-reply");
+    expect(b.output).toBe("beta-reply");
+  });
 });

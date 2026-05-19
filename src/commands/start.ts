@@ -950,11 +950,19 @@ export async function start(args: string[] = []) {
             const bus = busCoreForWebUi;
             const defaultAgent = busRuntimeSpawnedAgents[0];
             if (bus && defaultAgent) {
-              await streamBusPrompt(bus, defaultAgent, message, {
+              const result = await streamBusPrompt(bus, defaultAgent, message, {
                 origin: "webui",
                 originId: "chat",
                 onChunk,
               });
+              // Codex P2 on #136: surface timeout / dispatch failure to
+              // the SSE stream so a failed turn doesn't render as a
+              // successful `done` event on the dashboard. The error
+              // chunk is rendered inline; the SSE `done` still follows
+              // via `onUnblock` so the client unblocks the input.
+              if (!result.ok && result.error) {
+                onChunk(`\n[chat error: ${result.error}]\n`);
+              }
               onUnblock();
               return;
             }
