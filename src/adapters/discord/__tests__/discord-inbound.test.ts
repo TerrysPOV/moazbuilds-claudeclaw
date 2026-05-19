@@ -300,6 +300,30 @@ describe("DiscordAdapter — attachments", () => {
   });
 });
 
+describe("DiscordAdapter — typing indicator", () => {
+  it("fires a typing indicator on every accepted prompt", async () => {
+    adapter = await startAdapter(h);
+    h.gateway.push({
+      type: "MESSAGE_CREATE",
+      message: makeMessage({ channel_id: "ch-1", guild_id: "g-1", content: "hi" }),
+    });
+    await flushMicrotasks();
+    expect(h.bus.prompts).toHaveLength(1);
+    expect(h.rest.typings).toContain("ch-1");
+  });
+
+  it("does NOT send typing when the prompt is rejected (rate-limited)", async () => {
+    adapter = await startAdapter(h, { rateLimitCheck: () => false });
+    h.gateway.push({
+      type: "MESSAGE_CREATE",
+      message: makeMessage({ channel_id: "ch-1", guild_id: "g-1", content: "hi" }),
+    });
+    await flushMicrotasks();
+    expect(h.bus.prompts).toHaveLength(0);
+    expect(h.rest.typings).toHaveLength(0);
+  });
+});
+
 describe("DiscordAdapter — rate limit", () => {
   it("drops messages above the limit", async () => {
     let calls = 0;

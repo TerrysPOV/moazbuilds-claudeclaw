@@ -561,6 +561,19 @@ export async function startBusMcpServer(
 }
 
 if (import.meta.main) {
+  // When this server is auto-loaded by `claude --plugin-dir <root>` from
+  // the ClaudeClaw+ plugin's `.mcp.json`, it gets invoked in TWO
+  // contexts:
+  //
+  //   1. Daemon-spawned agent (Bus runtime active): `CCAW_BUS_SOCK` and
+  //      `CCAW_AGENT_ID` are set by SessionManager — boot the server.
+  //   2. Operator's own interactive claude with the plugin installed
+  //      but no daemon running: env vars absent — silently exit. Without
+  //      this guard, every claude session would log a noisy "Bus MCP:
+  //      fatal startup error" from a server they didn't ask for.
+  if (!process.env.CCAW_BUS_SOCK || !process.env.CCAW_AGENT_ID) {
+    process.exit(0);
+  }
   startBusMcpServer().catch((err: unknown) => {
     process.stderr.write(`Bus MCP: fatal startup error: ${String(err)}\n`);
     process.exit(1);

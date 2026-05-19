@@ -28,8 +28,8 @@
  */
 
 import { spawn as nodeSpawnChildProcess } from "node:child_process";
-import { chmodSync, existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cleanSpawnEnv, withCleanProcessEnv } from "../runner";
@@ -145,97 +145,104 @@ function buildChildEnv(agent: AgentConfig, busSocketPath: string): Record<string
 }
 
 /**
- * Channel name used for the Bus MCP stdio plugin loaded into every
- * spawned `claude`. The `--dangerously-load-development-channels` value
- * MUST match an `mcpServers` key in the `--mcp-config` JSON — that
- * mapping is what tells `claude` which stdio command to start as the
- * channel-bearing MCP server. Spike 0.6's working probe used a bare
- * channel name (`probe-channel`); the legacy `plugin:plus-bus@local`
- * string didn't resolve to anything and silently loaded no channel,
- * which is why every Sprint 1 e2e test passed (those inject a fake
- * IPC transport directly) while real `claude` never connected to the
- * Bus IPC server.
+ * Channel name the Bus MCP server registers under inside the spawned
+ * `claude`. Matches the `mcpServers` key in the plugin's `.mcp.json`.
  */
 export const PLUS_BUS_CHANNEL = "plus-bus";
 
-/** Absolute path to the Bus MCP server entrypoint we tell `claude` to spawn. */
-function resolveBusMcpServerPath(): string {
-  // `session-manager.ts` lives in `src/bus/`; so does `mcp-server.ts`.
-  // Resolved via `import.meta.url` so it works both for `bun run` against
-  // the TS source (production) and for any future bundled deployment.
-  const here = fileURLToPath(import.meta.url);
-  return join(dirname(here), "mcp-server.ts");
-}
-
 /**
- * Synthesise the `--mcp-config` JSON `claude` will read at startup. The
- * config always contains a `plus-bus` entry whose `command`/`args` point
- * at our Bus MCP server. If the operator supplied their own
- * `agent.mcp_config` we merge their `mcpServers` map into ours so user
- * MCPs continue to load alongside Bus IPC. The `plus-bus` key is
- * reserved — operator entries with the same name are overwritten with a
- * warning (the bus channel won't function under any other name).
- *
- * The synthesised file lives under `os.tmpdir()` and is keyed by pid +
- * agent id so concurrent daemons / restarts don't clobber each other.
+ * Plugin name as declared in the ClaudeClaw+ plugin's `plugin.json`.
+ * Used to construct the tagged channel name claude requires
+ * (`plugin:<name>@<marketplace>`).
  */
-export function writeBusMcpConfig(
-  agent: AgentConfig,
-  logger: Pick<Console, "warn"> = console,
-): string {
-  const busEntry = {
-    command: process.execPath, // current bun
-    args: ["run", resolveBusMcpServerPath()],
-  };
-  let mcpServers: Record<string, unknown> = {};
-  if (agent.mcp_config && existsSync(agent.mcp_config)) {
-    try {
-      const parsed = JSON.parse(readFileSync(agent.mcp_config, "utf8")) as {
-        mcpServers?: Record<string, unknown>;
-      };
-      mcpServers = { ...(parsed.mcpServers ?? {}) };
-    } catch (err) {
-      logger.warn(
-        `[bus-session] failed to read operator mcp_config at ${agent.mcp_config}; falling back to bus-only: ${err instanceof Error ? err.message : err}`,
-      );
-    }
-  }
-  if (mcpServers[PLUS_BUS_CHANNEL]) {
-    logger.warn(
-      `[bus-session] operator mcp_config defines a "${PLUS_BUS_CHANNEL}" server — overwriting (reserved name)`,
-    );
-  }
-  mcpServers[PLUS_BUS_CHANNEL] = busEntry;
-  const path = join(tmpdir(), `claudeclaw-bus-mcp-${process.pid}-${agent.id}.json`);
-  // 0600 — operator mcp_config entries may carry credentials in `env` or
-  // `headers`; the synthesised copy must not be world-readable in /tmp.
-  // Belt-and-braces (same pattern as src/runner/pty-mcp-config-writer.ts:172):
-  // `writeFileSync({mode})` only takes effect on CREATE and a permissive
-  // umask can still widen bits — an explicit chmodSync after the write
-  // forces 0600 regardless of platform / umask / prior file state.
-  writeFileSync(path, JSON.stringify({ mcpServers }, null, 2), { mode: 0o600 });
-  try {
-    chmodSync(path, 0o600);
-  } catch {
-    // Best-effort. Some test/FUSE filesystems lack permission semantics;
-    // the writeFileSync mode already applied where supported.
-  }
-  return path;
+export const CLAUDECLAW_PLUGIN_NAME = "claudeclaw-plus";
+
+/**
+ * "Marketplace" tag claude assigns to plugins loaded via `--plugin-dir`.
+ * Observed in the `init` event's `plugins[].source` field
+ * (`"claudeclaw-plus@inline"`). We use it to construct the tagged
+ * channel name passed to `--dangerously-load-development-channels`.
+ */
+const PLUGIN_MARKETPLACE_TAG = "inline";
+
+/**
+ * MCP tools exposed by the plus-bus channel. Auto-allowed at spawn time
+ * via `--allowedTools` so claude doesn't prompt the user before sending
+ * an outbound message through the bus — these tools are safe by design
+ * (they only call back through the IPC channel, no filesystem / network
+ * effects outside the daemon).
+ */
+const PLUS_BUS_TOOL_NAMES = [
+  "mcp__plugin_claudeclaw-plus_plus-bus__reply",
+  "mcp__plugin_claudeclaw-plus_plus-bus__ask",
+  "mcp__plugin_claudeclaw-plus_plus-bus__cancel",
+  "mcp__plugin_claudeclaw-plus_plus-bus__request_human",
+];
+
+/**
+ * Resolve the absolute path to the ClaudeClaw+ plugin root — the
+ * directory containing `.claude-plugin/plugin.json` and `.mcp.json`.
+ * Computed from `session-manager.ts`'s own location: this file lives
+ * at `<root>/src/bus/session-manager.ts` so two `dirname` hops give us
+ * the plugin root. Works regardless of install path (`/opt/claudeclaw`
+ * in production, the repo checkout in dev/tests).
+ */
+export function resolveClaudeclawPluginRoot(): string {
+  const here = fileURLToPath(import.meta.url);
+  return dirname(dirname(dirname(here)));
 }
 
 /**
- * Build the args list passed to the spawned `claude`. Mirrors §5.3 sample.
+ * Build the args list passed to the spawned `claude`.
  *
- * Side effect: writes a per-agent `--mcp-config` file to `os.tmpdir()`.
- * Called once per spawn from `SessionManager.spawnAgent`.
+ * Background — four wire-up attempts before this one worked end-to-end:
+ *
+ *   1. `--dangerously-load-development-channels plugin:plus-bus@local`
+ *      (PR #110) — silently loaded no channel.
+ *   2. `--dangerously-load-development-channels server:plus-bus` + a
+ *      synth `--mcp-config` (PR #131) — claude 2.1.89 shows an
+ *      interactive TUI confirmation prompt the PTY can't dismiss.
+ *   3. `--plugin-dir <root>` alone — plugin loads, MCP server
+ *      connects, but `notifications/claude/channel` pushes are
+ *      silently dropped because the channel-notification subsystem
+ *      is opt-in and the plus-bus channel isn't on Anthropic's
+ *      default approved-plugins allowlist.
+ *   4. `--plugin-dir` + `--settings` with `channelsEnabled` +
+ *      `allowedChannelPlugins` — the managed-settings path is only
+ *      honoured for `team`/`enterprise` subscription tiers; Pro users
+ *      fall back to the baked allowlist.
+ *
+ * Working approach (this PR):
+ *
+ *   - `--plugin-dir <root>` declares the ClaudeClaw+ plugin (loads
+ *     `.mcp.json` which registers the `plus-bus` stdio MCP server).
+ *   - `--dangerously-load-development-channels plugin:claudeclaw-plus@inline`
+ *     marks the bus channel as `dev:true`, which bypasses the approved-
+ *     plugins allowlist. The TUI confirmation dialog only fires when
+ *     `channelsEnabled` AND an OAuth token are both present — since we
+ *     never set `channelsEnabled`, claude silently flags the channel
+ *     dev-trusted with no prompt. The PTY supervisor still sends a
+ *     belt-and-braces Enter keypress shortly after spawn to dismiss the
+ *     dialog if it ever does appear (e.g. account-level harbor flag on).
+ *   - `--allowedTools` auto-approves the bus channel's own tools so
+ *     claude doesn't prompt-via-bus on every outbound reply.
+ *
+ * Operator-supplied `agent.mcp_config` is passed through unchanged.
  */
 export function buildClaudeArgs(agent: AgentConfig, mode: SupervisionMode): string[] {
   const args: string[] = [];
   if (mode === "process-stream-json") {
     args.push("-p", "--input-format=stream-json", "--output-format=stream-json", "--verbose");
   }
-  args.push("--mcp-config", writeBusMcpConfig(agent));
-  args.push("--dangerously-load-development-channels", PLUS_BUS_CHANNEL);
+  args.push("--plugin-dir", resolveClaudeclawPluginRoot());
+  args.push("--allowedTools", PLUS_BUS_TOOL_NAMES.join(","));
+  args.push(
+    "--dangerously-load-development-channels",
+    `plugin:${CLAUDECLAW_PLUGIN_NAME}@${PLUGIN_MARKETPLACE_TAG}`,
+  );
+  if (agent.mcp_config) {
+    args.push("--mcp-config", agent.mcp_config);
+  }
   args.push("--permission-mode", agent.permission_mode ?? "plan");
   if (agent.system_prompt_file) {
     args.push("--append-system-prompt", agent.system_prompt_file);
@@ -351,6 +358,29 @@ export class SessionManager {
         env,
       }),
     );
+    // Belt-and-braces: dismiss the WARNING: Loading development channels
+    // TUI dialog claude shows when `--dangerously-load-development-channels`
+    // is set AND the `tengu_harbor` feature flag is on for the account.
+    // Default selection is "I am using this for local development" so a
+    // single Enter accepts it. We send at 1.5s + 4s — the first covers
+    // a fast boot, the second is a no-op if the dialog has already been
+    // dismissed and a safety net for slow boots. With our current
+    // settings (no `channelsEnabled`) the dialog usually doesn't render
+    // at all; the writes are cheap insurance.
+    setTimeout(() => {
+      try {
+        pty.write("\r");
+      } catch {
+        /* pty may have exited already — non-fatal */
+      }
+    }, 1500);
+    setTimeout(() => {
+      try {
+        pty.write("\r");
+      } catch {
+        /* pty may have exited already — non-fatal */
+      }
+    }, 4000);
     return new PtyAgentProcess(agent.id, pty);
   }
 

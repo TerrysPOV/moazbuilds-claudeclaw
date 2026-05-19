@@ -294,7 +294,16 @@ export class DiscordAdapter {
       });
     } catch (err) {
       this.logger.error("[discord-adapter] sendPrompt failed", err);
+      return;
     }
+    // Visible "Bot is typing..." indicator so users get immediate
+    // feedback that the prompt was received. Fire-and-forget — Discord
+    // auto-clears after ~10 seconds; if the agent reply takes longer
+    // the indicator just lapses and reappears on the next typing call.
+    // Failures are logged but don't block prompt processing.
+    void this.restApi.sendTyping(channelId).catch((err) => {
+      this.logger.warn("[discord-adapter] sendTyping failed", err);
+    });
   }
 
   /**
@@ -364,12 +373,18 @@ export class DiscordAdapter {
   /* ──────────────────────────── outbound (bus → discord) ──────────── */
 
   private handleBusEvent(agentId: string, event: BusEvent): void {
-    // The originating channel rides on the prompt event's payload, but
-    // the bus doesn't carry it through to subsequent events for this
-    // session. For now post to every routed channel for the agent.
-    // Single-channel routing per response is a Sprint 4 polish item
-    // (see TODO at the end of this file).
-    const targetChannels = this.channelsForAgent(agentId);
+    // Determine the destination channel set. If the event payload
+    // carries an `origin: "discord"` + `origin_id` pair (populated by
+    // BusCore from the originating prompt), the reply goes ONLY to that
+    // channel — handles DMs and avoids fan-out spam. Otherwise we fall
+    // back to every routed channel for the agent (cron jobs, scheduler-
+    // initiated replies that have no inbound prompt).
+    const payloadWithOrigin = event.payload as { origin?: string; origin_id?: string } | undefined;
+    const originChannel =
+      payloadWithOrigin?.origin === "discord" && typeof payloadWithOrigin?.origin_id === "string"
+        ? payloadWithOrigin.origin_id
+        : null;
+    const targetChannels = originChannel ? [originChannel] : this.channelsForAgent(agentId);
     if (targetChannels.length === 0) return;
 
     if (event.topic === "response.text") {

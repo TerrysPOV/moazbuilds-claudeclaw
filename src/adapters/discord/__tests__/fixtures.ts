@@ -158,6 +158,7 @@ export interface SentInteractionAck {
 export class FakeDiscordRestApi implements DiscordRestApiLike {
   public readonly sent: SentMessage[] = [];
   public readonly acks: SentInteractionAck[] = [];
+  public readonly typings: string[] = [];
 
   async sendMessage(channelId: string, text: string, components?: unknown[]): Promise<void> {
     this.sent.push({ channelId, text, components });
@@ -169,6 +170,10 @@ export class FakeDiscordRestApi implements DiscordRestApiLike {
     body: { content: string; flags?: number },
   ): Promise<void> {
     this.acks.push({ interactionId, body });
+  }
+
+  async sendTyping(channelId: string): Promise<void> {
+    this.typings.push(channelId);
   }
 }
 

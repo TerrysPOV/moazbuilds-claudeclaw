@@ -143,6 +143,16 @@ export class BusCoreImpl implements BusCore {
   private readonly eventLogAppend: EventLogAppendFn;
   private slashCommandHandler: SlashCommandHandler | null;
   private readonly onError: (err: unknown, ctx?: Record<string, unknown>) => void;
+  /**
+   * Tracks the origin (surface + channel id) of the most recent prompt
+   * per agent. Adapters use this on outbound `response.text` events to
+   * route the reply back to the originating channel/DM rather than
+   * fanning out to every channel the agent owns. Last-write-wins —
+   * acceptable because Discord/Telegram bots wait for a reply before
+   * sending another prompt; interleaved prompts on the same agent
+   * fall back to broadcast behaviour at the adapter level.
+   */
+  private readonly lastPromptOrigin = new Map<string, { origin: BusOrigin; origin_id: string }>();
 
   constructor(opts: BusCoreOptions = {}) {
     this.socketPath = opts.socketPath ?? null;
@@ -213,6 +223,12 @@ export class BusCoreImpl implements BusCore {
       },
     };
     this.publish(promptEvent);
+    // Remember the origin so `ingestReply` can attach it to the
+    // outbound `response.text` event for surface-aware routing.
+    this.lastPromptOrigin.set(req.agent_id, {
+      origin: req.origin,
+      origin_id: req.origin_id,
+    });
 
     const ipcMsg: IpcPrompt = {
       type: "prompt",
@@ -282,12 +298,27 @@ export class BusCoreImpl implements BusCore {
   ingestReply(req: IngestReplyRequest): void {
     const topic: BusEventTopic =
       req.intent === "tool_status" ? "response.tool_use" : "response.text";
-    const event: BusEvent<{ text: string; intent: string }> = {
+    // Attach the originating surface so adapters can route the reply
+    // back to the same DM / channel rather than fanning out. The lookup
+    // is best-effort — if no prompt has been seen yet (e.g. a scheduler-
+    // initiated reply), the field stays undefined and the adapter falls
+    // back to its configured channel set.
+    const origin = this.lastPromptOrigin.get(req.agent_id);
+    const event: BusEvent<{
+      text: string;
+      intent: string;
+      origin?: BusOrigin;
+      origin_id?: string;
+    }> = {
       ts: Date.now(),
       agent_id: req.agent_id,
       session_id: "",
       topic,
-      payload: { text: req.text, intent: req.intent },
+      payload: {
+        text: req.text,
+        intent: req.intent,
+        ...(origin ? { origin: origin.origin, origin_id: origin.origin_id } : {}),
+      },
     };
     this.publish(event);
   }

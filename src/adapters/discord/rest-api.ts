@@ -44,6 +44,12 @@ export class DiscordRestApi implements DiscordRestApiLike {
     }
   }
 
+  async sendTyping(channelId: string): Promise<void> {
+    // Returns 204; we just need the side effect (~10s typing indicator).
+    // Errors propagate via this.call so the adapter can log them.
+    await this.call("POST", `/channels/${channelId}/typing`);
+  }
+
   async respondToInteraction(
     interactionId: string,
     interactionToken: string,

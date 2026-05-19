@@ -59,6 +59,34 @@ describe("DiscordAdapter — outbound response.text", () => {
     });
     expect(h.rest.sent).toHaveLength(0);
   });
+
+  it("routes response.text ONLY to the originating channel when origin is preserved", async () => {
+    // BusCore now stamps the originating prompt's `origin` + `origin_id`
+    // onto outbound `response.text` events so adapters can reply to the
+    // same surface (DM / specific channel) instead of fanning out.
+    adapter = await startAdapter(h);
+    h.bus.emit({
+      ts: Date.now(),
+      agent_id: "ops",
+      session_id: "s",
+      topic: "response.text",
+      payload: { text: "scoped reply", origin: "discord", origin_id: "dm-42" },
+    });
+    expect(h.rest.sent.map((m) => m.channelId)).toEqual(["dm-42"]);
+    expect(h.rest.sent[0]?.text).toBe("scoped reply");
+  });
+
+  it("falls back to channelsForAgent when no origin in payload", async () => {
+    adapter = await startAdapter(h);
+    h.bus.emit({
+      ts: Date.now(),
+      agent_id: "ops",
+      session_id: "s",
+      topic: "response.text",
+      payload: { text: "broadcast" },
+    });
+    expect(h.rest.sent.map((m) => m.channelId).sort()).toEqual(["ch-2", "th-1"]);
+  });
 });
 
 describe("DiscordAdapter — permission flow", () => {

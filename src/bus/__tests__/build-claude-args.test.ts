@@ -1,19 +1,36 @@
 /**
- * Unit tests for `buildClaudeArgs` + `writeBusMcpConfig`.
+ * Unit tests for `buildClaudeArgs`.
  *
- * These cover the wire-up that Sprint 1 missed: the actual CLI args the
- * Bus runtime passes to `claude`. Sprint 0.6's working probe used a
- * bare channel name + an `--mcp-config` JSON whose `mcpServers` key
- * matched the channel name; the original `plugin:plus-bus@local` arg
- * shipped in PR #110 never matched that contract and silently loaded
- * no channel. Every previous test bypassed this by setting
- * `argsOverride: []` on the SessionManager seam.
+ * History — four wire-up attempts before the current one worked
+ * end-to-end against a live `claude` 2.1.89 in PTY-stdin mode:
+ *
+ *   1. `--dangerously-load-development-channels plugin:plus-bus@local`
+ *      (PR #110) — silently loaded no channel.
+ *   2. `--dangerously-load-development-channels server:plus-bus` +
+ *      synth `--mcp-config` (PR #131) — interactive TUI confirmation
+ *      the PTY supervisor can't drive.
+ *   3. `--plugin-dir <root>` alone — channel loaded but notifications
+ *      silently dropped (allowlist gate).
+ *   4. `--plugin-dir` + `--settings channelsEnabled` + `--channels` —
+ *      managed-settings allowlist override is `team`/`enterprise` only.
+ *
+ * Current: `--plugin-dir` + `--dangerously-load-development-channels
+ * plugin:claudeclaw-plus@inline` + `--allowedTools <plus-bus tools>`.
+ * The danger flag's dialog stays dormant when `channelsEnabled` is
+ * unset; we still send a belt-and-braces Enter from the PTY supervisor
+ * shortly after spawn in case the account has the channels feature flag
+ * on.
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { PLUS_BUS_CHANNEL, buildClaudeArgs, writeBusMcpConfig } from "../session-manager";
+import {
+  CLAUDECLAW_PLUGIN_NAME,
+  PLUS_BUS_CHANNEL,
+  buildClaudeArgs,
+  resolveClaudeclawPluginRoot,
+} from "../session-manager";
 import type { AgentConfig } from "../types";
 
 function makeAgent(over: Partial<AgentConfig> = {}): AgentConfig {
@@ -37,145 +54,87 @@ afterEach(() => {
 });
 
 describe("PLUS_BUS_CHANNEL", () => {
-  it("is the bare channel name expected by --dangerously-load-development-channels", () => {
-    // The flag value MUST match an `mcpServers` key. Anything other than
-    // a bare identifier (e.g. `plugin:plus-bus@local`) silently loads no
-    // channel. Spike 0.6 reference: docs/spikes/0.6-stream-json-channels-probe.md.
+  it("is 'plus-bus' (matches the mcpServers key in .mcp.json)", () => {
     expect(PLUS_BUS_CHANNEL).toBe("plus-bus");
   });
 });
 
-describe("writeBusMcpConfig", () => {
-  it("writes a JSON config whose mcpServers contains a plus-bus stdio entry", () => {
-    const agent = makeAgent({ id: "alpha" });
-    const path = writeBusMcpConfig(agent, { warn: () => {} });
-    const cfg = JSON.parse(readFileSync(path, "utf8")) as {
-      mcpServers: Record<string, { command: string; args: string[] }>;
-    };
-    expect(cfg.mcpServers[PLUS_BUS_CHANNEL]).toBeDefined();
-    const entry = cfg.mcpServers[PLUS_BUS_CHANNEL]!;
-    // Spawned via current bun (process.execPath); points at mcp-server.ts.
-    expect(entry.command).toBe(process.execPath);
-    expect(entry.args[0]).toBe("run");
-    expect(entry.args[1]).toMatch(/\/bus\/mcp-server\.ts$/);
+describe("CLAUDECLAW_PLUGIN_NAME", () => {
+  it("is 'claudeclaw-plus' (matches .claude-plugin/plugin.json name)", () => {
+    expect(CLAUDECLAW_PLUGIN_NAME).toBe("claudeclaw-plus");
   });
+});
 
-  it("merges operator-supplied mcpServers preserving non-conflicting entries", () => {
-    const userCfgPath = join(tmp, "user-mcp.json");
-    writeFileSync(
-      userCfgPath,
-      JSON.stringify({
-        mcpServers: {
-          playwright: { command: "bun", args: ["run", "/some/playwright.ts"] },
-          everything: { command: "node", args: ["/some/everything.js"] },
-        },
-      }),
-    );
-    const agent = makeAgent({ id: "beta", mcp_config: userCfgPath });
-    const path = writeBusMcpConfig(agent, { warn: () => {} });
-    const cfg = JSON.parse(readFileSync(path, "utf8")) as {
-      mcpServers: Record<string, unknown>;
-    };
-    expect(Object.keys(cfg.mcpServers).sort()).toEqual(["everything", "playwright", "plus-bus"]);
-  });
-
-  it("overwrites an operator-supplied plus-bus entry and warns", () => {
-    const userCfgPath = join(tmp, "user-mcp.json");
-    writeFileSync(
-      userCfgPath,
-      JSON.stringify({
-        mcpServers: {
-          "plus-bus": { command: "evil", args: ["bad"] },
-        },
-      }),
-    );
-    const agent = makeAgent({ id: "gamma", mcp_config: userCfgPath });
-    const warnings: string[] = [];
-    const path = writeBusMcpConfig(agent, { warn: (m: string) => warnings.push(m) });
-    const cfg = JSON.parse(readFileSync(path, "utf8")) as {
-      mcpServers: Record<string, { command: string }>;
-    };
-    expect(cfg.mcpServers["plus-bus"]?.command).toBe(process.execPath);
-    expect(warnings.some((w) => w.includes("reserved name"))).toBe(true);
-  });
-
-  it("falls back to bus-only when operator mcp_config is unreadable", () => {
-    const agent = makeAgent({ id: "delta", mcp_config: join(tmp, "does-not-exist.json") });
-    const path = writeBusMcpConfig(agent, { warn: () => {} });
-    const cfg = JSON.parse(readFileSync(path, "utf8")) as {
-      mcpServers: Record<string, unknown>;
-    };
-    expect(Object.keys(cfg.mcpServers)).toEqual(["plus-bus"]);
-  });
-
-  it("creates the synthesised config with 0600 perms (no leak of operator secrets)", () => {
-    // Codex P2 on PR #131: operator `mcp_config` entries may carry
-    // credentials in `env`/`headers`; the synth copy lives in /tmp and
-    // must not be world-readable. Mirrors PR #72 item 2 for the PTY
-    // mcp-config writer.
-    const userCfgPath = join(tmp, "user-mcp.json");
-    writeFileSync(
-      userCfgPath,
-      JSON.stringify({
-        mcpServers: {
-          secret: { command: "bun", env: { GITHUB_TOKEN: "ghp_secret" } },
-        },
-      }),
-    );
-    const agent = makeAgent({ id: "perms-test", mcp_config: userCfgPath });
-    const path = writeBusMcpConfig(agent, { warn: () => {} });
-    // Lowest 9 bits = file permission bits; mask off type bits.
-    const mode = statSync(path).mode & 0o777;
-    expect(mode).toBe(0o600);
-  });
-
-  it("falls back to bus-only when operator mcp_config is malformed JSON", () => {
-    const userCfgPath = join(tmp, "bad-mcp.json");
-    writeFileSync(userCfgPath, "{not json");
-    const agent = makeAgent({ id: "epsilon", mcp_config: userCfgPath });
-    const warnings: string[] = [];
-    const path = writeBusMcpConfig(agent, { warn: (m: string) => warnings.push(m) });
-    const cfg = JSON.parse(readFileSync(path, "utf8")) as {
-      mcpServers: Record<string, unknown>;
-    };
-    expect(Object.keys(cfg.mcpServers)).toEqual(["plus-bus"]);
-    expect(warnings.some((w) => w.includes("failed to read operator mcp_config"))).toBe(true);
+describe("resolveClaudeclawPluginRoot", () => {
+  it("points at a directory containing .claude-plugin/plugin.json and .mcp.json", () => {
+    const root = resolveClaudeclawPluginRoot();
+    expect(existsSync(join(root, ".claude-plugin", "plugin.json"))).toBe(true);
+    expect(existsSync(join(root, ".mcp.json"))).toBe(true);
   });
 });
 
 describe("buildClaudeArgs", () => {
-  it("includes --mcp-config + bare-name channel arg for pty-stdin agents", () => {
-    const agent = makeAgent({ id: "mu" });
-    const args = buildClaudeArgs(agent, "pty-stdin");
-    const mcpIdx = args.indexOf("--mcp-config");
+  it("passes --plugin-dir at the plugin root", () => {
+    const args = buildClaudeArgs(makeAgent({ id: "mu" }), "pty-stdin");
+    const pluginIdx = args.indexOf("--plugin-dir");
+    expect(pluginIdx).toBeGreaterThanOrEqual(0);
+    expect(args[pluginIdx + 1]).toBe(resolveClaudeclawPluginRoot());
+  });
+
+  it("passes --dangerously-load-development-channels with the tagged channel name", () => {
+    const args = buildClaudeArgs(makeAgent({ id: "nu" }), "pty-stdin");
     const chanIdx = args.indexOf("--dangerously-load-development-channels");
-    expect(mcpIdx).toBeGreaterThanOrEqual(0);
     expect(chanIdx).toBeGreaterThanOrEqual(0);
-    expect(args[chanIdx + 1]).toBe(PLUS_BUS_CHANNEL);
-    // The mcp-config path must exist on disk; claude reads it on startup.
-    expect(existsSync(args[mcpIdx + 1]!)).toBe(true);
+    // Tagged form: `plugin:<plugin-name>@<marketplace>`. Marketplace tag
+    // is whatever claude assigns to `--plugin-dir`-loaded plugins.
+    expect(args[chanIdx + 1]).toMatch(new RegExp(`^plugin:${CLAUDECLAW_PLUGIN_NAME}@[a-z-]+$`));
+  });
+
+  it("auto-allowlists the plus-bus channel's own MCP tools via --allowedTools", () => {
+    const args = buildClaudeArgs(makeAgent({ id: "xi" }), "pty-stdin");
+    const allowIdx = args.indexOf("--allowedTools");
+    expect(allowIdx).toBeGreaterThanOrEqual(0);
+    const allowed = args[allowIdx + 1] ?? "";
+    expect(allowed).toContain("mcp__plugin_claudeclaw-plus_plus-bus__reply");
+    expect(allowed).toContain("mcp__plugin_claudeclaw-plus_plus-bus__ask");
+    expect(allowed).toContain("mcp__plugin_claudeclaw-plus_plus-bus__cancel");
+    expect(allowed).toContain("mcp__plugin_claudeclaw-plus_plus-bus__request_human");
   });
 
   it("prepends -p stream-json flags for process-stream-json mode", () => {
-    const agent = makeAgent({ id: "nu" });
-    const args = buildClaudeArgs(agent, "process-stream-json");
+    const args = buildClaudeArgs(makeAgent({ id: "omicron" }), "process-stream-json");
     expect(args[0]).toBe("-p");
     expect(args).toContain("--input-format=stream-json");
     expect(args).toContain("--output-format=stream-json");
-    expect(args).toContain("--mcp-config");
-    expect(args).toContain(PLUS_BUS_CHANNEL);
+    expect(args).toContain("--plugin-dir");
+  });
+
+  it("passes through operator-supplied --mcp-config alongside the plugin dir", () => {
+    const userCfgPath = join(tmp, "user-mcp.json");
+    writeFileSync(userCfgPath, JSON.stringify({ mcpServers: {} }));
+    const agent = makeAgent({ id: "rho", mcp_config: userCfgPath });
+    const args = buildClaudeArgs(agent, "pty-stdin");
+    expect(args).toContain("--plugin-dir");
+    const mcpIdx = args.indexOf("--mcp-config");
+    expect(mcpIdx).toBeGreaterThanOrEqual(0);
+    expect(args[mcpIdx + 1]).toBe(userCfgPath);
+  });
+
+  it("omits --mcp-config entirely when no operator config is set", () => {
+    const args = buildClaudeArgs(makeAgent({ id: "sigma" }), "pty-stdin");
+    expect(args).not.toContain("--mcp-config");
   });
 
   it("passes through permission_mode and session_id", () => {
     const agent = makeAgent({
-      id: "xi",
-      permission_mode: "acceptEdits",
+      id: "tau",
+      permission_mode: "default",
       session_id: "deadbeef-1234-1234-1234-000000000000",
     });
     const args = buildClaudeArgs(agent, "pty-stdin");
     const pmIdx = args.indexOf("--permission-mode");
     const sidIdx = args.indexOf("--session-id");
-    expect(args[pmIdx + 1]).toBe("acceptEdits");
+    expect(args[pmIdx + 1]).toBe("default");
     expect(args[sidIdx + 1]).toBe("deadbeef-1234-1234-1234-000000000000");
   });
 });

@@ -134,6 +134,13 @@ export interface DiscordRestApiLike {
     interactionToken: string,
     body: { content: string; flags?: number },
   ): Promise<void>;
+  /**
+   * Fire-and-forget typing indicator. Discord shows "Bot is typing..."
+   * for ~10 seconds after this call returns. The adapter triggers one on
+   * every accepted inbound prompt so users get visible feedback while
+   * the agent generates a reply.
+   */
+  sendTyping(channelId: string): Promise<void>;
 }
 
 /* ────────────────────────────────────────────────────────────────────── */
