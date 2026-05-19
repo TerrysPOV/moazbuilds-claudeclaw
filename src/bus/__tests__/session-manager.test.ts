@@ -381,3 +381,103 @@ describe("bus socket path validation", () => {
     await expect(mgr.spawnAgent(agent, "cron")).rejects.toThrow(/96-byte cap/);
   });
 });
+
+/* ───────────────────────────────────────────────────────────────────── */
+/* Session-id collision rotation                                         */
+/* ───────────────────────────────────────────────────────────────────── */
+
+describe("session-id collision rotation", () => {
+  // Detect: spawn /bin/sh with a small script that mimics claude's
+  // "Session ID X is already in use" error on the FIRST spawn (when the
+  // injected ENV says STALE_ID==agent.session_id), then exits 1.
+  // On subsequent spawns (a fresh UUID from rotation) the script
+  // succeeds and stays alive so the manager hands back a normal handle.
+  //
+  // No real `claude` involvement — we just need to drive the same
+  // (data-chunk + non-zero exit) contract the detector listens for.
+  if (!IS_UNIX) return;
+
+  it("rotates the session id and respawns once when claude rejects it as in-use", async () => {
+    // Counter-driven stand-in: first invocation exits 1 with the
+    // session-collision marker, subsequent invocations sleep so the
+    // manager sees a healthy process past the detection window.
+    const STALE = "00000000-0000-0000-0000-000000000bad";
+    const counterFile = `/tmp/test-bus-rotate-${process.pid}.cnt`;
+    rmSync(counterFile, { force: true });
+    const script = `
+      n=$(cat "${counterFile}" 2>/dev/null || echo 0)
+      n=$((n+1))
+      echo "$n" > "${counterFile}"
+      if [ "$n" = "1" ]; then
+        echo "Error: Session ID ${STALE} is already in use."
+        exit 1
+      fi
+      sleep 60
+    `;
+    const persisted: Array<{ agentId: string; sessionId: string }> = [];
+    const mgr = new SessionManager({
+      commandOverride: "/bin/sh",
+      argsOverride: ["-c", script],
+      busSocketPath: "/tmp/test-bus-rotate.sock",
+      sessionCollisionDetectMs: 500,
+      persistRotatedSessionId: async (agentId, sessionId) => {
+        persisted.push({ agentId, sessionId });
+      },
+      logger: { warn: () => {}, info: () => {}, error: () => {} },
+    });
+    const agent = mkAgent({ id: "rot-test", session_id: STALE });
+    const proc = await mgr.spawnAgent(agent, "cron");
+    expect(proc).toBeDefined();
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]?.agentId).toBe("rot-test");
+    expect(persisted[0]?.sessionId).not.toBe(STALE);
+    expect(persisted[0]?.sessionId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(agent.session_id).toBe(persisted[0]?.sessionId);
+    await mgr.stop("rot-test");
+    rmSync(counterFile, { force: true });
+  });
+
+  it("gives up after one retry if the collision persists", async () => {
+    // Always-fail-with-marker stand-in.
+    const STALE = "11111111-1111-1111-1111-111111111bad";
+    const mgr = new SessionManager({
+      commandOverride: "/bin/sh",
+      argsOverride: [
+        "-c",
+        // Pattern must match the detector regex
+        // (`Session ID [0-9a-fA-F-]{8,} is already in use`).
+        `echo "Error: Session ID 99999999-9999-9999-9999-999999999bad is already in use."; exit 1`,
+      ],
+      busSocketPath: "/tmp/test-bus-rotate.sock",
+      sessionCollisionDetectMs: 300,
+      persistRotatedSessionId: async () => {},
+      logger: { warn: () => {}, info: () => {}, error: () => {} },
+    });
+    const agent = mkAgent({ id: "rot-loop", session_id: STALE });
+    await expect(mgr.spawnAgent(agent, "cron")).rejects.toThrow(
+      /collision persisted after rotation/,
+    );
+  });
+
+  it("does NOT rotate on non-collision exit-1 (no marker in output)", async () => {
+    // Crash without the marker — manager must NOT rotate, treats it as
+    // a normal spawn that handed back a process which then exited.
+    const persisted: Array<{ agentId: string; sessionId: string }> = [];
+    const STALE = "22222222-2222-2222-2222-222222222bad";
+    const mgr = new SessionManager({
+      commandOverride: "/bin/sh",
+      argsOverride: ["-c", "echo unrelated boot error; exit 1"],
+      busSocketPath: "/tmp/test-bus-rotate.sock",
+      sessionCollisionDetectMs: 300,
+      persistRotatedSessionId: async (agentId, sessionId) => {
+        persisted.push({ agentId, sessionId });
+      },
+      logger: { warn: () => {}, info: () => {}, error: () => {} },
+    });
+    const agent = mkAgent({ id: "rot-other", session_id: STALE });
+    const proc = await mgr.spawnAgent(agent, "cron");
+    expect(proc).toBeDefined();
+    expect(persisted).toHaveLength(0);
+    expect(agent.session_id).toBe(STALE);
+  });
+});

@@ -28,11 +28,13 @@
  */
 
 import { spawn as nodeSpawnChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cleanSpawnEnv, withCleanProcessEnv } from "../runner";
+import { createSession } from "../sessions";
 import {
   type AgentProcess,
   ChildAgentProcess,
@@ -79,6 +81,26 @@ export interface SessionManagerOptions {
    * default path (`${XDG_RUNTIME_DIR ?? $HOME/.claudeclaw/run}/bus.sock`).
    */
   busSocketPath?: string;
+  /**
+   * Window in milliseconds to watch for claude's "Session ID X is already
+   * in use" startup error before considering the spawn healthy. On hit
+   * the manager rotates the session id (mints a fresh UUID, persists,
+   * respawns) once. Default 2000ms — claude emits the marker within
+   * ~1s of spawn when the id collides, so 2s gives comfortable headroom
+   * without slowing down happy-path spawns. Tests can set to 0 to skip
+   * the wait entirely.
+   */
+  sessionCollisionDetectMs?: number;
+  /**
+   * Persistence hook invoked after a rotation. Defaults to
+   * `createSession(freshId, agent.id)` from `src/sessions.ts`. Override
+   * in tests to capture rotation without writing to disk.
+   */
+  persistRotatedSessionId?: (agentId: string, sessionId: string) => Promise<void>;
+  /**
+   * Optional logger override. Defaults to `console`.
+   */
+  logger?: Pick<Console, "warn" | "info" | "error">;
 }
 
 /* ───────────────────────────────────────────────────────────────────── */
@@ -200,6 +222,52 @@ export function resolveClaudeclawPluginRoot(): string {
 }
 
 /**
+ * Default window for session-collision detection. Empirically the
+ * marker arrives in the first PTY data chunk (~under 1s) when the
+ * session id is stale; 2000ms is comfortable headroom for slow boots
+ * without delaying happy-path spawns by more than a second.
+ */
+const DEFAULT_COLLISION_DETECT_MS = 2000;
+
+/**
+ * Regex matching claude's "Session ID is already in use" startup error.
+ * Permissive on the uuid shape to survive any future formatting tweaks
+ * (claude has used both classic 36-char dashed UUIDs and variants).
+ */
+const SESSION_COLLISION_PATTERN = /Session ID [0-9a-fA-F-]{8,} is already in use/;
+
+/**
+ * Watch the spawned agent process for the session-id collision marker
+ * during a short window after spawn. Resolves true iff the marker is
+ * seen AND the process exits with a non-zero code within the window —
+ * both are required because claude can echo a similar string in benign
+ * contexts and a stale-id failure always pairs with an immediate
+ * exit. Resolves false for: alive past the window, clean exit, exit
+ * without the marker.
+ */
+function detectSessionIdCollision(proc: AgentProcess, windowMs: number): Promise<boolean> {
+  if (windowMs <= 0) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    let resolved = false;
+    let markerSeen = false;
+    const finish = (value: boolean) => {
+      if (resolved) return;
+      resolved = true;
+      resolve(value);
+    };
+    proc.onData((chunk) => {
+      if (!markerSeen && SESSION_COLLISION_PATTERN.test(chunk)) {
+        markerSeen = true;
+      }
+    });
+    proc.onExit((code) => {
+      finish(markerSeen && code !== 0);
+    });
+    setTimeout(() => finish(false), windowMs);
+  });
+}
+
+/**
  * Build the args list passed to the spawned `claude`.
  *
  * Background — four wire-up attempts before this one worked end-to-end:
@@ -278,6 +346,24 @@ export class SessionManager {
   }
 
   async spawnAgent(agent: AgentConfig, origin: BusOrigin): Promise<AgentProcess> {
+    return this.spawnAgentInternal(agent, origin, /* retry */ 0);
+  }
+
+  /**
+   * Internal spawn that supports a single session-id rotation retry.
+   *
+   * If claude rejects the supplied `--session-id` with "Session ID X is
+   * already in use" (typically because the previous daemon left a JSONL
+   * lock or claude's session registry treats the id as live), we mint a
+   * fresh UUID, persist it to `agents/<id>/session.json`, and respawn
+   * once. Without this the operator has to manually `rm session.json`
+   * and restart the daemon — a recurring papercut documented in PR #133.
+   */
+  private async spawnAgentInternal(
+    agent: AgentConfig,
+    origin: BusOrigin,
+    retry: number,
+  ): Promise<AgentProcess> {
     if (this.agents.has(agent.id)) {
       throw new Error(`agent ${agent.id} is already spawned; call stop() or restart() first`);
     }
@@ -305,6 +391,42 @@ export class SessionManager {
       proc = this.spawnTmux(agent, args, env, realCwd);
     } else {
       throw new Error(`unsupported supervision mode: ${mode satisfies never}`);
+    }
+
+    // Watch the spawn for a session-id collision before handing the
+    // process back to the caller. Returns true iff claude emitted the
+    // marker AND exited with code 1 within the detection window; any
+    // other outcome (alive past the window, clean exit, non-collision
+    // crash) returns false and the proc is returned as-is.
+    // Skip the collision-detect wait when the test seam (`argsOverride`)
+    // is in play — the spawned process is a stand-in (e.g. `/bin/cat`)
+    // that will never emit claude's session-id marker, and adding a 2s
+    // blocking wait to every test spawn doubles suite runtime for no
+    // signal. Explicit `sessionCollisionDetectMs` always wins.
+    const collisionWindow =
+      this.options.sessionCollisionDetectMs ??
+      (this.options.argsOverride !== undefined ? 0 : DEFAULT_COLLISION_DETECT_MS);
+    const collision = await detectSessionIdCollision(proc, collisionWindow);
+    if (collision && retry === 0) {
+      const fresh = randomUUID();
+      (this.options.logger ?? console).warn(
+        `[bus-session] agent=${agent.id} claude rejected session_id=${agent.session_id} as already in use — rotating to ${fresh} and respawning`,
+      );
+      // The public option takes `(agentId, sessionId)` for readability;
+      // the legacy `createSession` storage layer takes them reversed.
+      const persist =
+        this.options.persistRotatedSessionId ??
+        ((agentId: string, sessionId: string) => createSession(sessionId, agentId));
+      await persist(agent.id, fresh);
+      agent.session_id = fresh;
+      return this.spawnAgentInternal(agent, origin, retry + 1);
+    }
+    if (collision) {
+      // Retried once and still colliding — surface a real error so the
+      // operator notices instead of silently looping.
+      throw new Error(
+        `agent ${agent.id}: session-id collision persisted after rotation (id=${agent.session_id}) — manual intervention required`,
+      );
     }
 
     const record: AgentRecord = { agent, origin, mode, proc };
