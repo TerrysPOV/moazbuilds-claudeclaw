@@ -473,10 +473,12 @@ export { resolveAgentId, uniqueAgentIds } from "./router";
 /* Sprint 4 TODOs                                                         */
 /* ────────────────────────────────────────────────────────────────────── */
 /*
- *  - Track originating channel per bus event so responses go ONLY to
- *    the channel the prompt came from (today we fan out to every
- *    channel owned by the agent — fine for single-channel-per-agent,
- *    noisy for multi).
+ * Origin-id routing landed in #133: `handleBusEvent` reads
+ * `event.payload.origin_id` and replies on the originating Discord
+ * channel only. `channelsForAgent` remains the fallback for events
+ * with no origin (cron / scheduler ticks), so multi-channel agents
+ * still receive scheduled output everywhere.
+ *
  *  - DM channel resolution: legacy `sendMessageToUser` requires a
  *    `/users/@me/channels` POST to create the DM channel. Surface DM
  *    response routing via `dmAgentId` once that helper is extracted.

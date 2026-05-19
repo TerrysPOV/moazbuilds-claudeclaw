@@ -12,8 +12,13 @@
  *   this plugin ↔ Bus core: length-prefixed JSON (`<uint32-be><bytes>`) over
  *     Unix domain socket (or localhost TCP as fallback).
  *
- * The plugin is registered with:
- *   claude --dangerously-load-development-channels plugin:plus-bus@local
+ * The plugin is registered by the daemon when spawning each agent:
+ *   claude --plugin-dir <claudeclaw-plus repo root> \
+ *          --dangerously-load-development-channels plugin:claudeclaw-plus@inline
+ * `--plugin-dir` points claude at the repo so it discovers the channel
+ * definitions in `.claude-plugin/`, and the `@inline` tag matches the
+ * plugin name registered there. Note the pre-#133 form
+ * `plugin:plus-bus@local` no longer works.
  *
  * Env vars (set by Session Manager when spawning claude):
  *   CCAW_AGENT_ID  — stable slug for the agent; tags every outbound IPC frame
@@ -571,8 +576,24 @@ if (import.meta.main) {
   //      but no daemon running: env vars absent — silently exit. Without
   //      this guard, every claude session would log a noisy "Bus MCP:
   //      fatal startup error" from a server they didn't ask for.
-  if (!process.env.CCAW_BUS_SOCK || !process.env.CCAW_AGENT_ID) {
+  //
+  // Partial-set (exactly one of the two env vars present) is a real
+  // operator error — a half-finished bootstrap or a stale env. Treat it
+  // as a fatal misconfiguration so it surfaces in the operator's claude
+  // log instead of silently no-op'ing.
+  const hasSock = !!process.env.CCAW_BUS_SOCK;
+  const hasAgent = !!process.env.CCAW_AGENT_ID;
+  if (!hasSock && !hasAgent) {
     process.exit(0);
+  }
+  if (hasSock !== hasAgent) {
+    const set = hasSock ? "CCAW_BUS_SOCK" : "CCAW_AGENT_ID";
+    const missing = hasSock ? "CCAW_AGENT_ID" : "CCAW_BUS_SOCK";
+    process.stderr.write(
+      `Bus MCP: ${set} is set but ${missing} is not — refusing to boot. ` +
+        `Both env vars must be set together (daemon path) or both unset (operator path).\n`,
+    );
+    process.exit(2);
   }
   startBusMcpServer().catch((err: unknown) => {
     process.stderr.write(`Bus MCP: fatal startup error: ${String(err)}\n`);
