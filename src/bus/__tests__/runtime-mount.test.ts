@@ -77,6 +77,11 @@ function createFakeBus(opts: FakeBusOptions = {}): FakeBus {
       };
     },
     async invokeSlashCommand() {},
+    // setStreamPromptHandler is the PR-#140 contract — runtime-mount
+    // attaches it on start and clears on stop. No-op fake; tests that
+    // care about ordering observe via the `events` buffer in
+    // setSlashCommandHandler.
+    setStreamPromptHandler() {},
     setSlashCommandHandler(h) {
       if (h === null) {
         detachCalls += 1;

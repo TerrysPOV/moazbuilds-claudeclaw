@@ -25,6 +25,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 import { randomUUID } from "node:crypto";
 import { getMcpBridge } from "../mcp-bridge.js";
 import { getMetricsRegistry } from "./metrics.js";
+import { getResponseCache } from "./cache.js";
 import type { McpServerProcess } from "../mcp-proxy/server-process.js";
 import { AUTH_HEADER, PTY_ID_HEADER, PTY_TS_HEADER, verifyBearer } from "./pty-identity.js";
 import type { SessionPersistenceStore } from "./session-persistence.js";
@@ -56,11 +57,11 @@ export interface McpHttpHandlerOpts {
    *  (serverName, ptyId, sessionId) tuple on the SDK transport's
    *  `onsessioninitialized` callback; `releasePty` drops it; bucket
    *  reuse touches `lastUsedAt`. Stateless buckets are never persisted
-   *  (no per-PTY identity to bind to). When undefined, the handler is
-   *  behaviourally equivalent to PR #71 for the persistence axis —
-   *  observably identical until the post-#71 cost-tracking metrics
-   *  hook (issue #68) was added, which wraps the dispatch path with a
-   *  no-op timer when `mcp.metricsEnabled` is false (the default). */
+   *  (no per-PTY identity to bind to). When undefined, no on-disk
+   *  session-binding state is written — the dispatch path otherwise
+   *  honours the issue #68 metrics hook and issue #69 cache hook
+   *  (both default-off, opt-in via `settings.mcp.metricsEnabled` /
+   *  `settings.mcp.cache.enabled`). */
   persistence?: SessionPersistenceStore;
   /** Optional per-bearer rate limit config (#72 item 1). When omitted or
    *  `maxRequestsPerWindow <= 0`, no limit is enforced. */
@@ -558,23 +559,53 @@ export class McpHttpHandler {
           isError: true,
         };
       }
-      // Issue #68: cost-tracking metrics. `record()` returns a no-op
-      // timer when metrics are disabled, so this is zero-cost in the
-      // default path. The timer is started even before we know if the
-      // dispatch will succeed; `end(success)` is called in both arms
-      // so an exception path still records its latency + error count.
+      // Issue #68 + #69: start the metrics timer FIRST so EVERY
+      // tools/call dispatch records a sample, including cache hits.
+      // 5-agent review on PR #69 Agent 3: PR #147 established the
+      // invariant that every call gets a metric; skipping the timer
+      // on cache hit silently biased p50/p99 downward when both flags
+      // were enabled. The cache hit IS a successful call from the
+      // operator's perspective — recording it surfaces "look how fast
+      // cached requests are" as a useful operational signal.
+      const timer = getMetricsRegistry().record(this.serverName, bucketKey, name);
+
+      // Issue #69: response cache for idempotent tools.
       //
-      // Codex P2 on this PR: serialize the response FIRST, then
+      // Defensive invalidation: if this tool is NOT cacheable but the
+      // server HAS cacheable tools, the call might be mutating state
+      // those cached entries reflect. Drop the server's cache before
+      // dispatching. Conservative but correct: we don't track what
+      // each tool touches. Operators with cleanly partitioned tools
+      // (mixed-tool servers where non-cacheable calls are still
+      // read-only) can disable this via
+      // `settings.mcp.cache.defensiveInvalidation: false`.
+      const cache = getResponseCache();
+      const cacheableCall = cache.isCacheable(this.serverName, name);
+      if (cacheableCall) {
+        const cached = cache.get(this.serverName, name, args ?? {});
+        if (cached !== undefined) {
+          const text = typeof cached === "string" ? cached : JSON.stringify(cached);
+          timer.end(true);
+          return { content: [{ type: "text", text }] };
+        }
+      } else if (cache.shouldInvalidateOnNonCacheableCall(this.serverName)) {
+        cache.invalidateServer(this.serverName);
+      }
+
+      // Codex P2 on PR #147: serialize the response FIRST, then
       // `end(true)`. If `JSON.stringify(result)` throws (circular data,
       // BigInt), control falls to the catch and `end(false)` records
       // the error correctly. Calling `end(true)` before serialization
       // would latch the timer as a success before the failure was
       // observable — silently dropping the error increment.
-      const timer = getMetricsRegistry().record(this.serverName, bucketKey, name);
       try {
         const result = await this.proc.call(name, args ?? {});
         const text = typeof result === "string" ? result : JSON.stringify(result);
         timer.end(true);
+        // Cache the raw response (not the serialized text) — a later
+        // cache hit re-serializes via the same code path, matching
+        // upstream's call() return shape.
+        if (cacheableCall) cache.set(this.serverName, name, args ?? {}, result);
         return {
           content: [{ type: "text", text }],
         };
