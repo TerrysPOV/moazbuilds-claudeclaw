@@ -85,6 +85,18 @@ function eventBelongsToTelegram(event: BusEvent): boolean {
   return !CHANNEL_DRIVEN_ORIGINS.has(origin as BusOrigin);
 }
 
+/**
+ * Whether a failed Telegram API call is a transient 429 rate-limit (worth
+ * retrying) versus a terminal error. `createTelegramApi` throws errors of
+ * the form `Telegram API <method>: <status> <statusText>`, so the HTTP
+ * status is recoverable from the message. Used by the spinner loop to
+ * decide whether to keep animating or stop — a deleted placeholder yields
+ * a 400 that would otherwise loop forever.
+ */
+export function isTelegramRateLimit(err: unknown): boolean {
+  return err instanceof Error && /: 429\b/.test(err.message);
+}
+
 export class TelegramAdapter {
   private readonly bus: BusCore;
   private readonly api: TelegramApi;
@@ -108,15 +120,21 @@ export class TelegramAdapter {
   /** Last inbound per agent — target for outbound + reaction message id. */
   private readonly lastChatPerAgent = new Map<string, PendingPrompt>();
   /** Last outbound bot message per agent — target for edit_message + spinner. */
-  private readonly lastBotMessage = new Map<string, { chat_id: number; message_id: number; message_thread_id?: number }>();
+  private readonly lastBotMessage = new Map<
+    string,
+    { chat_id: number; message_id: number; message_thread_id?: number }
+  >();
   /** Active spinner animation per agent. */
-  private readonly spinnerState = new Map<string, {
-    baseText: string;
-    frame: number;
-    chat_id: number;
-    message_id: number;
-    timer: ReturnType<typeof setInterval>;
-  }>();
+  private readonly spinnerState = new Map<
+    string,
+    {
+      baseText: string;
+      frame: number;
+      chat_id: number;
+      message_id: number;
+      timer: ReturnType<typeof setInterval>;
+    }
+  >();
   /** Agents with a live turn message (placeholder/progress) the next reply edits in place. */
   private readonly turnActive = new Set<string>();
   /** request_id → context; callback_query routes back to `ingestPermissionDecision`. */
@@ -533,7 +551,7 @@ export class TelegramAdapter {
   }
 
   /** Braille spinner frames — classic CLI animation. */
-  private static readonly SPINNER_FRAMES = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"];
+  private static readonly SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
   private static readonly SPINNER_INTERVAL_MS = 1100;
 
   private stopSpinner(agentId: string): void {
@@ -544,7 +562,12 @@ export class TelegramAdapter {
     }
   }
 
-  private startSpinner(agentId: string, baseText: string, chat_id: number, message_id: number): void {
+  private startSpinner(
+    agentId: string,
+    baseText: string,
+    chat_id: number,
+    message_id: number,
+  ): void {
     this.stopSpinner(agentId);
     const FRAMES = TelegramAdapter.SPINNER_FRAMES;
     this.spinnerState.set(agentId, {
@@ -562,8 +585,13 @@ export class TelegramAdapter {
             message_id: cur.message_id,
             text: `${FRAMES[cur.frame]} ${cur.baseText}`,
           })
-          .catch(() => {
-            // Rate-limit / deleted message — don't kill the spinner.
+          .catch((err) => {
+            // 429 is a transient rate-limit — keep animating. Any other
+            // error is terminal (e.g. 400 "message to edit not found"
+            // when the user deletes the placeholder); stop the spinner
+            // so the 1.1s interval doesn't hammer the API with a
+            // forever-failing edit loop.
+            if (!isTelegramRateLimit(err)) this.stopSpinner(agentId);
           });
       }, TelegramAdapter.SPINNER_INTERVAL_MS),
     });
