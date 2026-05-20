@@ -105,8 +105,17 @@ export class MetricsRegistry {
     if (!this.enabled) return NOOP_TIMER;
     const key = `${serverName}::${bucketKey}::${toolName}`;
     const startedAt = performance.now();
+    // Idempotency guard (5-agent review Agent 2 finding): if a refactor
+    // or test ever double-calls `end()` on the same timer (e.g. a
+    // `finally` added alongside the existing try/catch arms), each call
+    // would otherwise increment the counters again — silently corrupting
+    // invocations/successes/errors. Latch-once on first invocation,
+    // ignore subsequent calls.
+    let done = false;
     return {
       end: (success: boolean) => {
+        if (done) return;
+        done = true;
         const latency = performance.now() - startedAt;
         let rec = this.records.get(key);
         if (!rec) {
@@ -125,6 +134,23 @@ export class MetricsRegistry {
         }
       },
     };
+  }
+
+  /**
+   * Drop every tuple whose `bucketKey` matches the given PTY id. Called
+   * by the handler's `releasePty` on identity revocation so stale
+   * percentiles from a reaped PTY don't bleed into the next bucket
+   * issued under the same id.
+   *
+   * 5-agent review Agent 4 finding (class concern from PR #91 P2): the
+   * handler clears `_rlWindows` on `releasePty`; the metrics registry
+   * needs the same hygiene.
+   */
+  releasePty(serverName: string, bucketKey: string): void {
+    const prefix = `${serverName}::${bucketKey}::`;
+    for (const key of this.records.keys()) {
+      if (key.startsWith(prefix)) this.records.delete(key);
+    }
   }
 
   /** Aggregate snapshot for the `/api/multiplexer/metrics` endpoint. */

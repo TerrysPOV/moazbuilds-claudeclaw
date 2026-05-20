@@ -125,6 +125,44 @@ describe("MetricsRegistry — enabled", () => {
     expect(r.snapshot().tuples).toHaveLength(0);
   });
 
+  it("end() is idempotent — calling twice does NOT double-count (Agent 2 finding)", () => {
+    const t = r.record("alpha", "b1", "foo");
+    t.end(true);
+    t.end(true); // ignored
+    t.end(false); // ignored
+    const snap = r.snapshot();
+    expect(snap.tuples[0]).toMatchObject({
+      invocations: 1,
+      successes: 1,
+      errors: 0,
+      sampleCount: 1,
+    });
+  });
+
+  it("releasePty() drops only the matching (server, bucket) tuples (Agent 4 finding)", () => {
+    r.record("alpha", "pty-A", "foo").end(true);
+    r.record("alpha", "pty-A", "bar").end(true);
+    r.record("alpha", "pty-B", "foo").end(true);
+    r.record("beta", "pty-A", "foo").end(true);
+    expect(r.snapshot().tuples).toHaveLength(4);
+
+    r.releasePty("alpha", "pty-A");
+    const tuples = r.snapshot().tuples;
+    // alpha::pty-A::foo and alpha::pty-A::bar gone; alpha::pty-B::foo
+    // and beta::pty-A::foo retained.
+    expect(tuples).toHaveLength(2);
+    expect(tuples.map((t) => `${t.server}::${t.bucket}`).sort()).toEqual([
+      "alpha::pty-B",
+      "beta::pty-A",
+    ]);
+  });
+
+  it("releasePty() is a no-op when no matching tuples exist", () => {
+    r.record("alpha", "pty-A", "foo").end(true);
+    r.releasePty("alpha", "pty-Z"); // no match
+    expect(r.snapshot().tuples).toHaveLength(1);
+  });
+
   it("disabling mid-test stops recording but keeps existing tuples", () => {
     r.record("alpha", "b1", "foo").end(true);
     r.setEnabled(false);

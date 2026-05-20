@@ -57,7 +57,10 @@ export interface McpHttpHandlerOpts {
    *  `onsessioninitialized` callback; `releasePty` drops it; bucket
    *  reuse touches `lastUsedAt`. Stateless buckets are never persisted
    *  (no per-PTY identity to bind to). When undefined, the handler is
-   *  byte-identical to PR #71. */
+   *  behaviourally equivalent to PR #71 for the persistence axis —
+   *  observably identical until the post-#71 cost-tracking metrics
+   *  hook (issue #68) was added, which wraps the dispatch path with a
+   *  no-op timer when `mcp.metricsEnabled` is false (the default). */
   persistence?: SessionPersistenceStore;
   /** Optional per-bearer rate limit config (#72 item 1). When omitted or
    *  `maxRequestsPerWindow <= 0`, no limit is enforced. */
@@ -405,6 +408,11 @@ export class McpHttpHandler {
     // still keyed the window by ptyId (we use `STATELESS_BUCKET` for
     // the SDK session, but `_checkRateLimit` keys on the actual ptyId).
     this._rlWindows.delete(ptyId);
+    // Same hygiene for the cost-tracking metrics (issue #68): drop any
+    // tuples scoped to this PTY so stale percentiles from the reaped
+    // session don't bleed into the next bucket. 5-agent review on
+    // PR #cost-metrics flagged this class from PR #91 P2.
+    getMetricsRegistry().releasePty(this.serverName, ptyId);
     if (this.stateless) return; // no per-PTY bucket exists
     // Drop the persisted record FIRST so that even if the bucket's
     // already gone (race with transport_error path) the disk state is
