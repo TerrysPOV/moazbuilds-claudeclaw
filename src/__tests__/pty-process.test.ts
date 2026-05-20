@@ -637,4 +637,20 @@ describe("sanitizePtyPromptText (issue #65 item 3)", () => {
   test("preserves an empty string", () => {
     expect(sanitizePtyPromptText("")).toBe("");
   });
+
+  test("strips NUL bytes that would truncate the C-string PTY write", () => {
+    expect(sanitizePtyPromptText("hello\x00world")).toBe("helloworld");
+  });
+
+  test("strips Backspace and DEL keystrokes that would inline-edit the TUI", () => {
+    expect(sanitizePtyPromptText("abc\x08def\x7fghi")).toBe("abcdefghi");
+  });
+
+  test("strips BEL and other C0 controls except tab", () => {
+    expect(sanitizePtyPromptText("\x07alert\x01start\x1fend\tkept")).toBe("alertstartend\tkept");
+  });
+
+  test("preserves printable Unicode and multi-byte UTF-8", () => {
+    expect(sanitizePtyPromptText("héllo 🪶 wörld")).toBe("héllo 🪶 wörld");
+  });
 });
