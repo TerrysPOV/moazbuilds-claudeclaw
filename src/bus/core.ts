@@ -172,7 +172,16 @@ export class BusCoreImpl implements BusCore {
       },
       onMessage: (agentId, msg) => this.handleIpcMessage(agentId, msg),
       onClose: (agentId) => {
-        if (agentId) this.connectedAgents.delete(agentId);
+        if (agentId) {
+          this.connectedAgents.delete(agentId);
+          // Clear any cached origin for this agent on disconnect — the
+          // claude subprocess is gone, so any in-flight prompt won't
+          // produce a `final` reply to trigger the usual clear path.
+          // Without this, a subsequent scheduler/cron event for this
+          // agent (after a reconnect) would inherit the dead session's
+          // origin and misroute (5-agent review on PR #138, A1 finding).
+          this.lastPromptOrigin.delete(agentId);
+        }
       },
       onError: (err, agentId) => this.onError(err, { ctx: "ipc", agentId }),
     });
@@ -329,6 +338,15 @@ export class BusCoreImpl implements BusCore {
     // whichever DM/channel last asked the agent something. Progress
     // and tool_status intents keep the origin so mid-stream updates
     // stay scoped to the originating surface.
+    //
+    // Other clear sites (5-agent review on PR #138, A1 finding):
+    //   - `cancel` IPC      — turn won't emit `final`
+    //   - `error` IPC       — turn likely won't emit `final`
+    //   - socket disconnect — claude subprocess gone, no `final` coming
+    // These are the only consumers of `lastPromptOrigin`:
+    //   - this `ingestReply` (origin on response.text events)
+    //   - `request_human` IPC handler (origin on system.request_human)
+    //   - `permission_request` IPC handler (origin on channel.permission_request)
     if (req.intent === "final") {
       this.lastPromptOrigin.delete(req.agent_id);
     }
@@ -460,6 +478,11 @@ export class BusCoreImpl implements BusCore {
           topic: "system.cancel",
           payload: { reason: msg.reason },
         });
+        // Cancel signals the turn won't produce a `final` reply. Clear
+        // the cached origin so any subsequent scheduler/cron event for
+        // this agent doesn't inherit it and misroute (5-agent review
+        // on PR #138, A1 finding).
+        this.lastPromptOrigin.delete(agentId);
         break;
       case "request_human": {
         // Forward the correlation id along with the question. Without
@@ -509,6 +532,11 @@ export class BusCoreImpl implements BusCore {
           ctx: "ipc-error",
           agentId,
         });
+        // Error means the turn likely won't produce a `final` reply.
+        // Same lifecycle concern as `cancel` — clear so subsequent
+        // scheduler events for this agent don't inherit the stale
+        // origin (5-agent review on PR #138, A1 finding).
+        this.lastPromptOrigin.delete(agentId);
         break;
       // hello already handled in the IPC layer; outbound types (prompt,
       // permission_response, ask_answer) shouldn't arrive from MCP.
