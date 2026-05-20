@@ -92,8 +92,9 @@ describe("DiscordAdapter — outbound response.text", () => {
     // Production incident on 2026-05-20: webui-originated replies were
     // mirroring into every Discord channel routed to the agent because
     // the old branch fell back to `channelsForAgent` when origin didn't
-    // match "discord". Foreign-origin events must be dropped silently;
-    // fan-out is reserved for events with NO origin.
+    // match "discord". Foreign CHANNEL-DRIVEN origins must be dropped
+    // silently; fan-out is reserved for events with NO origin OR with
+    // a NON-CHANNEL origin (cron / heartbeat / cli / rest).
     adapter = await startAdapter(h);
     h.bus.emit({
       ts: Date.now(),
@@ -103,6 +104,35 @@ describe("DiscordAdapter — outbound response.text", () => {
       payload: { text: "webui reply", origin: "webui", origin_id: "webui-42" },
     });
     expect(h.rest.sent).toHaveLength(0);
+  });
+
+  it("KEEPS response.text with origin 'cron' — Codex P1 on #138", async () => {
+    // Codex caught this on #138: scheduler emits prompts with explicit
+    // origin: "cron" | "heartbeat". A blunt "drop if origin is set"
+    // rule would silently stop scheduler replies reaching any channel.
+    // Only foreign CHANNEL-DRIVEN origins drop; non-channel origins
+    // fall through to fan-out.
+    adapter = await startAdapter(h);
+    h.bus.emit({
+      ts: Date.now(),
+      agent_id: "ops",
+      session_id: "s",
+      topic: "response.text",
+      payload: { text: "cron tick reply", origin: "cron", origin_id: "job:morning" },
+    });
+    expect(h.rest.sent.map((m) => m.channelId).sort()).toEqual(["ch-2", "th-1"]);
+  });
+
+  it("KEEPS response.text with origin 'heartbeat' — Codex P1 on #138", async () => {
+    adapter = await startAdapter(h);
+    h.bus.emit({
+      ts: Date.now(),
+      agent_id: "ops",
+      session_id: "s",
+      topic: "response.text",
+      payload: { text: "heartbeat reply", origin: "heartbeat", origin_id: "hb" },
+    });
+    expect(h.rest.sent.map((m) => m.channelId).sort()).toEqual(["ch-2", "th-1"]);
   });
 
   it("DROPS channel.permission_request whose origin belongs to another adapter", async () => {

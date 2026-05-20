@@ -16,7 +16,12 @@
  */
 
 import type { BusCore, Subscription } from "../../bus/core";
-import type { BusEvent, PermissionRequest } from "../../bus/types";
+import {
+  CHANNEL_DRIVEN_ORIGINS,
+  type BusEvent,
+  type BusOrigin,
+  type PermissionRequest,
+} from "../../bus/types";
 import { createSlackApi } from "./api";
 import { buildPermissionBlocks } from "./blocks";
 import { verifySlackSignature } from "./signature";
@@ -49,17 +54,23 @@ interface PendingHumanAsk {
 }
 
 /**
- * Reject bus events whose origin is owned by a different adapter.
+ * Reject bus events owned by a DIFFERENT channel-driven adapter.
  *
  * Post-#137 prod incident: webui-originated replies (`origin: "webui"`)
  * fanned out across every Slack channel routed to the agent because
- * the slack adapter only knew how to fan out — it had no origin filter.
- * Foreign origins must be dropped; fan-out remains the correct behaviour
- * only for events with NO origin (cron, heartbeat, scheduler).
+ * the slack adapter had no origin filter at all.
+ *
+ * Codex P1 on #138: scheduler emits prompts with explicit
+ * `origin: "cron" | "heartbeat"`. A blunt "drop if origin is set" rule
+ * would silently stop scheduler replies reaching any channel. Only
+ * FOREIGN CHANNEL-DRIVEN origins (discord / telegram / webui) drop;
+ * non-channel origins (cron / heartbeat / cli / rest) fall through to
+ * the normal fan-out path.
  */
 function eventBelongsToSlack(event: BusEvent): boolean {
   const origin = (event.payload as { origin?: string } | undefined)?.origin;
-  return origin === undefined || origin === "slack";
+  if (origin === undefined || origin === "slack") return true;
+  return !CHANNEL_DRIVEN_ORIGINS.has(origin as BusOrigin);
 }
 
 /**

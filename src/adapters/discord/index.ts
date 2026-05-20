@@ -36,7 +36,12 @@
  */
 
 import type { BusCore, Subscription } from "../../bus/core";
-import type { BusEvent, PermissionRequest } from "../../bus/types";
+import {
+  CHANNEL_DRIVEN_ORIGINS,
+  type BusEvent,
+  type BusOrigin,
+  type PermissionRequest,
+} from "../../bus/types";
 import { createDiscordGateway } from "./gateway";
 import {
   attachmentMeta,
@@ -376,22 +381,33 @@ export class DiscordAdapter {
     // Determine the destination channel set based on the event's origin
     // surface (populated by BusCore from the originating prompt).
     //
-    // Three cases:
-    //   1. origin === "discord"          → route ONLY to origin_id channel
-    //   2. origin missing / undefined    → fan-out via channelsForAgent
-    //                                       (cron, heartbeat, scheduler
-    //                                        events with no inbound prompt)
-    //   3. origin present but ≠ "discord" → DROP — the event belongs to
-    //                                       another adapter (webui /
-    //                                       telegram / slack). The
-    //                                       post-#137 prod incident was
-    //                                       this case silently falling
-    //                                       back to fan-out, mirroring
-    //                                       webui chat into every Discord
-    //                                       channel routed to the agent.
+    // Three classes of origin:
+    //   1. "discord"                    → route ONLY to origin_id channel
+    //   2. Another channel-driven origin ("telegram" / "slack" / "webui")
+    //                                   → DROP — owned by that adapter.
+    //                                     The post-#137 prod incident was
+    //                                     this case silently fanning out,
+    //                                     mirroring webui chat into every
+    //                                     Discord channel routed to the
+    //                                     agent.
+    //   3. No origin OR a non-channel origin ("cron" / "heartbeat" /
+    //      "cli" / "rest")              → fan-out via channelsForAgent.
+    //                                     Codex P1 on #138: scheduler
+    //                                     emits prompts with explicit
+    //                                     origin: "cron" | "heartbeat",
+    //                                     so a blunt "drop if origin is
+    //                                     present" filter would silently
+    //                                     stop scheduler replies reaching
+    //                                     any channel. Only drop foreign
+    //                                     CHANNEL-DRIVEN origins.
     const payloadWithOrigin = event.payload as { origin?: string; origin_id?: string } | undefined;
     const origin = payloadWithOrigin?.origin;
-    if (origin !== undefined && origin !== "discord") return;
+    if (
+      origin !== undefined &&
+      origin !== "discord" &&
+      CHANNEL_DRIVEN_ORIGINS.has(origin as BusOrigin)
+    )
+      return;
     const originChannel =
       origin === "discord" && typeof payloadWithOrigin?.origin_id === "string"
         ? payloadWithOrigin.origin_id
