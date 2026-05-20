@@ -612,6 +612,68 @@ describe("BusCore IPC", () => {
     client.close();
   });
 
+  it("permission_request payload carries origin/origin_id from the most recent prompt (post-#137 fix)", async () => {
+    // Post-#137 prod incident: permission requests fanned out across every
+    // adapter because the published event had no origin. BusCore now
+    // attaches the originating surface so adapters can route the prompt
+    // back to the channel that triggered the tool call.
+    const sockPath = join(tempDir, "bus.sock");
+    bus = createBusCore({
+      eventLogAppend: createMockEventLog().append,
+      socketPath: sockPath,
+    });
+    await bus.start();
+
+    const received: BusEvent[] = [];
+    bus.subscribe({ agent_id: "alpha", topics: ["channel.permission_request"] }, (e) =>
+      received.push(e),
+    );
+
+    const client = await connectIpcClient(sockPath);
+    client.send({
+      type: "hello",
+      agent_id: "alpha",
+      capabilities: ["claude/channel", "claude/channel/permission"],
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Establish an origin for the next reply / permission_request.
+    await bus.sendPrompt({
+      agent_id: "alpha",
+      origin: "discord",
+      origin_id: "ch-99",
+      user_id: "u1",
+      text: "do a thing",
+    });
+
+    const req: IpcPermissionRequest = {
+      type: "permission_request",
+      agent_id: "alpha",
+      request: {
+        request_id: "pqrst",
+        tool_name: "Write",
+        description: "write a file",
+        input_preview: "{...}",
+      },
+    };
+    client.send(req);
+
+    const start = Date.now();
+    while (received.length === 0 && Date.now() - start < 1000) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(received).toHaveLength(1);
+    const payload = received[0].payload as {
+      request_id: string;
+      origin?: string;
+      origin_id?: string;
+    };
+    expect(payload.request_id).toBe("pqrst");
+    expect(payload.origin).toBe("discord");
+    expect(payload.origin_id).toBe("ch-99");
+    client.close();
+  });
+
   it("request_human from MCP fans out as system.request_human carrying ask_id", async () => {
     // Regression for PR #110 review agent #5: BusEvent dropped ask_id from
     // the IPC payload, leaving subscribers unable to echo the correlation

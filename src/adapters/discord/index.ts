@@ -373,15 +373,27 @@ export class DiscordAdapter {
   /* ──────────────────────────── outbound (bus → discord) ──────────── */
 
   private handleBusEvent(agentId: string, event: BusEvent): void {
-    // Determine the destination channel set. If the event payload
-    // carries an `origin: "discord"` + `origin_id` pair (populated by
-    // BusCore from the originating prompt), the reply goes ONLY to that
-    // channel — handles DMs and avoids fan-out spam. Otherwise we fall
-    // back to every routed channel for the agent (cron jobs, scheduler-
-    // initiated replies that have no inbound prompt).
+    // Determine the destination channel set based on the event's origin
+    // surface (populated by BusCore from the originating prompt).
+    //
+    // Three cases:
+    //   1. origin === "discord"          → route ONLY to origin_id channel
+    //   2. origin missing / undefined    → fan-out via channelsForAgent
+    //                                       (cron, heartbeat, scheduler
+    //                                        events with no inbound prompt)
+    //   3. origin present but ≠ "discord" → DROP — the event belongs to
+    //                                       another adapter (webui /
+    //                                       telegram / slack). The
+    //                                       post-#137 prod incident was
+    //                                       this case silently falling
+    //                                       back to fan-out, mirroring
+    //                                       webui chat into every Discord
+    //                                       channel routed to the agent.
     const payloadWithOrigin = event.payload as { origin?: string; origin_id?: string } | undefined;
+    const origin = payloadWithOrigin?.origin;
+    if (origin !== undefined && origin !== "discord") return;
     const originChannel =
-      payloadWithOrigin?.origin === "discord" && typeof payloadWithOrigin?.origin_id === "string"
+      origin === "discord" && typeof payloadWithOrigin?.origin_id === "string"
         ? payloadWithOrigin.origin_id
         : null;
     const targetChannels = originChannel ? [originChannel] : this.channelsForAgent(agentId);

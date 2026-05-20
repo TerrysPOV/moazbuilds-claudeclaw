@@ -87,6 +87,64 @@ describe("DiscordAdapter — outbound response.text", () => {
     });
     expect(h.rest.sent.map((m) => m.channelId).sort()).toEqual(["ch-2", "th-1"]);
   });
+
+  it("DROPS response.text whose origin belongs to another adapter (post-#137 regression)", async () => {
+    // Production incident on 2026-05-20: webui-originated replies were
+    // mirroring into every Discord channel routed to the agent because
+    // the old branch fell back to `channelsForAgent` when origin didn't
+    // match "discord". Foreign-origin events must be dropped silently;
+    // fan-out is reserved for events with NO origin.
+    adapter = await startAdapter(h);
+    h.bus.emit({
+      ts: Date.now(),
+      agent_id: "ops",
+      session_id: "s",
+      topic: "response.text",
+      payload: { text: "webui reply", origin: "webui", origin_id: "webui-42" },
+    });
+    expect(h.rest.sent).toHaveLength(0);
+  });
+
+  it("DROPS channel.permission_request whose origin belongs to another adapter", async () => {
+    adapter = await startAdapter(h);
+    h.bus.emit({
+      ts: Date.now(),
+      agent_id: "triage",
+      session_id: "s",
+      topic: "channel.permission_request",
+      payload: {
+        request_id: "fghij",
+        tool_name: "Bash",
+        description: "run command",
+        input_preview: "echo hi",
+        origin: "webui",
+        origin_id: "webui-42",
+      } as PermissionRequest & { origin: string; origin_id: string },
+    });
+    expect(h.rest.sent).toHaveLength(0);
+  });
+
+  it("routes channel.permission_request ONLY to origin_id channel when origin is discord", async () => {
+    // Bug B fix: BusCore now attaches origin/origin_id from the
+    // triggering prompt onto permission_request events so the button
+    // prompt lands on the channel that asked for the tool call.
+    adapter = await startAdapter(h);
+    h.bus.emit({
+      ts: Date.now(),
+      agent_id: "ops",
+      session_id: "s",
+      topic: "channel.permission_request",
+      payload: {
+        request_id: "klmno",
+        tool_name: "Write",
+        description: "write a file",
+        input_preview: "{path: ...}",
+        origin: "discord",
+        origin_id: "ch-2",
+      } as PermissionRequest & { origin: string; origin_id: string },
+    });
+    expect(h.rest.sent.map((m) => m.channelId)).toEqual(["ch-2"]);
+  });
 });
 
 describe("DiscordAdapter — permission flow", () => {

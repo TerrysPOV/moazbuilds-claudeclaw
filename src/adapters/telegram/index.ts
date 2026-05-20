@@ -60,6 +60,20 @@ interface PendingHumanAsk {
   agent_id: string;
 }
 
+/**
+ * Reject bus events whose origin is owned by a different adapter.
+ *
+ * Post-#137 prod incident: webui-originated replies (`origin: "webui"`)
+ * were leaking into Telegram (and Discord, Slack) because the adapters
+ * only checked their own origin tag and otherwise fell back to fan-out.
+ * Foreign origins must be dropped — fan-out is reserved for events with
+ * NO origin (cron, heartbeat, scheduler-initiated work).
+ */
+function eventBelongsToTelegram(event: BusEvent): boolean {
+  const origin = (event.payload as { origin?: string } | undefined)?.origin;
+  return origin === undefined || origin === "telegram";
+}
+
 export class TelegramAdapter {
   private readonly bus: BusCore;
   private readonly api: TelegramApi;
@@ -326,6 +340,7 @@ export class TelegramAdapter {
   }
 
   private async handleResponseText(agentId: string, event: BusEvent): Promise<void> {
+    if (!eventBelongsToTelegram(event)) return;
     const payload = event.payload as { text?: string };
     const rawText = typeof payload?.text === "string" ? payload.text : "";
     if (rawText.length === 0) return;
@@ -362,6 +377,7 @@ export class TelegramAdapter {
   }
 
   private async handlePermissionRequest(agentId: string, event: BusEvent): Promise<void> {
+    if (!eventBelongsToTelegram(event)) return;
     const req = event.payload as PermissionRequest | undefined;
     if (!req || typeof req.request_id !== "string") return;
 
@@ -401,6 +417,7 @@ export class TelegramAdapter {
   }
 
   private async handleRequestHuman(agentId: string, event: BusEvent): Promise<void> {
+    if (!eventBelongsToTelegram(event)) return;
     const payload = event.payload as { ask_id?: string; question?: string };
     if (typeof payload?.ask_id !== "string" || typeof payload?.question !== "string") {
       return;

@@ -49,6 +49,20 @@ interface PendingHumanAsk {
 }
 
 /**
+ * Reject bus events whose origin is owned by a different adapter.
+ *
+ * Post-#137 prod incident: webui-originated replies (`origin: "webui"`)
+ * fanned out across every Slack channel routed to the agent because
+ * the slack adapter only knew how to fan out — it had no origin filter.
+ * Foreign origins must be dropped; fan-out remains the correct behaviour
+ * only for events with NO origin (cron, heartbeat, scheduler).
+ */
+function eventBelongsToSlack(event: BusEvent): boolean {
+  const origin = (event.payload as { origin?: string } | undefined)?.origin;
+  return origin === undefined || origin === "slack";
+}
+
+/**
  * Cap on the `seenEventIds` LRU. Slack retries every ~1s up to 3 times,
  * so a 5k entry cap covers >1h of traffic at 1 event/sec — far beyond
  * the retry window — while bounding memory to ~5k strings (~200kB).
@@ -570,14 +584,18 @@ export class SlackAdapter {
   }
 
   private async handleResponseText(agentId: string, event: BusEvent): Promise<void> {
-    const payload = event.payload as { text?: string };
+    if (!eventBelongsToSlack(event)) return;
+    const payload = event.payload as { text?: string; origin?: string; origin_id?: string };
     const text = typeof payload?.text === "string" ? payload.text : "";
     if (text.length === 0) return;
 
-    // Fan-out to every routed channel — Bus runtime doesn't track
-    // originating channel through events yet (Sprint 4 polish item shared
-    // with Discord/Telegram).
-    const channels = this.channelsForAgent(agentId);
+    // If the event names its origin channel, route there only. Otherwise
+    // fan-out (cron / heartbeat / scheduler with no inbound prompt).
+    const originChannel =
+      payload.origin === "slack" && typeof payload.origin_id === "string"
+        ? payload.origin_id
+        : null;
+    const channels = originChannel ? [originChannel] : this.channelsForAgent(agentId);
     if (channels.length === 0) {
       this.logger.warn(`[slack-adapter] no channels for agent ${agentId}; dropping response.text`);
       return;
@@ -588,10 +606,15 @@ export class SlackAdapter {
   }
 
   private async handlePermissionRequest(agentId: string, event: BusEvent): Promise<void> {
-    const req = event.payload as PermissionRequest | undefined;
+    if (!eventBelongsToSlack(event)) return;
+    const req = event.payload as
+      | (PermissionRequest & { origin?: string; origin_id?: string })
+      | undefined;
     if (!req || typeof req.request_id !== "string") return;
 
-    const channels = this.channelsForAgent(agentId);
+    const originChannel =
+      req.origin === "slack" && typeof req.origin_id === "string" ? req.origin_id : null;
+    const channels = originChannel ? [originChannel] : this.channelsForAgent(agentId);
     if (channels.length === 0) {
       this.logger.warn(
         `[slack-adapter] no channels for agent ${agentId}; dropping permission_request`,
@@ -615,11 +638,21 @@ export class SlackAdapter {
   }
 
   private async handleRequestHuman(agentId: string, event: BusEvent): Promise<void> {
-    const payload = event.payload as { ask_id?: string; question?: string };
+    if (!eventBelongsToSlack(event)) return;
+    const payload = event.payload as {
+      ask_id?: string;
+      question?: string;
+      origin?: string;
+      origin_id?: string;
+    };
     if (typeof payload?.ask_id !== "string" || typeof payload?.question !== "string") {
       return;
     }
-    const channels = this.channelsForAgent(agentId);
+    const originChannel =
+      payload.origin === "slack" && typeof payload.origin_id === "string"
+        ? payload.origin_id
+        : null;
+    const channels = originChannel ? [originChannel] : this.channelsForAgent(agentId);
     if (channels.length === 0) {
       this.logger.warn(`[slack-adapter] no channels for agent ${agentId}; dropping request_human`);
       return;
