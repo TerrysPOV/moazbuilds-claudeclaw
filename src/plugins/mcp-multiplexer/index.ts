@@ -35,6 +35,7 @@ import { McpServerProcess, type McpServerConfig } from "../mcp-proxy/server-proc
 import { getSettings } from "../../config.js";
 import { McpHttpHandler } from "./http-handler.js";
 import { getMetricsRegistry } from "./metrics.js";
+import { getResponseCache } from "./cache.js";
 import {
   issueIdentity as _issueIdentity,
   revokeIdentity as _revokeIdentity,
@@ -105,6 +106,13 @@ export interface MuxSettingsView {
    *  + latency samples and the `/api/multiplexer/metrics` endpoint
    *  returns aggregated data. */
   metricsEnabled: boolean;
+  /** Issue #69: response cache for idempotent tools. */
+  cache: {
+    enabled: boolean;
+    ttlMs: number;
+    maxEntries: number;
+    cacheable: Record<string, string[]>;
+  };
 }
 
 function _readSettings(): MuxSettingsView {
@@ -135,6 +143,31 @@ function _readSettings(): MuxSettingsView {
   const sessionPersistencePath =
     typeof rawPath === "string" && rawPath.length > 0 && rawPath.startsWith("/") ? rawPath : "";
   const metricsEnabled = mcpObj.metricsEnabled === true;
+  // Issue #69 cache config from settings.mcp.cache; falls back to a
+  // safe disabled default when absent so existing test fixtures keep
+  // working.
+  const cacheRaw =
+    mcpObj.cache && typeof mcpObj.cache === "object"
+      ? (mcpObj.cache as Record<string, unknown>)
+      : {};
+  const cacheEnabled = cacheRaw.enabled === true;
+  const cacheTtlMs =
+    typeof cacheRaw.ttlMs === "number" && cacheRaw.ttlMs > 0 ? Math.floor(cacheRaw.ttlMs) : 5_000;
+  const cacheMaxEntries =
+    typeof cacheRaw.maxEntries === "number" && cacheRaw.maxEntries > 0
+      ? Math.floor(cacheRaw.maxEntries)
+      : 1_000;
+  const cacheableObj =
+    cacheRaw.cacheable && typeof cacheRaw.cacheable === "object"
+      ? (cacheRaw.cacheable as Record<string, unknown>)
+      : {};
+  const cacheable: Record<string, string[]> = {};
+  for (const [server, tools] of Object.entries(cacheableObj)) {
+    if (Array.isArray(tools)) {
+      const filtered = tools.filter((t): t is string => typeof t === "string");
+      if (filtered.length > 0) cacheable[server] = filtered;
+    }
+  }
   return {
     webEnabled: s.web?.enabled === true,
     webHost: s.web?.host ?? "127.0.0.1",
@@ -146,6 +179,12 @@ function _readSettings(): MuxSettingsView {
     sessionMaxAgeSeconds,
     sessionPersistencePath,
     metricsEnabled,
+    cache: {
+      enabled: cacheEnabled,
+      ttlMs: cacheTtlMs,
+      maxEntries: cacheMaxEntries,
+      cacheable,
+    },
   };
 }
 
@@ -245,6 +284,20 @@ export class McpMultiplexerPlugin {
     // process exits. Use the injected settingsView so tests can drive
     // the flag without standing up real settings.
     getMetricsRegistry().setEnabled(settings.metricsEnabled);
+
+    // Issue #69: response cache. Same reflection pattern — translate
+    // the `cacheable: Record<string, string[]>` from settings into the
+    // cache's `Record<string, Set<string>>` lookup shape.
+    const cacheable: Record<string, ReadonlySet<string>> = {};
+    for (const [server, tools] of Object.entries(settings.cache.cacheable)) {
+      cacheable[server] = new Set(tools);
+    }
+    getResponseCache().configure({
+      enabled: settings.cache.enabled,
+      ttlMs: settings.cache.ttlMs,
+      maxEntries: settings.cache.maxEntries,
+      cacheable,
+    });
 
     // Refuse to expose MCP servers over a non-loopback gateway.
     if (settings.webHost !== "127.0.0.1" && settings.webHost !== "localhost") {
@@ -746,6 +799,9 @@ export class McpMultiplexerPlugin {
       shared: this.cachedSharedNames.slice(),
       stateless: this.cachedStatelessNames.slice(),
       servers,
+      // Issue #69 acceptance: cache stats in health() so operators can
+      // validate hit rate before flipping `mcp.cache.enabled` in prod.
+      cache: getResponseCache().stats(),
     };
   }
 

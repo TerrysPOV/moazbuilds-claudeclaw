@@ -187,6 +187,14 @@ const DEFAULT_SETTINGS: Settings = {
     // path. Default OFF for MVP — operators opt in via settings once
     // the schema is stable.
     metricsEnabled: false,
+    // Issue #69: response caching for idempotent tools. Default OFF;
+    // operators enumerate cacheable (server, tool) pairs explicitly.
+    cache: {
+      enabled: false,
+      ttlMs: 5_000,
+      maxEntries: 1_000,
+      cacheable: {},
+    },
   },
   watchdog: { maxConsecutiveTimeouts: null, maxRuntimeSeconds: null },
   session: { autoRotate: false, maxMessages: 50, maxAgeHours: 24, summaryPath: "" },
@@ -426,6 +434,26 @@ export interface McpConfig {
    * (operator-only — bootstrap-token-authenticated).
    */
   metricsEnabled: boolean;
+  /**
+   * Response caching for idempotent multiplexer tools (issue #69).
+   * Opt-in per `(server, tool)` pair — no tool is cacheable by
+   * default. Cache lives in-process, bounded by `maxEntries`, with a
+   * short `ttlMs` expiry. A non-cacheable call against a server with
+   * cacheable tools triggers defensive invalidation of every cached
+   * entry for that server. Cache stats are exposed in the
+   * multiplexer's `health()` snapshot.
+   */
+  cache: {
+    /** Master switch. Default false. */
+    enabled: boolean;
+    /** TTL in milliseconds. Default 5000. */
+    ttlMs: number;
+    /** Max entries across all cache keys. Default 1000. */
+    maxEntries: number;
+    /** Per-server allowlist of cacheable tool names.
+     *  Example: `{ "retrieval-mcp": ["get_record", "list_records"] }`. */
+    cacheable: Record<string, string[]>;
+  };
 }
 
 export interface PtyConfig {
@@ -1247,6 +1275,29 @@ function parseMcpConfig(raw: any, webEnabled: unknown): McpConfig {
   // Issue #68: cost-tracking metrics. Default off — operator opts in.
   const metricsEnabled = raw?.metricsEnabled === true;
 
+  // Issue #69: response caching. Default off; operator must enumerate
+  // cacheable (server, tool) pairs explicitly.
+  const rawCache = raw?.cache;
+  const cacheEnabled = rawCache?.enabled === true;
+  const rawCacheTtl = rawCache?.ttlMs;
+  const cacheTtlMs =
+    typeof rawCacheTtl === "number" && Number.isFinite(rawCacheTtl) && rawCacheTtl > 0
+      ? Math.max(100, Math.floor(rawCacheTtl))
+      : 5_000;
+  const rawCacheMax = rawCache?.maxEntries;
+  const cacheMaxEntries =
+    typeof rawCacheMax === "number" && Number.isFinite(rawCacheMax) && rawCacheMax > 0
+      ? Math.max(1, Math.floor(rawCacheMax))
+      : 1_000;
+  const cacheableRaw =
+    rawCache?.cacheable && typeof rawCache.cacheable === "object" ? rawCache.cacheable : {};
+  const cacheable: Record<string, string[]> = {};
+  for (const [serverName, tools] of Object.entries(cacheableRaw)) {
+    if (!Array.isArray(tools)) continue;
+    const filtered = tools.filter((t): t is string => typeof t === "string" && t.length > 0);
+    if (filtered.length > 0) cacheable[serverName] = filtered;
+  }
+
   return {
     shared: filteredShared,
     perPtyOnly,
@@ -1260,6 +1311,12 @@ function parseMcpConfig(raw: any, webEnabled: unknown): McpConfig {
       windowMs: rateWindowMs,
     },
     metricsEnabled,
+    cache: {
+      enabled: cacheEnabled,
+      ttlMs: cacheTtlMs,
+      maxEntries: cacheMaxEntries,
+      cacheable,
+    },
   };
 }
 

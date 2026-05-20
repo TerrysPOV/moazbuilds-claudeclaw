@@ -25,6 +25,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 import { randomUUID } from "node:crypto";
 import { getMcpBridge } from "../mcp-bridge.js";
 import { getMetricsRegistry } from "./metrics.js";
+import { getResponseCache } from "./cache.js";
 import type { McpServerProcess } from "../mcp-proxy/server-process.js";
 import { AUTH_HEADER, PTY_ID_HEADER, PTY_TS_HEADER, verifyBearer } from "./pty-identity.js";
 import type { SessionPersistenceStore } from "./session-persistence.js";
@@ -558,13 +559,34 @@ export class McpHttpHandler {
           isError: true,
         };
       }
+      // Issue #69: response cache for idempotent tools. Check the
+      // cache BEFORE starting the metrics timer — a cache hit avoids
+      // both the dispatch AND the latency-sample noise.
+      //
+      // Defensive invalidation: if this tool is NOT cacheable but the
+      // server HAS cacheable tools, the call might be mutating state
+      // those cached entries reflect. Drop the server's cache before
+      // dispatching. Conservative but correct: we don't track what
+      // each tool touches.
+      const cache = getResponseCache();
+      const cacheableCall = cache.isCacheable(this.serverName, name);
+      if (cacheableCall) {
+        const cached = cache.get(this.serverName, name, args ?? {});
+        if (cached !== undefined) {
+          const text = typeof cached === "string" ? cached : JSON.stringify(cached);
+          return { content: [{ type: "text", text }] };
+        }
+      } else if (cache.serverHasCacheableTools(this.serverName)) {
+        cache.invalidateServer(this.serverName);
+      }
+
       // Issue #68: cost-tracking metrics. `record()` returns a no-op
       // timer when metrics are disabled, so this is zero-cost in the
       // default path. The timer is started even before we know if the
       // dispatch will succeed; `end(success)` is called in both arms
       // so an exception path still records its latency + error count.
       //
-      // Codex P2 on this PR: serialize the response FIRST, then
+      // Codex P2 on PR #147: serialize the response FIRST, then
       // `end(true)`. If `JSON.stringify(result)` throws (circular data,
       // BigInt), control falls to the catch and `end(false)` records
       // the error correctly. Calling `end(true)` before serialization
@@ -575,6 +597,10 @@ export class McpHttpHandler {
         const result = await this.proc.call(name, args ?? {});
         const text = typeof result === "string" ? result : JSON.stringify(result);
         timer.end(true);
+        // Cache the raw response (not the serialized text) — a later
+        // cache hit re-serializes via the same code path, matching
+        // upstream's call() return shape.
+        if (cacheableCall) cache.set(this.serverName, name, args ?? {}, result);
         return {
           content: [{ type: "text", text }],
         };
