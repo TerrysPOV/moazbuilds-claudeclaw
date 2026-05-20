@@ -182,6 +182,11 @@ const DEFAULT_SETTINGS: Settings = {
     sessionPersistenceEnabled: true,
     sessionMaxAgeSeconds: 3600,
     sessionPersistencePath: "",
+    rateLimit: { maxRequestsPerWindow: 600, windowMs: 60_000 },
+    // Issue #68: cost-tracking metrics on the multiplexer dispatch
+    // path. Default OFF for MVP — operators opt in via settings once
+    // the schema is stable.
+    metricsEnabled: false,
   },
   watchdog: { maxConsecutiveTimeouts: null, maxRuntimeSeconds: null },
   session: { autoRotate: false, maxMessages: 50, maxAgeHours: 24, summaryPath: "" },
@@ -411,6 +416,16 @@ export interface McpConfig {
     /** Sliding-window length in milliseconds. */
     windowMs: number;
   };
+  /**
+   * Cost-tracking metrics on the multiplexer dispatch path (issue #68).
+   * Per-tuple `(serverName, bucketKey, toolName)` counters + latency
+   * samples (p50/p95/p99). Default `false` for MVP; flip on once the
+   * schema is stable.
+   *
+   * When `true`, metrics are exposed at `/api/multiplexer/metrics`
+   * (operator-only — bootstrap-token-authenticated).
+   */
+  metricsEnabled: boolean;
 }
 
 export interface PtyConfig {
@@ -504,7 +519,7 @@ export interface BusAgentSettings {
   /** Working directory the spawned claude runs in. Defaults to `process.cwd()`. */
   cwd?: string;
   /** Permission mode for the spawned claude. Defaults to `"plan"`. */
-  permission_mode?: "plan" | "bypassPermissions" | "default";
+  permission_mode?: "default" | "plan" | "acceptEdits" | "bypassPermissions" | "dontAsk" | "auto";
   /**
    * Override the supervision picker. Default is mode-dependent (see
    * `defaultSupervisionFor` in `src/bus/types.ts`). Operators rarely
@@ -907,12 +922,19 @@ function parseRuntimeMode(raw: unknown): RuntimeMode {
   return "pty";
 }
 
-/** Allowed values for `BusAgentSettings.permission_mode`. */
-const VALID_PERMISSION_MODES = new Set<"plan" | "bypassPermissions" | "default">([
-  "plan",
-  "bypassPermissions",
-  "default",
-]);
+/**
+ * Allowed values for `BusAgentSettings.permission_mode`.
+ *
+ * Full-parity with the choices Claude Code accepts via `--permission-mode`
+ * (verified against `claude --help` 2026-05-20: `acceptEdits`,
+ * `bypassPermissions`, `default`, `dontAsk`, `plan`, `auto`). Earlier
+ * versions of this parser only accepted the `default | plan |
+ * bypassPermissions` trio, which made `commands/start.md` lie when it
+ * documented `acceptEdits` as valid (Codex P2 on PR #145).
+ */
+const VALID_PERMISSION_MODES = new Set<
+  "default" | "plan" | "acceptEdits" | "bypassPermissions" | "dontAsk" | "auto"
+>(["default", "plan", "acceptEdits", "bypassPermissions", "dontAsk", "auto"]);
 
 /** Allowed values for `BusAgentSettings.supervision`. */
 const VALID_SUPERVISION_MODES = new Set<BusSupervisionMode>([
@@ -938,8 +960,10 @@ const AGENT_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,35}$/;
  *
  * Validation:
  *   - `id` required, matches `AGENT_ID_PATTERN`, unique across the list.
- *   - `permission_mode` must be one of the valid trio (else fall back to
- *     `"plan"`).
+ *   - `permission_mode` must be one of the six values accepted by
+ *     Claude Code's `--permission-mode` flag (else drop and let
+ *     `resolveBusAgentConfig` apply the default of `"bypassPermissions"`,
+ *     matching the documented headless contract).
  *   - `supervision` must be a known mode (else drop the field — internal
  *     `defaultSupervisionFor` picks one).
  *   - `cwd` / `system_prompt_file` / `memory_file` / `mcp_config` must be
@@ -972,11 +996,22 @@ function parseBusAgents(raw: unknown): BusAgentSettings[] {
     const parsed: BusAgentSettings = { id };
     if (typeof e.cwd === "string" && e.cwd.trim().length > 0) parsed.cwd = e.cwd.trim();
     if (typeof e.permission_mode === "string") {
-      const pm = e.permission_mode.trim() as "plan" | "bypassPermissions" | "default";
+      const pm = e.permission_mode.trim() as
+        | "default"
+        | "plan"
+        | "acceptEdits"
+        | "bypassPermissions"
+        | "dontAsk"
+        | "auto";
       if (VALID_PERMISSION_MODES.has(pm)) parsed.permission_mode = pm;
+      // Codex P1 follow-up on PR #143: the warning previously said
+      // "falling back to plan" but left `parsed.permission_mode`
+      // unset, so the resolver's `?? "bypassPermissions"` default
+      // would silently override — i.e. the warning lied. Now state
+      // the actual fallback the resolver applies.
       else
         console.warn(
-          `[config] settings.agents[${i}].permission_mode="${e.permission_mode}" invalid; falling back to "plan"`,
+          `[config] settings.agents[${i}].permission_mode="${e.permission_mode}" invalid; falling back to "bypassPermissions" (resolver default)`,
         );
     }
     if (typeof e.supervision === "string") {
@@ -1209,6 +1244,9 @@ function parseMcpConfig(raw: any, webEnabled: unknown): McpConfig {
     rateWindowMs = Math.max(100, Math.floor(rawRateWin));
   }
 
+  // Issue #68: cost-tracking metrics. Default off — operator opts in.
+  const metricsEnabled = raw?.metricsEnabled === true;
+
   return {
     shared: filteredShared,
     perPtyOnly,
@@ -1221,6 +1259,7 @@ function parseMcpConfig(raw: any, webEnabled: unknown): McpConfig {
       maxRequestsPerWindow: rateMaxRequestsPerWindow,
       windowMs: rateWindowMs,
     },
+    metricsEnabled,
   };
 }
 

@@ -36,7 +36,12 @@
  */
 
 import type { BusCore, Subscription } from "../../bus/core";
-import type { BusEvent, PermissionRequest } from "../../bus/types";
+import {
+  CHANNEL_DRIVEN_ORIGINS,
+  type BusEvent,
+  type BusOrigin,
+  type PermissionRequest,
+} from "../../bus/types";
 import { createDiscordGateway } from "./gateway";
 import {
   attachmentMeta,
@@ -373,15 +378,38 @@ export class DiscordAdapter {
   /* ──────────────────────────── outbound (bus → discord) ──────────── */
 
   private handleBusEvent(agentId: string, event: BusEvent): void {
-    // Determine the destination channel set. If the event payload
-    // carries an `origin: "discord"` + `origin_id` pair (populated by
-    // BusCore from the originating prompt), the reply goes ONLY to that
-    // channel — handles DMs and avoids fan-out spam. Otherwise we fall
-    // back to every routed channel for the agent (cron jobs, scheduler-
-    // initiated replies that have no inbound prompt).
+    // Determine the destination channel set based on the event's origin
+    // surface (populated by BusCore from the originating prompt).
+    //
+    // Three classes of origin:
+    //   1. "discord"                    → route ONLY to origin_id channel
+    //   2. Another channel-driven origin ("telegram" / "slack" / "webui")
+    //                                   → DROP — owned by that adapter.
+    //                                     The post-#137 prod incident was
+    //                                     this case silently fanning out,
+    //                                     mirroring webui chat into every
+    //                                     Discord channel routed to the
+    //                                     agent.
+    //   3. No origin OR a non-channel origin ("cron" / "heartbeat" /
+    //      "cli" / "rest")              → fan-out via channelsForAgent.
+    //                                     Codex P1 on #138: scheduler
+    //                                     emits prompts with explicit
+    //                                     origin: "cron" | "heartbeat",
+    //                                     so a blunt "drop if origin is
+    //                                     present" filter would silently
+    //                                     stop scheduler replies reaching
+    //                                     any channel. Only drop foreign
+    //                                     CHANNEL-DRIVEN origins.
     const payloadWithOrigin = event.payload as { origin?: string; origin_id?: string } | undefined;
+    const origin = payloadWithOrigin?.origin;
+    if (
+      origin !== undefined &&
+      origin !== "discord" &&
+      CHANNEL_DRIVEN_ORIGINS.has(origin as BusOrigin)
+    )
+      return;
     const originChannel =
-      payloadWithOrigin?.origin === "discord" && typeof payloadWithOrigin?.origin_id === "string"
+      origin === "discord" && typeof payloadWithOrigin?.origin_id === "string"
         ? payloadWithOrigin.origin_id
         : null;
     const targetChannels = originChannel ? [originChannel] : this.channelsForAgent(agentId);
@@ -473,10 +501,12 @@ export { resolveAgentId, uniqueAgentIds } from "./router";
 /* Sprint 4 TODOs                                                         */
 /* ────────────────────────────────────────────────────────────────────── */
 /*
- *  - Track originating channel per bus event so responses go ONLY to
- *    the channel the prompt came from (today we fan out to every
- *    channel owned by the agent — fine for single-channel-per-agent,
- *    noisy for multi).
+ * Origin-id routing landed in #133: `handleBusEvent` reads
+ * `event.payload.origin_id` and replies on the originating Discord
+ * channel only. `channelsForAgent` remains the fallback for events
+ * with no origin (cron / scheduler ticks), so multi-channel agents
+ * still receive scheduled output everywhere.
+ *
  *  - DM channel resolution: legacy `sendMessageToUser` requires a
  *    `/users/@me/channels` POST to create the DM channel. Surface DM
  *    response routing via `dmAgentId` once that helper is extracted.

@@ -137,4 +137,17 @@ describe("buildClaudeArgs", () => {
     expect(args[pmIdx + 1]).toBe("default");
     expect(args[sidIdx + 1]).toBe("deadbeef-1234-1234-1234-000000000000");
   });
+
+  it("defaults permission_mode to bypassPermissions when unset (headless contract)", () => {
+    // commands/start.md §Security Levels: "All levels run without
+    // permission prompts (headless)". Legacy `claude -p` delivered
+    // this implicitly. The bus runtime must match — defaulting to
+    // "plan" surfaces a permission_request for every Bash/Write tool
+    // call to the originating channel, regressing the documented
+    // contract.
+    const agent = makeAgent({ id: "upsilon-default" });
+    const args = buildClaudeArgs(agent, "pty-stdin");
+    const pmIdx = args.indexOf("--permission-mode");
+    expect(args[pmIdx + 1]).toBe("bypassPermissions");
+  });
 });

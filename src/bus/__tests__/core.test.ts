@@ -612,6 +612,187 @@ describe("BusCore IPC", () => {
     client.close();
   });
 
+  it("permission_request payload carries origin/origin_id from the most recent prompt (post-#137 fix)", async () => {
+    // Post-#137 prod incident: permission requests fanned out across every
+    // adapter because the published event had no origin. BusCore now
+    // attaches the originating surface so adapters can route the prompt
+    // back to the channel that triggered the tool call.
+    const sockPath = join(tempDir, "bus.sock");
+    bus = createBusCore({
+      eventLogAppend: createMockEventLog().append,
+      socketPath: sockPath,
+    });
+    await bus.start();
+
+    const received: BusEvent[] = [];
+    bus.subscribe({ agent_id: "alpha", topics: ["channel.permission_request"] }, (e) =>
+      received.push(e),
+    );
+
+    const client = await connectIpcClient(sockPath);
+    client.send({
+      type: "hello",
+      agent_id: "alpha",
+      capabilities: ["claude/channel", "claude/channel/permission"],
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Establish an origin for the next reply / permission_request.
+    await bus.sendPrompt({
+      agent_id: "alpha",
+      origin: "discord",
+      origin_id: "ch-99",
+      user_id: "u1",
+      text: "do a thing",
+    });
+
+    const req: IpcPermissionRequest = {
+      type: "permission_request",
+      agent_id: "alpha",
+      request: {
+        request_id: "pqrst",
+        tool_name: "Write",
+        description: "write a file",
+        input_preview: "{...}",
+      },
+    };
+    client.send(req);
+
+    const start = Date.now();
+    while (received.length === 0 && Date.now() - start < 1000) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(received).toHaveLength(1);
+    const payload = received[0].payload as {
+      request_id: string;
+      origin?: string;
+      origin_id?: string;
+    };
+    expect(payload.request_id).toBe("pqrst");
+    expect(payload.origin).toBe("discord");
+    expect(payload.origin_id).toBe("ch-99");
+    client.close();
+  });
+
+  it("cancel IPC clears lastPromptOrigin so subsequent unprompted replies don't inherit it (5-agent review A1)", async () => {
+    // A1 finding on PR #138's 5-agent review: lastPromptOrigin was only
+    // cleared on `intent: "final"`. If a turn ended via `cancel` (or
+    // errored out) instead, the next scheduler/cron event would inherit
+    // the stale origin and misroute.
+    const sockPath = join(tempDir, "bus.sock");
+    bus = createBusCore({
+      eventLogAppend: createMockEventLog().append,
+      socketPath: sockPath,
+    });
+    await bus.start();
+
+    const received: BusEvent[] = [];
+    bus.subscribe({ agent_id: "alpha", topics: ["response.text"] }, (e) => received.push(e));
+
+    const client = await connectIpcClient(sockPath);
+    client.send({
+      type: "hello",
+      agent_id: "alpha",
+      capabilities: ["claude/channel", "claude/channel/permission"],
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    await bus.sendPrompt({
+      agent_id: "alpha",
+      origin: "discord",
+      origin_id: "ch-cancel",
+      user_id: "u1",
+      text: "do a thing",
+    });
+    // Model cancels mid-turn (no `final` reply).
+    client.send({ type: "cancel", agent_id: "alpha", reason: "user cancelled" });
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Now an unprompted reply arrives (scheduler / background event).
+    bus.ingestReply({ agent_id: "alpha", text: "scheduler tick", intent: "progress" });
+    const replies = received.filter((e) => e.topic === "response.text");
+    expect(replies).toHaveLength(1);
+    expect((replies[0].payload as { origin?: string }).origin).toBeUndefined();
+    client.close();
+  });
+
+  it("error IPC clears lastPromptOrigin (5-agent review A1)", async () => {
+    const sockPath = join(tempDir, "bus.sock");
+    bus = createBusCore({
+      eventLogAppend: createMockEventLog().append,
+      socketPath: sockPath,
+      onError: () => undefined, // suppress test-noise — we expect one error
+    });
+    await bus.start();
+
+    const received: BusEvent[] = [];
+    bus.subscribe({ agent_id: "alpha", topics: ["response.text"] }, (e) => received.push(e));
+
+    const client = await connectIpcClient(sockPath);
+    client.send({
+      type: "hello",
+      agent_id: "alpha",
+      capabilities: ["claude/channel", "claude/channel/permission"],
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    await bus.sendPrompt({
+      agent_id: "alpha",
+      origin: "discord",
+      origin_id: "ch-error",
+      user_id: "u1",
+      text: "do a thing",
+    });
+    client.send({ type: "error", agent_id: "alpha", code: "TOOL_FAILED", message: "boom" });
+    await new Promise((r) => setTimeout(r, 50));
+
+    bus.ingestReply({ agent_id: "alpha", text: "scheduler tick", intent: "progress" });
+    const replies = received.filter((e) => e.topic === "response.text");
+    expect(replies).toHaveLength(1);
+    expect((replies[0].payload as { origin?: string }).origin).toBeUndefined();
+    client.close();
+  });
+
+  it("socket disconnect clears lastPromptOrigin (5-agent review A1)", async () => {
+    // Subprocess exit / claude crash without a `final` — the agent's IPC
+    // connection closes. Origin must clear so a reconnect's first
+    // unprompted reply doesn't inherit the dead session's routing.
+    const sockPath = join(tempDir, "bus.sock");
+    bus = createBusCore({
+      eventLogAppend: createMockEventLog().append,
+      socketPath: sockPath,
+    });
+    await bus.start();
+
+    const received: BusEvent[] = [];
+    bus.subscribe({ agent_id: "alpha", topics: ["response.text"] }, (e) => received.push(e));
+
+    const client = await connectIpcClient(sockPath);
+    client.send({
+      type: "hello",
+      agent_id: "alpha",
+      capabilities: ["claude/channel", "claude/channel/permission"],
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    await bus.sendPrompt({
+      agent_id: "alpha",
+      origin: "discord",
+      origin_id: "ch-disco",
+      user_id: "u1",
+      text: "do a thing",
+    });
+
+    // Subprocess goes away.
+    client.close();
+    await new Promise((r) => setTimeout(r, 100));
+
+    bus.ingestReply({ agent_id: "alpha", text: "scheduler tick", intent: "progress" });
+    const replies = received.filter((e) => e.topic === "response.text");
+    expect(replies).toHaveLength(1);
+    expect((replies[0].payload as { origin?: string }).origin).toBeUndefined();
+  });
+
   it("request_human from MCP fans out as system.request_human carrying ask_id", async () => {
     // Regression for PR #110 review agent #5: BusEvent dropped ask_id from
     // the IPC payload, leaving subscribers unable to echo the correlation

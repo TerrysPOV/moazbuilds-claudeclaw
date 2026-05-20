@@ -159,6 +159,20 @@ describe("parseSettings — agents field (Sprint 5.2a)", () => {
     expect(getSettings().agents[0]).toEqual({ id: "triage", cwd: "/srv" });
   });
 
+  it("accepts every Claude Code --permission-mode choice (Codex P2 on PR #145)", async () => {
+    // Earlier the parser only accepted default/plan/bypassPermissions,
+    // so users following commands/start.md's documented choices got
+    // their permission_mode silently dropped if they picked acceptEdits,
+    // dontAsk, or auto. Full-parity with the CLI flag now.
+    const modes = ["default", "plan", "acceptEdits", "bypassPermissions", "dontAsk", "auto"];
+    await writeRawSettings({
+      agents: modes.map((m, i) => ({ id: `agent-${i}`, permission_mode: m })),
+    });
+    await reloadSettings();
+    const parsed = getSettings().agents.map((a) => a.permission_mode);
+    expect(parsed).toEqual(modes);
+  });
+
   it("falls back to empty array when the field is not an array", async () => {
     await writeRawSettings({ agents: "triage" });
     await reloadSettings();
