@@ -24,6 +24,7 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { randomUUID } from "node:crypto";
 import { getMcpBridge } from "../mcp-bridge.js";
+import { getMetricsRegistry } from "./metrics.js";
 import type { McpServerProcess } from "../mcp-proxy/server-process.js";
 import { AUTH_HEADER, PTY_ID_HEADER, PTY_TS_HEADER, verifyBearer } from "./pty-identity.js";
 import type { SessionPersistenceStore } from "./session-persistence.js";
@@ -549,8 +550,15 @@ export class McpHttpHandler {
           isError: true,
         };
       }
+      // Issue #68: cost-tracking metrics. `record()` returns a no-op
+      // timer when metrics are disabled, so this is zero-cost in the
+      // default path. The timer is started even before we know if the
+      // dispatch will succeed; `end(success)` is called in both arms
+      // so an exception path still records its latency + error count.
+      const timer = getMetricsRegistry().record(this.serverName, bucketKey, name);
       try {
         const result = await this.proc.call(name, args ?? {});
+        timer.end(true);
         return {
           content: [
             {
@@ -560,6 +568,7 @@ export class McpHttpHandler {
           ],
         };
       } catch (err) {
+        timer.end(false);
         const message = err instanceof Error ? err.message : String(err);
         return {
           content: [{ type: "text", text: `Error: ${message}` }],

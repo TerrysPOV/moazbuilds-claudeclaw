@@ -34,6 +34,7 @@ import { getMcpBridge } from "../mcp-bridge.js";
 import { McpServerProcess, type McpServerConfig } from "../mcp-proxy/server-process.js";
 import { getSettings } from "../../config.js";
 import { McpHttpHandler } from "./http-handler.js";
+import { getMetricsRegistry } from "./metrics.js";
 import {
   issueIdentity as _issueIdentity,
   revokeIdentity as _revokeIdentity,
@@ -229,6 +230,13 @@ export class McpMultiplexerPlugin {
     if (this.started) return;
 
     const settings = this.settingsView();
+
+    // Issue #68: cost-tracking metrics. Reflect the settings flag onto
+    // the registry on every start() — covers daemon boot AND
+    // operator-driven re-start() after settings reload. Disabling at
+    // runtime stops new recordings; collected data stays until the
+    // process exits.
+    getMetricsRegistry().setEnabled(getSettings().mcp.metricsEnabled === true);
 
     // Refuse to expose MCP servers over a non-loopback gateway.
     if (settings.webHost !== "127.0.0.1" && settings.webHost !== "localhost") {
