@@ -563,17 +563,20 @@ export class McpHttpHandler {
       // default path. The timer is started even before we know if the
       // dispatch will succeed; `end(success)` is called in both arms
       // so an exception path still records its latency + error count.
+      //
+      // Codex P2 on this PR: serialize the response FIRST, then
+      // `end(true)`. If `JSON.stringify(result)` throws (circular data,
+      // BigInt), control falls to the catch and `end(false)` records
+      // the error correctly. Calling `end(true)` before serialization
+      // would latch the timer as a success before the failure was
+      // observable — silently dropping the error increment.
       const timer = getMetricsRegistry().record(this.serverName, bucketKey, name);
       try {
         const result = await this.proc.call(name, args ?? {});
+        const text = typeof result === "string" ? result : JSON.stringify(result);
         timer.end(true);
         return {
-          content: [
-            {
-              type: "text",
-              text: typeof result === "string" ? result : JSON.stringify(result),
-            },
-          ],
+          content: [{ type: "text", text }],
         };
       } catch (err) {
         timer.end(false);
