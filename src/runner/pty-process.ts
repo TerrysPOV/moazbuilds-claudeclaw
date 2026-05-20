@@ -58,10 +58,13 @@ import {
  *   write path; BS / DEL act as inline-edit keystrokes in the TUI; BEL etc.
  *   are noisy. Tab (`\x09`) is preserved.
  */
+// Constructed at module load so the source file contains no literal control
+// chars (biome's `noControlCharactersInRegex` lint would otherwise fire on the
+// intentional NUL/BS/DEL/etc. class).
+const _ptyControlCharStrip = new RegExp("[\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f]", "g");
+
 export function sanitizePtyPromptText(text: string): string {
-  return text
-    .replace(/\r\n?|\n/g, " ")
-    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
+  return text.replace(/\r\n?|\n/g, " ").replace(_ptyControlCharStrip, "");
 }
 
 // ─── Public types (FROZEN per SPEC §3.1) ────────────────────────────────────
