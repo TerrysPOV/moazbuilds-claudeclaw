@@ -203,6 +203,7 @@ const PLUGIN_MARKETPLACE_TAG = "inline";
  */
 const PLUS_BUS_TOOL_NAMES = [
   "mcp__plugin_claudeclaw-plus_plus-bus__reply",
+  "mcp__plugin_claudeclaw-plus_plus-bus__edit_message",
   "mcp__plugin_claudeclaw-plus_plus-bus__ask",
   "mcp__plugin_claudeclaw-plus_plus-bus__cancel",
   "mcp__plugin_claudeclaw-plus_plus-bus__request_human",

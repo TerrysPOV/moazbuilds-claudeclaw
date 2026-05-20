@@ -481,6 +481,20 @@ export class BusCoreImpl implements BusCore {
       case "reply":
         this.ingestReply({ agent_id: agentId, text: msg.text, intent: msg.intent });
         break;
+      case "edit_message": {
+        const origin = this.lastPromptOrigin.get(agentId);
+        this.publish({
+          ts: Date.now(),
+          agent_id: agentId,
+          session_id: "",
+          topic: "response.edit_text",
+          payload: {
+            text: msg.text,
+            ...(origin ? { origin: origin.origin, origin_id: origin.origin_id } : {}),
+          },
+        });
+        break;
+      }
       case "ask":
         // Surface as an event; the adapter is responsible for answering via
         // `ingestAskAnswer` (added in a later sprint). Sprint 1 emits the
