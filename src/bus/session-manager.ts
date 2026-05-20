@@ -335,7 +335,7 @@ export function buildClaudeArgs(agent: AgentConfig, mode: SupervisionMode): stri
   //
   // Operators who want approvals back can set `permission_mode` per
   // agent in `settings.json` to one of the other valid values:
-  //   "default" | "plan" | "acceptEdits" | "bypassPermissions"
+  //   "default" | "plan" | "acceptEdits" | "bypassPermissions" | "dontAsk" | "auto"
   args.push("--permission-mode", agent.permission_mode ?? "bypassPermissions");
   if (agent.system_prompt_file) {
     args.push("--append-system-prompt", agent.system_prompt_file);

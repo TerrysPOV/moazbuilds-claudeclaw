@@ -156,7 +156,7 @@ export interface AgentConfig {
   /** UUID passed to `claude --session-id`. Stable across restarts. */
   session_id: string;
   /** Default permission mode for spawned claude. */
-  permission_mode?: "plan" | "bypassPermissions" | "default";
+  permission_mode?: "default" | "plan" | "acceptEdits" | "bypassPermissions" | "dontAsk" | "auto";
   /** Optional path to system prompt addendum. */
   system_prompt_file?: string;
   /** Optional path to per-agent MEMORY.md. */

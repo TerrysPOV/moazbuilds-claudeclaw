@@ -245,7 +245,7 @@ Defaults: `WEB_HOST=127.0.0.1`, `WEB_PORT=4632` unless changed via settings or `
 - `security.level` — one of: `locked`, `strict`, `moderate`, `unrestricted`
 - `security.allowedTools` — extra tools to allow on top of the level (e.g. `["Bash(git:*)"]`)
 - `security.disallowedTools` — tools to block on top of the level
-- `agents[N].permission_mode` (bus runtime) — one of: `"default"`, `"plan"`, `"bypassPermissions"` (the trio currently accepted by `src/config.ts` `VALID_PERMISSION_MODES`). Default is `"bypassPermissions"` (headless — no Allow/Deny prompts per tool call). Per-agent override; falls back to the resolver default if unset. Claude Code itself accepts more values (`acceptEdits` / `dontAsk` / `auto`) — see follow-up for expanding the validator to match.
+- `agents[N].permission_mode` (bus runtime) — one of: `"default"`, `"plan"`, `"acceptEdits"`, `"bypassPermissions"`, `"dontAsk"`, `"auto"` (full-parity with Claude Code's `--permission-mode` choices). Default is `"bypassPermissions"` (headless — no Allow/Deny prompts per tool call). Per-agent override; falls back to the resolver default if unset.
 - `.claude/claudeclaw/permission-mode.json` (legacy `claude -p` runtime) — `{"mode": "..."}` file. Absent ≡ `"bypassPermissions"` (headless). Written by the wizard only when the user explicitly opts out of headless.
 
 ### Security Levels

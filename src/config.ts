@@ -504,7 +504,7 @@ export interface BusAgentSettings {
   /** Working directory the spawned claude runs in. Defaults to `process.cwd()`. */
   cwd?: string;
   /** Permission mode for the spawned claude. Defaults to `"plan"`. */
-  permission_mode?: "plan" | "bypassPermissions" | "default";
+  permission_mode?: "default" | "plan" | "acceptEdits" | "bypassPermissions" | "dontAsk" | "auto";
   /**
    * Override the supervision picker. Default is mode-dependent (see
    * `defaultSupervisionFor` in `src/bus/types.ts`). Operators rarely
@@ -907,12 +907,19 @@ function parseRuntimeMode(raw: unknown): RuntimeMode {
   return "pty";
 }
 
-/** Allowed values for `BusAgentSettings.permission_mode`. */
-const VALID_PERMISSION_MODES = new Set<"plan" | "bypassPermissions" | "default">([
-  "plan",
-  "bypassPermissions",
-  "default",
-]);
+/**
+ * Allowed values for `BusAgentSettings.permission_mode`.
+ *
+ * Full-parity with the choices Claude Code accepts via `--permission-mode`
+ * (verified against `claude --help` 2026-05-20: `acceptEdits`,
+ * `bypassPermissions`, `default`, `dontAsk`, `plan`, `auto`). Earlier
+ * versions of this parser only accepted the `default | plan |
+ * bypassPermissions` trio, which made `commands/start.md` lie when it
+ * documented `acceptEdits` as valid (Codex P2 on PR #145).
+ */
+const VALID_PERMISSION_MODES = new Set<
+  "default" | "plan" | "acceptEdits" | "bypassPermissions" | "dontAsk" | "auto"
+>(["default", "plan", "acceptEdits", "bypassPermissions", "dontAsk", "auto"]);
 
 /** Allowed values for `BusAgentSettings.supervision`. */
 const VALID_SUPERVISION_MODES = new Set<BusSupervisionMode>([
@@ -973,7 +980,13 @@ function parseBusAgents(raw: unknown): BusAgentSettings[] {
     const parsed: BusAgentSettings = { id };
     if (typeof e.cwd === "string" && e.cwd.trim().length > 0) parsed.cwd = e.cwd.trim();
     if (typeof e.permission_mode === "string") {
-      const pm = e.permission_mode.trim() as "plan" | "bypassPermissions" | "default";
+      const pm = e.permission_mode.trim() as
+        | "default"
+        | "plan"
+        | "acceptEdits"
+        | "bypassPermissions"
+        | "dontAsk"
+        | "auto";
       if (VALID_PERMISSION_MODES.has(pm)) parsed.permission_mode = pm;
       // Codex P1 follow-up on PR #143: the warning previously said
       // "falling back to plan" but left `parsed.permission_mode`
