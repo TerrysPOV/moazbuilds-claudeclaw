@@ -49,6 +49,17 @@ import type {
   PermissionResponse,
 } from "./types";
 
+/** Escape XML text content (`&`, `<`, `>`) so a `</channel>` in user text
+ *  can't close the wrapper element early and inject sibling markup. */
+function escapeXmlText(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/** Escape an XML attribute value: text escaping plus the `"` delimiter. */
+function escapeXmlAttr(s: string): string {
+  return escapeXmlText(s).replace(/"/g, "&quot;");
+}
+
 /* ───────────────────────────────────────────────────────────────────── */
 /* Public types                                                          */
 /* ───────────────────────────────────────────────────────────────────── */
@@ -278,17 +289,17 @@ export class BusCoreImpl implements BusCore {
     // plugin). Best-effort: a missing/failed handler never blocks the IPC path.
     if (this.streamPromptHandler) {
       const attrs = [
-        `source="${req.origin}"`,
-        `chat_id="${req.origin_id}"`,
-        `user_id="${req.user_id}"`,
+        `source="${escapeXmlAttr(req.origin)}"`,
+        `chat_id="${escapeXmlAttr(req.origin_id)}"`,
+        `user_id="${escapeXmlAttr(req.user_id)}"`,
         `ts="${new Date().toISOString()}"`,
       ];
       if (req.metadata) {
         for (const [k, v] of Object.entries(req.metadata)) {
-          attrs.push(`${k}="${String(v).replace(/"/g, "&quot;")}"`);
+          attrs.push(`${k}="${escapeXmlAttr(String(v))}"`);
         }
       }
-      const wrapped = `<channel ${attrs.join(" ")}>${req.text}</channel>`;
+      const wrapped = `<channel ${attrs.join(" ")}>${escapeXmlText(req.text)}</channel>`;
       void this.streamPromptHandler(req.agent_id, wrapped).catch((err) =>
         this.onError(err, { ctx: "streamPromptHandler", agent_id: req.agent_id }),
       );
