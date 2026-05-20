@@ -53,6 +53,13 @@ export interface ResponseCacheConfig {
   /** Per-server allowlist of cacheable tool names. A tool is cacheable
    *  iff it appears in the array for its server. */
   cacheable: Record<string, ReadonlySet<string>>;
+  /** Defensive invalidation on every non-cacheable call against a
+   *  server with cacheable tools. Default true (matches issue #69
+   *  acceptance). Operators with cleanly partitioned tools — where
+   *  non-cacheable calls are known to be read-only / non-mutating —
+   *  can flip this off to avoid thrashing the cache for mixed-tool
+   *  servers (5-agent review on PR #69 Agent 3 finding). */
+  defensiveInvalidation: boolean;
 }
 
 interface CacheEntry {
@@ -68,6 +75,8 @@ export interface CacheStats {
   enabled: boolean;
   ttlMs: number;
   maxEntries: number;
+  /** Whether defensive invalidation is on (issue #69 default true). */
+  defensiveInvalidation: boolean;
   entries: number;
   hits: number;
   misses: number;
@@ -101,6 +110,7 @@ const DEFAULT_CONFIG: ResponseCacheConfig = {
   ttlMs: DEFAULT_TTL_MS,
   maxEntries: DEFAULT_MAX_ENTRIES,
   cacheable: {},
+  defensiveInvalidation: true,
 };
 
 export class ResponseCache {
@@ -118,6 +128,7 @@ export class ResponseCache {
       ttlMs: opts.ttlMs ?? this.config.ttlMs,
       maxEntries: opts.maxEntries ?? this.config.maxEntries,
       cacheable: opts.cacheable ?? this.config.cacheable,
+      defensiveInvalidation: opts.defensiveInvalidation ?? this.config.defensiveInvalidation,
     };
     // If the cap shrunk, evict from the head until we fit.
     while (this.entries.size > this.config.maxEntries) {
@@ -228,11 +239,28 @@ export class ResponseCache {
     return allowed !== undefined && allowed.size > 0;
   }
 
+  /**
+   * Should a non-cacheable call against this server trigger defensive
+   * invalidation? True iff:
+   *   - cache is enabled, AND
+   *   - the server has cacheable tools declared, AND
+   *   - `defensiveInvalidation` flag is on (the issue #69 default).
+   *
+   * Lets the dispatch path collapse the two checks into one call;
+   * also lets operators with cleanly partitioned tools opt out to
+   * avoid thrashing the cache for mixed-tool servers.
+   */
+  shouldInvalidateOnNonCacheableCall(serverName: string): boolean {
+    if (!this.config.defensiveInvalidation) return false;
+    return this.serverHasCacheableTools(serverName);
+  }
+
   stats(): CacheStats {
     return {
       enabled: this.config.enabled,
       ttlMs: this.config.ttlMs,
       maxEntries: this.config.maxEntries,
+      defensiveInvalidation: this.config.defensiveInvalidation,
       entries: this.entries.size,
       hits: this.hits,
       misses: this.misses,

@@ -112,6 +112,9 @@ export interface MuxSettingsView {
     ttlMs: number;
     maxEntries: number;
     cacheable: Record<string, string[]>;
+    /** Default true per issue #69 acceptance; opt-out for mixed-tool
+     *  servers (5-agent review on PR #69 Agent 3 follow-up). */
+    defensiveInvalidation: boolean;
   };
 }
 
@@ -184,6 +187,7 @@ function _readSettings(): MuxSettingsView {
       ttlMs: cacheTtlMs,
       maxEntries: cacheMaxEntries,
       cacheable,
+      defensiveInvalidation: cacheRaw.defensiveInvalidation !== false,
     },
   };
 }
@@ -297,6 +301,7 @@ export class McpMultiplexerPlugin {
       ttlMs: settings.cache.ttlMs,
       maxEntries: settings.cache.maxEntries,
       cacheable,
+      defensiveInvalidation: settings.cache.defensiveInvalidation,
     });
 
     // Refuse to expose MCP servers over a non-loopback gateway.
@@ -520,6 +525,13 @@ export class McpMultiplexerPlugin {
     // forget). Letting GC reclaim the store object is fine; the next
     // `start()` constructs a new one.
     this.persistence = null;
+    // Issue #69 / Agent 4 follow-up on PR #147: flush the response
+    // cache on stop. Same precedent as PR #91 P2 (release per-PTY rate
+    // window) and PR #147 (release per-PTY metrics tuples) — every
+    // bounded process-level state surface gets a teardown hook so a
+    // hot-reload or test that reuses the process doesn't serve stale
+    // entries to the next start().
+    getResponseCache().reset();
     this.cachedSharedNames = [];
     this.cachedStatelessNames = [];
     this.cachedBridgeBaseUrl = "http://127.0.0.1:4632";

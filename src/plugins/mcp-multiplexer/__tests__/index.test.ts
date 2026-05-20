@@ -53,7 +53,13 @@ function makeSettingsView(partial: Partial<MuxSettingsView>): () => MuxSettingsV
     // Issue #68 — default OFF in tests; opt-in tests set true explicitly.
     metricsEnabled: false,
     // Issue #69 — default OFF in tests; opt-in tests provide cacheable map.
-    cache: { enabled: false, ttlMs: 5_000, maxEntries: 1_000, cacheable: {} },
+    cache: {
+      enabled: false,
+      ttlMs: 5_000,
+      maxEntries: 1_000,
+      cacheable: {},
+      defensiveInvalidation: true,
+    },
     ...partial,
   };
   return () => view;

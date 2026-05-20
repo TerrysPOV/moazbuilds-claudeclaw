@@ -194,6 +194,7 @@ const DEFAULT_SETTINGS: Settings = {
       ttlMs: 5_000,
       maxEntries: 1_000,
       cacheable: {},
+      defensiveInvalidation: true,
     },
   },
   watchdog: { maxConsecutiveTimeouts: null, maxRuntimeSeconds: null },
@@ -453,6 +454,12 @@ export interface McpConfig {
     /** Per-server allowlist of cacheable tool names.
      *  Example: `{ "retrieval-mcp": ["get_record", "list_records"] }`. */
     cacheable: Record<string, string[]>;
+    /** Defensive invalidation on every non-cacheable call against a
+     *  server with cacheable tools. Default true. Operators with
+     *  cleanly partitioned tools (mixed-tool servers where the
+     *  non-cacheable tools are read-only) can flip false to avoid
+     *  thrashing the cache. 5-agent review on PR #69 Agent 3 finding. */
+    defensiveInvalidation: boolean;
   };
 }
 
@@ -1316,6 +1323,9 @@ function parseMcpConfig(raw: any, webEnabled: unknown): McpConfig {
       ttlMs: cacheTtlMs,
       maxEntries: cacheMaxEntries,
       cacheable,
+      // Default true per issue #69 acceptance; operator opts out by
+      // setting false (e.g. cleanly-partitioned tools).
+      defensiveInvalidation: rawCache?.defensiveInvalidation !== false,
     },
   };
 }

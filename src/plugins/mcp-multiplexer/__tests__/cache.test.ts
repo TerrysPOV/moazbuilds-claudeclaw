@@ -159,6 +159,21 @@ describe("ResponseCache — enabled", () => {
     expect(c.serverHasCacheableTools("retrieval")).toBe(false);
   });
 
+  it("shouldInvalidateOnNonCacheableCall() honours the defensiveInvalidation flag", () => {
+    // Default: ON.
+    expect(c.shouldInvalidateOnNonCacheableCall("retrieval")).toBe(true);
+    // Opt-out (5-agent review Agent 3 finding on mixed-tool servers):
+    c.configure({ defensiveInvalidation: false });
+    expect(c.shouldInvalidateOnNonCacheableCall("retrieval")).toBe(false);
+    // Re-enabling restores behaviour.
+    c.configure({ defensiveInvalidation: true });
+    expect(c.shouldInvalidateOnNonCacheableCall("retrieval")).toBe(true);
+  });
+
+  it("shouldInvalidateOnNonCacheableCall() returns false when server has no cacheable tools", () => {
+    expect(c.shouldInvalidateOnNonCacheableCall("unknown-server")).toBe(false);
+  });
+
   it("configure() shrinking maxEntries evicts down to fit", () => {
     c.configure({
       enabled: true,
