@@ -938,8 +938,9 @@ const AGENT_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,35}$/;
  *
  * Validation:
  *   - `id` required, matches `AGENT_ID_PATTERN`, unique across the list.
- *   - `permission_mode` must be one of the valid trio (else fall back to
- *     `"plan"`).
+ *   - `permission_mode` must be one of the valid trio (else drop and let
+ *     `resolveBusAgentConfig` apply the default of `"bypassPermissions"`,
+ *     matching the documented headless contract).
  *   - `supervision` must be a known mode (else drop the field — internal
  *     `defaultSupervisionFor` picks one).
  *   - `cwd` / `system_prompt_file` / `memory_file` / `mcp_config` must be
@@ -974,9 +975,14 @@ function parseBusAgents(raw: unknown): BusAgentSettings[] {
     if (typeof e.permission_mode === "string") {
       const pm = e.permission_mode.trim() as "plan" | "bypassPermissions" | "default";
       if (VALID_PERMISSION_MODES.has(pm)) parsed.permission_mode = pm;
+      // Codex P1 follow-up on PR #143: the warning previously said
+      // "falling back to plan" but left `parsed.permission_mode`
+      // unset, so the resolver's `?? "bypassPermissions"` default
+      // would silently override — i.e. the warning lied. Now state
+      // the actual fallback the resolver applies.
       else
         console.warn(
-          `[config] settings.agents[${i}].permission_mode="${e.permission_mode}" invalid; falling back to "plan"`,
+          `[config] settings.agents[${i}].permission_mode="${e.permission_mode}" invalid; falling back to "bypassPermissions" (resolver default)`,
         );
     }
     if (typeof e.supervision === "string") {
