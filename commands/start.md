@@ -38,7 +38,7 @@ Start the heartbeat daemon for this project. Follow these steps exactly:
    - **Telegram configured** = `telegram.token` is non-empty
    - **Discord configured** = `discord.token` is non-empty
    - **Security configured** = `security.level` exists and is not `"moderate"` (the default), OR `security.allowedTools`/`security.disallowedTools` are non-empty
-   - **Permissions configured** = `.claude/claudeclaw/permission-mode.json` exists (legacy claude -p runner reads from here), OR every entry in `settings.agents` has an explicit `permission_mode` (bus runtime reads per-agent)
+   - **Permissions configured** = `.claude/claudeclaw/permission-mode.json` exists. (This is the marker the wizard writes when the operator opts out of headless. Per-agent `permission_mode` overrides in `settings.agents` are independent operator-driven overrides — they do NOT count as "wizard configured" because they can be set without the wizard ever running, and the empty-agents first-setup state would otherwise be vacuously "configured" and the question would be skipped.)
 
 4. **Interactive setup — smart mode** (BEFORE launching the daemon):
 
@@ -245,7 +245,7 @@ Defaults: `WEB_HOST=127.0.0.1`, `WEB_PORT=4632` unless changed via settings or `
 - `security.level` — one of: `locked`, `strict`, `moderate`, `unrestricted`
 - `security.allowedTools` — extra tools to allow on top of the level (e.g. `["Bash(git:*)"]`)
 - `security.disallowedTools` — tools to block on top of the level
-- `agents[N].permission_mode` (bus runtime) — one of: `"default"`, `"plan"`, `"acceptEdits"`, `"bypassPermissions"`. Default is `"bypassPermissions"` (headless — no Allow/Deny prompts per tool call). Per-agent override; falls back to the resolver default if unset.
+- `agents[N].permission_mode` (bus runtime) — one of: `"default"`, `"plan"`, `"bypassPermissions"` (the trio currently accepted by `src/config.ts` `VALID_PERMISSION_MODES`). Default is `"bypassPermissions"` (headless — no Allow/Deny prompts per tool call). Per-agent override; falls back to the resolver default if unset. Claude Code itself accepts more values (`acceptEdits` / `dontAsk` / `auto`) — see follow-up for expanding the validator to match.
 - `.claude/claudeclaw/permission-mode.json` (legacy `claude -p` runtime) — `{"mode": "..."}` file. Absent ≡ `"bypassPermissions"` (headless). Written by the wizard only when the user explicitly opts out of headless.
 
 ### Security Levels
