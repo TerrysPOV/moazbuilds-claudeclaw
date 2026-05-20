@@ -31,7 +31,11 @@ describe("resolveBusAgentConfig — defaults", () => {
       id: "triage",
       cwd: "/tmp/proj",
       session_id: "uuid-fixed",
-      permission_mode: "plan",
+      // Codex P1 on PR #143: resolver default is the load-bearing one
+      // because production startup runs entries through this resolver
+      // BEFORE `buildClaudeArgs` ever sees them. Must match the
+      // documented headless contract in `commands/start.md`.
+      permission_mode: "bypassPermissions",
       supervision: "pty-stdin",
     });
   });

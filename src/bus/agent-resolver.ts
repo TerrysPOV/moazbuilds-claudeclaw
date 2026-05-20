@@ -45,7 +45,9 @@ export interface ResolveAgentOptions {
  *
  * Defaults applied:
  *   - `cwd` ← `opts.defaultCwd ?? process.cwd()`
- *   - `permission_mode` ← `"plan"`
+ *   - `permission_mode` ← `"bypassPermissions"` (matches the documented
+ *     headless contract in `commands/start.md` §Security Levels — see
+ *     also the fallback in `buildClaudeArgs`)
  *   - `session_id` ← existing `agents/<id>/session.json` value, else a
  *     fresh UUID persisted on first call.
  *   - `supervision` ← `"pty-stdin"` (Codex P1 fold-in from PR #122).
@@ -68,7 +70,7 @@ export async function resolveBusAgentConfig(
     id: entry.id,
     cwd,
     session_id,
-    permission_mode: entry.permission_mode ?? "plan",
+    permission_mode: entry.permission_mode ?? "bypassPermissions",
     supervision: (entry.supervision as SupervisionMode | undefined) ?? "pty-stdin",
   };
   if (entry.system_prompt_file) config.system_prompt_file = entry.system_prompt_file;
