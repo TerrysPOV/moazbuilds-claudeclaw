@@ -325,7 +325,18 @@ export function buildClaudeArgs(agent: AgentConfig, mode: SupervisionMode): stri
   if (agent.mcp_config) {
     args.push("--mcp-config", agent.mcp_config);
   }
-  args.push("--permission-mode", agent.permission_mode ?? "plan");
+  // Default to `bypassPermissions` to match the documented headless
+  // contract in `commands/start.md` §"Security Levels": "All levels run
+  // without permission prompts (headless)". The legacy `claude -p` path
+  // delivered this implicitly; the bus runtime previously defaulted to
+  // "plan", which made every Bash / Write tool call surface a
+  // permission_request to the originating channel — a regression from
+  // the legacy headless contract.
+  //
+  // Operators who want approvals back can set `permission_mode` per
+  // agent in `settings.json` to one of the other valid values:
+  //   "default" | "plan" | "acceptEdits" | "bypassPermissions"
+  args.push("--permission-mode", agent.permission_mode ?? "bypassPermissions");
   if (agent.system_prompt_file) {
     args.push("--append-system-prompt", agent.system_prompt_file);
   }
