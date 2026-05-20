@@ -172,7 +172,16 @@ export class BusCoreImpl implements BusCore {
       },
       onMessage: (agentId, msg) => this.handleIpcMessage(agentId, msg),
       onClose: (agentId) => {
-        if (agentId) this.connectedAgents.delete(agentId);
+        if (agentId) {
+          this.connectedAgents.delete(agentId);
+          // Clear any cached origin for this agent on disconnect — the
+          // claude subprocess is gone, so any in-flight prompt won't
+          // produce a `final` reply to trigger the usual clear path.
+          // Without this, a subsequent scheduler/cron event for this
+          // agent (after a reconnect) would inherit the dead session's
+          // origin and misroute (5-agent review on PR #138, A1 finding).
+          this.lastPromptOrigin.delete(agentId);
+        }
       },
       onError: (err, agentId) => this.onError(err, { ctx: "ipc", agentId }),
     });
@@ -329,6 +338,15 @@ export class BusCoreImpl implements BusCore {
     // whichever DM/channel last asked the agent something. Progress
     // and tool_status intents keep the origin so mid-stream updates
     // stay scoped to the originating surface.
+    //
+    // Other clear sites (5-agent review on PR #138, A1 finding):
+    //   - `cancel` IPC      — turn won't emit `final`
+    //   - `error` IPC       — turn likely won't emit `final`
+    //   - socket disconnect — claude subprocess gone, no `final` coming
+    // These are the only consumers of `lastPromptOrigin`:
+    //   - this `ingestReply` (origin on response.text events)
+    //   - `request_human` IPC handler (origin on system.request_human)
+    //   - `permission_request` IPC handler (origin on channel.permission_request)
     if (req.intent === "final") {
       this.lastPromptOrigin.delete(req.agent_id);
     }
@@ -460,35 +478,65 @@ export class BusCoreImpl implements BusCore {
           topic: "system.cancel",
           payload: { reason: msg.reason },
         });
+        // Cancel signals the turn won't produce a `final` reply. Clear
+        // the cached origin so any subsequent scheduler/cron event for
+        // this agent doesn't inherit it and misroute (5-agent review
+        // on PR #138, A1 finding).
+        this.lastPromptOrigin.delete(agentId);
         break;
-      case "request_human":
+      case "request_human": {
         // Forward the correlation id along with the question. Without
         // `ask_id` the subscriber (Sprint 3 adapter) can't echo back the
         // matching `IpcAskAnswer` and the originating tool call blocks
         // forever. PR #110 review (agent #5): the wire format carries
         // `ask_id` but this fan-out previously dropped it.
+        //
+        // Origin propagation (post-#137 bug): attach the originating
+        // surface so the adapter that owns it (and only that adapter)
+        // surfaces the question. Without this, the request fanned out
+        // to every channel of every adapter that subscribed.
+        const askOrigin = this.lastPromptOrigin.get(agentId);
         this.publish({
           ts: Date.now(),
           agent_id: agentId,
           session_id: "",
           topic: "system.request_human",
-          payload: { ask_id: msg.ask_id, question: msg.question },
+          payload: {
+            ask_id: msg.ask_id,
+            question: msg.question,
+            ...(askOrigin ? { origin: askOrigin.origin, origin_id: askOrigin.origin_id } : {}),
+          },
         });
         break;
-      case "permission_request":
+      }
+      case "permission_request": {
+        // Same origin-propagation fix as request_human above: the
+        // request_id-bearing payload now also carries the originating
+        // surface so the prompt UI lands only on the channel that
+        // triggered the tool call.
+        const permOrigin = this.lastPromptOrigin.get(agentId);
         this.publish({
           ts: Date.now(),
           agent_id: agentId,
           session_id: "",
           topic: "channel.permission_request",
-          payload: msg.request,
+          payload: {
+            ...msg.request,
+            ...(permOrigin ? { origin: permOrigin.origin, origin_id: permOrigin.origin_id } : {}),
+          },
         });
         break;
+      }
       case "error":
         this.onError(new Error(`MCP error: ${msg.code} ${msg.message}`), {
           ctx: "ipc-error",
           agentId,
         });
+        // Error means the turn likely won't produce a `final` reply.
+        // Same lifecycle concern as `cancel` — clear so subsequent
+        // scheduler events for this agent don't inherit the stale
+        // origin (5-agent review on PR #138, A1 finding).
+        this.lastPromptOrigin.delete(agentId);
         break;
       // hello already handled in the IPC layer; outbound types (prompt,
       // permission_response, ask_answer) shouldn't arrive from MCP.

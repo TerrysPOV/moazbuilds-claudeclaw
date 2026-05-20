@@ -7,7 +7,12 @@
  */
 
 import type { BusCore, Subscription } from "../../bus/core";
-import type { BusEvent, PermissionRequest } from "../../bus/types";
+import {
+  CHANNEL_DRIVEN_ORIGINS,
+  type BusEvent,
+  type BusOrigin,
+  type PermissionRequest,
+} from "../../bus/types";
 import { createTelegramApi } from "./api";
 import { extractReactionDirectives } from "./directives";
 import { buildPromptMetadata } from "./metadata";
@@ -58,6 +63,26 @@ interface PendingPrompt {
 interface PendingHumanAsk {
   ask_id: string;
   agent_id: string;
+}
+
+/**
+ * Reject bus events owned by a DIFFERENT channel-driven adapter.
+ *
+ * Post-#137 prod incident: webui-originated replies (`origin: "webui"`)
+ * were leaking into Telegram (and Discord, Slack) because the adapters
+ * only checked their own origin tag and otherwise fell back to fan-out.
+ *
+ * Codex P1 on #138: scheduler emits prompts with explicit
+ * `origin: "cron" | "heartbeat"`, so a blunt "drop if origin is set"
+ * rule would silently stop scheduler replies reaching any channel.
+ * Only FOREIGN CHANNEL-DRIVEN origins (discord / slack / webui) drop;
+ * non-channel origins (cron / heartbeat / cli / rest) fall through to
+ * the normal fan-out path.
+ */
+function eventBelongsToTelegram(event: BusEvent): boolean {
+  const origin = (event.payload as { origin?: string } | undefined)?.origin;
+  if (origin === undefined || origin === "telegram") return true;
+  return !CHANNEL_DRIVEN_ORIGINS.has(origin as BusOrigin);
 }
 
 export class TelegramAdapter {
@@ -326,6 +351,7 @@ export class TelegramAdapter {
   }
 
   private async handleResponseText(agentId: string, event: BusEvent): Promise<void> {
+    if (!eventBelongsToTelegram(event)) return;
     const payload = event.payload as { text?: string };
     const rawText = typeof payload?.text === "string" ? payload.text : "";
     if (rawText.length === 0) return;
@@ -362,6 +388,7 @@ export class TelegramAdapter {
   }
 
   private async handlePermissionRequest(agentId: string, event: BusEvent): Promise<void> {
+    if (!eventBelongsToTelegram(event)) return;
     const req = event.payload as PermissionRequest | undefined;
     if (!req || typeof req.request_id !== "string") return;
 
@@ -401,6 +428,7 @@ export class TelegramAdapter {
   }
 
   private async handleRequestHuman(agentId: string, event: BusEvent): Promise<void> {
+    if (!eventBelongsToTelegram(event)) return;
     const payload = event.payload as { ask_id?: string; question?: string };
     if (typeof payload?.ask_id !== "string" || typeof payload?.question !== "string") {
       return;
