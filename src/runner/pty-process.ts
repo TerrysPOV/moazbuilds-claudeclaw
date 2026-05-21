@@ -45,6 +45,11 @@ import {
   tick,
   type Parser,
 } from "./pty-output-parser";
+// Re-export the sanitiser from its standalone home so existing callers that
+// pull it from `pty-process` (and through `runner/index`) keep working without
+// loading bun-pty just to get the helper.
+import { sanitizePtyPromptText } from "./pty-prompt-sanitizer";
+export { sanitizePtyPromptText };
 
 // ─── Public types (FROZEN per SPEC §3.1) ────────────────────────────────────
 
@@ -74,6 +79,13 @@ export interface PtyProcessOptions {
   /**
    * Optional system prompt to append via `--append-system-prompt <text>`.
    * (Phase D fix #2 for CRITICAL-1.)
+   *
+   * Operator note (issue #65 item 7): the assembled text is passed on the
+   * spawned `claude` argv and is therefore visible to other UIDs via `ps aux`
+   * (or equivalent) on shared multi-user hosts. This is parity with the
+   * legacy `claude -p` path (no new attack surface), but operators deploying
+   * on shared servers should treat the system-prompt payload as low-secrecy
+   * — do not embed long-lived secrets in it.
    */
   appendSystemPrompt?: string;
   /** Env vars to pass to the child. Caller is responsible for a sanitised env. */
@@ -458,9 +470,10 @@ class PtyProcessImpl implements PtyProcess {
     // Tell the parser we're starting a turn (offset = current totalBytes).
     startTurn(this._parser, uuid, sentinelBytes, this._turnStartedAt);
 
-    // Write prompt + CR (TUI submits on Enter).
+    // Write prompt + CR (TUI submits on Enter). Sanitize embedded CR/LF so
+    // they don't submit mid-prompt.
     try {
-      this._pty.write(prompt + "\r");
+      this._pty.write(sanitizePtyPromptText(prompt) + "\r");
     } catch (err) {
       this._turnInProgress = false;
       this._activeSentinelBytes = null;

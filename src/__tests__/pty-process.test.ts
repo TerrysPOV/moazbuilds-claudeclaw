@@ -1,6 +1,7 @@
 import { describe, test, expect } from "bun:test";
 import {
   spawnPty,
+  sanitizePtyPromptText,
   PtyTurnTimeoutError,
   PtyClosedError,
   type PtyProcessOptions,
@@ -609,5 +610,47 @@ describe("PtyProcess — sessionId", () => {
     );
     expect(proc.sessionId).toBe(sid);
     await proc.dispose();
+  });
+});
+
+describe("sanitizePtyPromptText (issue #65 item 3)", () => {
+  test("replaces embedded CR with space", () => {
+    expect(sanitizePtyPromptText("hello\rworld")).toBe("hello world");
+  });
+
+  test("replaces embedded LF with space", () => {
+    expect(sanitizePtyPromptText("line one\nline two")).toBe("line one line two");
+  });
+
+  test("replaces CRLF as a single separator (not two spaces)", () => {
+    expect(sanitizePtyPromptText("a\r\nb")).toBe("a b");
+  });
+
+  test("preserves text with no CR/LF", () => {
+    expect(sanitizePtyPromptText("plain prompt")).toBe("plain prompt");
+  });
+
+  test("handles multiple newlines and mixed terminators", () => {
+    expect(sanitizePtyPromptText("a\nb\r\nc\rd")).toBe("a b c d");
+  });
+
+  test("preserves an empty string", () => {
+    expect(sanitizePtyPromptText("")).toBe("");
+  });
+
+  test("strips NUL bytes that would truncate the C-string PTY write", () => {
+    expect(sanitizePtyPromptText("hello\x00world")).toBe("helloworld");
+  });
+
+  test("strips Backspace and DEL keystrokes that would inline-edit the TUI", () => {
+    expect(sanitizePtyPromptText("abc\x08def\x7fghi")).toBe("abcdefghi");
+  });
+
+  test("strips BEL and other C0 controls except tab", () => {
+    expect(sanitizePtyPromptText("\x07alert\x01start\x1fend\tkept")).toBe("alertstartend\tkept");
+  });
+
+  test("preserves printable Unicode and multi-byte UTF-8", () => {
+    expect(sanitizePtyPromptText("héllo 🪶 wörld")).toBe("héllo 🪶 wörld");
   });
 });
