@@ -203,6 +203,7 @@ const PLUGIN_MARKETPLACE_TAG = "inline";
  */
 const PLUS_BUS_TOOL_NAMES = [
   "mcp__plugin_claudeclaw-plus_plus-bus__reply",
+  "mcp__plugin_claudeclaw-plus_plus-bus__edit_message",
   "mcp__plugin_claudeclaw-plus_plus-bus__ask",
   "mcp__plugin_claudeclaw-plus_plus-bus__cancel",
   "mcp__plugin_claudeclaw-plus_plus-bus__request_human",
@@ -540,16 +541,19 @@ export class SessionManager {
     // Retry across a wider window. Each `\r` after the dialog is gone is an
     // empty REPL submit (no-op turn), harmless. Accounts WITHOUT the flag
     // never render the dialog and the writes are cheap insurance.
-    for (const ms of [1000, 2500, 5000, 8000]) {
+    // Hand the timer handles to the process so the first real prompt cancels
+    // any still-pending CR — otherwise a 5s/8s dismiss write could submit a
+    // mid-turn prompt now that the same PTY carries real prompts (#141 P2).
+    const dialogDismissTimers = [1000, 2500, 5000, 8000].map((ms) =>
       setTimeout(() => {
         try {
           pty.write("\r");
         } catch {
           /* pty may have exited already — non-fatal */
         }
-      }, ms);
-    }
-    return new PtyAgentProcess(agent.id, pty);
+      }, ms),
+    );
+    return new PtyAgentProcess(agent.id, pty, dialogDismissTimers);
   }
 
   private spawnChild(

@@ -14,7 +14,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { TelegramAdapter, extractReactionDirectives } from "../index";
+import { TelegramAdapter, extractReactionDirectives, isTelegramRateLimit } from "../index";
 import type { BusCore, SendPromptRequest } from "../../../bus/core";
 import type {
   Subscription,
@@ -142,6 +142,7 @@ interface AnswerCallbackCall {
  */
 class FakeTelegramApi implements TelegramApi {
   public readonly sendMessages: SendMessageCall[] = [];
+  public readonly editMessages: Array<{ chat_id: number; message_id: number; text: string }> = [];
   public readonly reactions: SetReactionCall[] = [];
   public readonly callbackAcks: AnswerCallbackCall[] = [];
 
@@ -183,6 +184,15 @@ class FakeTelegramApi implements TelegramApi {
   ): Promise<{ ok: boolean; result?: { message_id: number } }> {
     this.sendMessages.push(params);
     return { ok: true, result: { message_id: 1000 + this.sendMessages.length } };
+  }
+
+  async editMessageText(params: {
+    chat_id: number;
+    message_id: number;
+    text: string;
+  }): Promise<{ ok: boolean; result?: { message_id: number } | true }> {
+    this.editMessages.push(params);
+    return { ok: true, result: true };
   }
 
   async setMessageReaction(params: SetReactionCall): Promise<{ ok: boolean }> {
@@ -293,6 +303,25 @@ describe("extractReactionDirectives", () => {
   it("collapses runs of blank lines after tag removal", () => {
     const { cleanedText } = extractReactionDirectives("a\n\n\n\nb [react:👌]");
     expect(cleanedText).toBe("a\n\nb");
+  });
+});
+
+describe("isTelegramRateLimit (#141 review — spinner stop)", () => {
+  it("treats a 429 as a transient rate-limit (keep spinning)", () => {
+    expect(
+      isTelegramRateLimit(new Error("Telegram API editMessageText: 429 Too Many Requests")),
+    ).toBe(true);
+  });
+
+  it("treats a 400 (deleted/not-modified) as terminal (stop spinning)", () => {
+    expect(isTelegramRateLimit(new Error("Telegram API editMessageText: 400 Bad Request"))).toBe(
+      false,
+    );
+  });
+
+  it("treats non-Error values and unparseable messages as terminal", () => {
+    expect(isTelegramRateLimit("boom")).toBe(false);
+    expect(isTelegramRateLimit(new Error("network down"))).toBe(false);
   });
 });
 
@@ -540,6 +569,45 @@ describe("TelegramAdapter — response.text outbound", () => {
     // Tiny tick; the bus shouldn't deliver to our adapter's filter.
     await new Promise((r) => setTimeout(r, 30));
     expect(api.sendMessages).toHaveLength(0);
+  });
+
+  it("evicts the per-turn message after a final reply so a later edit_message sends fresh (#141 review)", async () => {
+    adapter = await startAdapter();
+    await feedInbound();
+
+    // Progress reply opens a live turn: a fresh message + spinner.
+    bus.emit({
+      ts: Date.now(),
+      agent_id: "triage",
+      session_id: "s1",
+      topic: "response.text",
+      payload: { text: "working", intent: "progress" },
+    });
+    await waitFor(() => api.sendMessages.length === 1);
+
+    // Final reply edits the live message in place, then evicts the entry.
+    bus.emit({
+      ts: Date.now(),
+      agent_id: "triage",
+      session_id: "s1",
+      topic: "response.text",
+      payload: { text: "done", intent: "final" },
+    });
+    await waitFor(() => api.editMessages.some((e) => e.text === "done"));
+    const editsAfterFinal = api.editMessages.length;
+
+    // edit_message now: the entry was evicted, so it must NOT edit a stale
+    // message — it falls back to a fresh send.
+    bus.emit({
+      ts: Date.now(),
+      agent_id: "triage",
+      session_id: "s1",
+      topic: "response.edit_text",
+      payload: { text: "afterthought" },
+    });
+    await waitFor(() => api.sendMessages.length === 2);
+    expect(api.editMessages.length).toBe(editsAfterFinal);
+    expect(api.sendMessages[1]?.text).toBe("afterthought");
   });
 });
 
@@ -841,8 +909,8 @@ describe("TelegramAdapter — stop()", () => {
     adapter = await startAdapter({
       routing: { chats: { "100": "triage", "200": "research" } },
     });
-    // Two agents × three topics = six subscriptions.
-    expect(bus.state().subscriberCount).toBe(6);
+    // Two agents × four topics (text, edit_text, permission, request_human) = eight.
+    expect(bus.state().subscriberCount).toBe(8);
     await adapter.stop();
     adapter = null;
     expect(bus.state().subscriberCount).toBe(0);
