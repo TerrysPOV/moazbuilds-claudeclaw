@@ -68,11 +68,22 @@ export class PtyAgentProcess implements AgentProcess {
   private readonly exitHandlers: ExitHandler[] = [];
   private readonly dataHandlers: DataHandler[] = [];
   private _exited = false;
+  /** Serializes the write/settle/CR sequence so concurrent prompts can't
+   *  interleave in the PTY input buffer (review #141 P1). */
+  private writeChain: Promise<void> = Promise.resolve();
+  /** Boot dialog-dismiss CR timers, owned so we can cancel them once a real
+   *  prompt is dispatched (review #141 P2). */
+  private dialogDismissTimers: ReturnType<typeof setTimeout>[];
 
-  constructor(agent_id: string, pty: PtyHandle) {
+  constructor(
+    agent_id: string,
+    pty: PtyHandle,
+    dialogDismissTimers: ReturnType<typeof setTimeout>[] = [],
+  ) {
     this.agent_id = agent_id;
     this.pty = pty;
     this.pid = pty.pid;
+    this.dialogDismissTimers = dialogDismissTimers;
     pty.onData((chunk) => {
       // Crash-signal observation ONLY (spec §5.3). Never parsed as model output.
       for (const h of this.dataHandlers) {
@@ -104,8 +115,12 @@ export class PtyAgentProcess implements AgentProcess {
     return Promise.resolve();
   }
 
-  async send_prompt_stream(line: string): Promise<void> {
+  send_prompt_stream(line: string): Promise<void> {
     if (this._exited) return Promise.reject(new Error(`agent ${this.agent_id} has exited`));
+    // A real prompt means claude has reached the REPL, so the boot dialog (if
+    // any) is already dismissed. Cancel the pending dialog-dismiss CR writes
+    // so a late one can't submit this prompt — or a follow-up — mid-turn.
+    this.cancelDialogDismissTimers();
     // Deliver an inbound prompt by typing it into claude's REPL via the PTY.
     //
     // Why not rely on `notifications/claude/channel` (the MCP path)? In a
@@ -118,9 +133,25 @@ export class PtyAgentProcess implements AgentProcess {
     // and the submitting CR in a single chunk is interpreted as a paste: the
     // text lands in the input box but is not submitted. So we write the text,
     // let the paste settle, then send the CR as a separate keystroke.
-    this.pty.write(line);
-    await new Promise((r) => setTimeout(r, 200));
-    this.pty.write("\r");
+    //
+    // The write/settle/CR sequence is chained per process so two prompts
+    // dispatched within the 200ms settle window serialise instead of
+    // interleaving their bytes in the PTY input buffer.
+    const run = this.writeChain.then(async () => {
+      if (this._exited) throw new Error(`agent ${this.agent_id} has exited`);
+      this.pty.write(line);
+      await new Promise((r) => setTimeout(r, 200));
+      this.pty.write("\r");
+    });
+    // Keep the chain alive past a rejected write so later prompts still run.
+    this.writeChain = run.catch(() => {});
+    return run;
+  }
+
+  /** Cancel any pending boot dialog-dismiss timers. Idempotent. */
+  private cancelDialogDismissTimers(): void {
+    for (const t of this.dialogDismissTimers) clearTimeout(t);
+    this.dialogDismissTimers = [];
   }
 
   onExit(handler: ExitHandler): void {
@@ -133,6 +164,7 @@ export class PtyAgentProcess implements AgentProcess {
 
   /** Internal — called by SessionManager.stop(). */
   _kill(signal?: string): void {
+    this.cancelDialogDismissTimers();
     try {
       this.pty.kill(signal);
     } catch {

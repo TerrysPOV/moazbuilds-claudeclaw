@@ -142,6 +142,7 @@ interface AnswerCallbackCall {
  */
 class FakeTelegramApi implements TelegramApi {
   public readonly sendMessages: SendMessageCall[] = [];
+  public readonly editMessages: Array<{ chat_id: number; message_id: number; text: string }> = [];
   public readonly reactions: SetReactionCall[] = [];
   public readonly callbackAcks: AnswerCallbackCall[] = [];
 
@@ -183,6 +184,15 @@ class FakeTelegramApi implements TelegramApi {
   ): Promise<{ ok: boolean; result?: { message_id: number } }> {
     this.sendMessages.push(params);
     return { ok: true, result: { message_id: 1000 + this.sendMessages.length } };
+  }
+
+  async editMessageText(params: {
+    chat_id: number;
+    message_id: number;
+    text: string;
+  }): Promise<{ ok: boolean; result?: { message_id: number } | true }> {
+    this.editMessages.push(params);
+    return { ok: true, result: true };
   }
 
   async setMessageReaction(params: SetReactionCall): Promise<{ ok: boolean }> {
@@ -559,6 +569,45 @@ describe("TelegramAdapter — response.text outbound", () => {
     // Tiny tick; the bus shouldn't deliver to our adapter's filter.
     await new Promise((r) => setTimeout(r, 30));
     expect(api.sendMessages).toHaveLength(0);
+  });
+
+  it("evicts the per-turn message after a final reply so a later edit_message sends fresh (#141 review)", async () => {
+    adapter = await startAdapter();
+    await feedInbound();
+
+    // Progress reply opens a live turn: a fresh message + spinner.
+    bus.emit({
+      ts: Date.now(),
+      agent_id: "triage",
+      session_id: "s1",
+      topic: "response.text",
+      payload: { text: "working", intent: "progress" },
+    });
+    await waitFor(() => api.sendMessages.length === 1);
+
+    // Final reply edits the live message in place, then evicts the entry.
+    bus.emit({
+      ts: Date.now(),
+      agent_id: "triage",
+      session_id: "s1",
+      topic: "response.text",
+      payload: { text: "done", intent: "final" },
+    });
+    await waitFor(() => api.editMessages.some((e) => e.text === "done"));
+    const editsAfterFinal = api.editMessages.length;
+
+    // edit_message now: the entry was evicted, so it must NOT edit a stale
+    // message — it falls back to a fresh send.
+    bus.emit({
+      ts: Date.now(),
+      agent_id: "triage",
+      session_id: "s1",
+      topic: "response.edit_text",
+      payload: { text: "afterthought" },
+    });
+    await waitFor(() => api.sendMessages.length === 2);
+    expect(api.editMessages.length).toBe(editsAfterFinal);
+    expect(api.sendMessages[1]?.text).toBe("afterthought");
   });
 });
 

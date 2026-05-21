@@ -366,8 +366,9 @@ export class TelegramAdapter {
     // claude emits its first reply. The first reply edits this message in place
     // (see handleResponseText). Guarantees visible feedback regardless of
     // whether claude takes the DIRECT or PROGRESSIVE pattern.
+    const key = this.convKey(agentId, chatId);
     void this.api.sendChatAction({ chat_id: chatId, action: "typing" }).catch(() => {});
-    this.stopSpinner(agentId);
+    this.stopSpinner(key);
     const FRAMES = TelegramAdapter.SPINNER_FRAMES;
     try {
       const res = await this.api.sendMessage({
@@ -377,13 +378,13 @@ export class TelegramAdapter {
       });
       const id = res?.ok && res.result ? res.result.message_id : null;
       if (id != null) {
-        this.lastBotMessage.set(agentId, {
+        this.lastBotMessage.set(key, {
           chat_id: chatId,
           message_id: id,
           message_thread_id: message.message_thread_id,
         });
-        this.turnActive.add(agentId);
-        this.startSpinner(agentId, "...", chatId, id);
+        this.turnActive.add(key);
+        this.startSpinner(key, "...", chatId, id);
       }
     } catch (err) {
       this.logger.error(`[telegram-adapter] placeholder sendMessage failed`, err);
@@ -434,13 +435,14 @@ export class TelegramAdapter {
     const intent = (event.payload as { intent?: string })?.intent;
     const isProgress = intent === "progress";
     const FRAMES = TelegramAdapter.SPINNER_FRAMES;
+    const key = this.convKey(agentId, target.chat_id);
     // Every new reply replaces the active animated message — stop any prior spinner.
-    this.stopSpinner(agentId);
+    this.stopSpinner(key);
     if (cleanedText.length === 0) {
       // nothing textual; fall through to reactions.
-    } else if (this.turnActive.has(agentId)) {
+    } else if (this.turnActive.has(key)) {
       // Live turn message exists (placeholder or earlier progress) — edit in place.
-      const live = this.lastBotMessage.get(agentId);
+      const live = this.lastBotMessage.get(key);
       if (live) {
         const editText = isProgress ? `${FRAMES[0]} ${cleanedText}` : cleanedText;
         try {
@@ -453,9 +455,12 @@ export class TelegramAdapter {
           this.logger.error(`[telegram-adapter] turn edit failed`, err);
         }
         if (isProgress) {
-          this.startSpinner(agentId, cleanedText, live.chat_id, live.message_id);
+          this.startSpinner(key, cleanedText, live.chat_id, live.message_id);
         } else {
-          this.turnActive.delete(agentId); // final — turn done.
+          // Final — turn done. Evict so a later unprompted reply (cron /
+          // heartbeat) doesn't edit this now-stale message id.
+          this.turnActive.delete(key);
+          this.lastBotMessage.delete(key);
         }
       }
     } else {
@@ -468,16 +473,17 @@ export class TelegramAdapter {
           message_thread_id: target.message_thread_id,
         });
         const id = res?.ok && res.result ? res.result.message_id : null;
-        if (id != null) {
-          this.lastBotMessage.set(agentId, {
+        // Only retain the message for follow-up edits while a turn is live
+        // (progress). A fresh final reply needs no future edit, so leaving no
+        // entry avoids the stale-message_id edit bug.
+        if (id != null && isProgress) {
+          this.lastBotMessage.set(key, {
             chat_id: target.chat_id,
             message_id: id,
             message_thread_id: target.message_thread_id,
           });
-          if (isProgress) {
-            this.turnActive.add(agentId);
-            this.startSpinner(agentId, cleanedText, target.chat_id, id);
-          }
+          this.turnActive.add(key);
+          this.startSpinner(key, cleanedText, target.chat_id, id);
         }
       } catch (err) {
         this.logger.error(`[telegram-adapter] sendMessage failed`, err);
@@ -502,17 +508,18 @@ export class TelegramAdapter {
     const newText = typeof payload?.text === "string" ? payload.text : "";
     if (newText.length === 0) return;
 
+    // edit_message carries no chat id — it targets the agent's current
+    // conversation, i.e. the last chat it was talking to.
+    const target = this.targetForAgent(agentId);
+    if (!target) {
+      this.logger.warn(`[telegram-adapter] edit_message with no target for ${agentId}`);
+      return;
+    }
+    const key = this.convKey(agentId, target.chat_id);
     const FRAMES = TelegramAdapter.SPINNER_FRAMES;
-    const last = this.lastBotMessage.get(agentId);
+    const last = this.lastBotMessage.get(key);
     if (!last) {
-      // No prior outbound — fall back to a new message.
-      const target = this.targetForAgent(agentId);
-      if (!target) {
-        this.logger.warn(
-          `[telegram-adapter] edit_message with no prior outbound and no target for ${agentId}`,
-        );
-        return;
-      }
+      // No prior outbound for this conversation — fall back to a new message.
       try {
         const res = await this.api.sendMessage({
           chat_id: target.chat_id,
@@ -521,7 +528,7 @@ export class TelegramAdapter {
         });
         const id = res?.ok && res.result ? res.result.message_id : null;
         if (id != null) {
-          this.lastBotMessage.set(agentId, {
+          this.lastBotMessage.set(key, {
             chat_id: target.chat_id,
             message_id: id,
             message_thread_id: target.message_thread_id,
@@ -533,8 +540,8 @@ export class TelegramAdapter {
       return;
     }
     // Edit the live message; keep animating if a spinner was running.
-    const wasSpinning = this.spinnerState.has(agentId);
-    this.stopSpinner(agentId);
+    const wasSpinning = this.spinnerState.has(key);
+    this.stopSpinner(key);
     const sendText = wasSpinning ? `${FRAMES[0]} ${newText}` : newText;
     try {
       await this.api.editMessageText({
@@ -543,7 +550,7 @@ export class TelegramAdapter {
         text: sendText,
       });
       if (wasSpinning) {
-        this.startSpinner(agentId, newText, last.chat_id, last.message_id);
+        this.startSpinner(key, newText, last.chat_id, last.message_id);
       }
     } catch (err) {
       this.logger.error(`[telegram-adapter] editMessageText failed`, err);
@@ -554,29 +561,24 @@ export class TelegramAdapter {
   private static readonly SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
   private static readonly SPINNER_INTERVAL_MS = 1100;
 
-  private stopSpinner(agentId: string): void {
-    const s = this.spinnerState.get(agentId);
+  private stopSpinner(key: string): void {
+    const s = this.spinnerState.get(key);
     if (s) {
       clearInterval(s.timer);
-      this.spinnerState.delete(agentId);
+      this.spinnerState.delete(key);
     }
   }
 
-  private startSpinner(
-    agentId: string,
-    baseText: string,
-    chat_id: number,
-    message_id: number,
-  ): void {
-    this.stopSpinner(agentId);
+  private startSpinner(key: string, baseText: string, chat_id: number, message_id: number): void {
+    this.stopSpinner(key);
     const FRAMES = TelegramAdapter.SPINNER_FRAMES;
-    this.spinnerState.set(agentId, {
+    this.spinnerState.set(key, {
       baseText,
       frame: 0,
       chat_id,
       message_id,
       timer: setInterval(() => {
-        const cur = this.spinnerState.get(agentId);
+        const cur = this.spinnerState.get(key);
         if (!cur) return;
         cur.frame = (cur.frame + 1) % FRAMES.length;
         void this.api
@@ -591,10 +593,21 @@ export class TelegramAdapter {
             // when the user deletes the placeholder); stop the spinner
             // so the 1.1s interval doesn't hammer the API with a
             // forever-failing edit loop.
-            if (!isTelegramRateLimit(err)) this.stopSpinner(agentId);
+            if (!isTelegramRateLimit(err)) this.stopSpinner(key);
           });
       }, TelegramAdapter.SPINNER_INTERVAL_MS),
     });
+  }
+
+  /**
+   * Conversation key for the per-turn outbound maps. Telegram routing can map
+   * multiple chats to one agent (issue #139), so keying `lastBotMessage` /
+   * `spinnerState` / `turnActive` by `agentId` alone lets chat B's reply edit
+   * chat A's placeholder. Compose with `chat_id` so each conversation tracks
+   * its own outbound message.
+   */
+  private convKey(agentId: string, chatId: number): string {
+    return `${agentId}:${chatId}`;
   }
 
   private async handlePermissionRequest(agentId: string, event: BusEvent): Promise<void> {
