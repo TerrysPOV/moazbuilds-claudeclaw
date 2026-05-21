@@ -17,7 +17,11 @@
  */
 
 import type { ChildProcess } from "node:child_process";
-import { sanitizePtyPromptText } from "../runner/pty-process";
+// Import from the standalone sanitiser module to avoid pulling bun-pty into
+// `session-agent-process` at startup. Non-PTY supervision modes (process,
+// process-stream-json, tmux) must not require the native PTY dep just to
+// construct an AgentProcess (Codex P1 on PR #149).
+import { sanitizePtyPromptText } from "../runner/pty-prompt-sanitizer";
 import type { SupervisionMode } from "./types";
 
 export type ExitHandler = (code: number) => void;

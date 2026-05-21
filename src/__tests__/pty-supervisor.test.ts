@@ -1357,4 +1357,75 @@ describe("pty-supervisor housekeeping (issue #65)", () => {
     expect(snapshotSupervisor().ptys.length).toBe(0);
     expect(spawned[0].disposed).toBe(true);
   });
+
+  it("respawn after crash resets the spawn-grace window (Codex P1)", async () => {
+    // A long-lived PTY that crashes and respawns must NOT be reaped during the
+    // first post-respawn turn just because the entry was created long ago. The
+    // grace window is keyed off `lastSpawnedAt`, which resets on respawn.
+    let now = 1_000_000;
+    injectClock(() => now);
+    const sleeps: number[] = [];
+    injectSleep(async (ms) => {
+      sleeps.push(ms);
+    });
+
+    let globalCalls = 0;
+    const { spawn, spawned } = makeSpawnTracker(() =>
+      makeFakePty("longlived", {
+        onTurn: async (prompt) => {
+          const callNum = globalCalls++;
+          if (callNum === 1) {
+            // Second turn crashes — triggers respawn on retry.
+            throw new PtyClosedError("crash", 1, "SIGPIPE");
+          }
+          return {
+            text: `echo:${prompt}`,
+            bytesCaptured: 0,
+            cleanBoundary: true,
+            sessionId: "s",
+          };
+        },
+      }),
+    );
+    injectSpawnPty(spawn);
+    await initSupervisor();
+
+    // First turn at t=0 — successful.
+    await runOnPty("thread:longlived", "first", { timeoutMs: 1000, threadId: "longlived" });
+    expect(spawned.length).toBe(1);
+
+    // Jump 1 hour forward. Second turn triggers crash + respawn; the respawn's
+    // post-turn lastTurnEndedAt is also set, but we'll force the
+    // never-completed-a-turn condition on the new PTY to exercise the grace
+    // path. The key invariant: lastSpawnedAt is now the respawn time, not the
+    // original entry creation time.
+    now += 60 * 60_000;
+    await runOnPty("thread:longlived", "second", { timeoutMs: 1000, threadId: "longlived" });
+    expect(spawned.length).toBe(2);
+
+    // Force the post-respawn PTY into the "never finished a turn" state to
+    // exercise the grace check from `lastSpawnedAt`.
+    spawned[1].setLastTurnEndedAt(0);
+
+    const mod = await import("../runner/pty-supervisor");
+    const reapNow = (
+      mod as unknown as {
+        __reapNowForTests: (clock: () => number) => Promise<void>;
+      }
+    ).__reapNowForTests;
+
+    // 60 min after respawn — still inside the 90-min grace. Healthy respawn
+    // must NOT be reaped. (Without the lastSpawnedAt fix, the old createdAt
+    // would put us 2h past spawn and the entry would be evicted.)
+    now += 60 * 60_000;
+    await reapNow(() => now);
+    expect(snapshotSupervisor().ptys.length).toBe(1);
+    expect(spawned[1].disposed).toBe(false);
+
+    // 91 min after respawn — now past grace. Reap.
+    now += 31 * 60_000;
+    await reapNow(() => now);
+    expect(snapshotSupervisor().ptys.length).toBe(0);
+    expect(spawned[1].disposed).toBe(true);
+  });
 });

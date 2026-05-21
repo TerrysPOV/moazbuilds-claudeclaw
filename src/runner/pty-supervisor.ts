@@ -405,9 +405,13 @@ interface PtyEntry {
   /** Last time `runOnPty` was called against this key. Drives LRU eviction
    *  when `pty.maxConcurrent` is hit. Adhoc-only — named agents are exempt. */
   lastAccessedAt: number;
-  /** Wall-clock at entry creation. Used by `reapIdle` to time out PTYs that
-   *  never complete a first turn (issue #65 item 6). */
-  createdAt: number;
+  /** Wall-clock at the most recent spawn (or respawn). Used by `reapIdle` to
+   *  time out PTYs that never complete a first turn after a (re)spawn
+   *  (issue #65 item 6). Reset on every respawn so a healthy long-lived PTY
+   *  that crashes and respawns gets a fresh grace window — keying off entry
+   *  creation time would incorrectly evict it (Codex P1 on PR #149).
+   *  Stays 0 until the first successful spawn completes. */
+  lastSpawnedAt: number;
 }
 
 interface SupervisorState {
@@ -693,7 +697,9 @@ async function getOrCreateEntry(
     spawnOpts: null,
     lock: Promise.resolve(),
     lastAccessedAt: now,
-    createdAt: now,
+    // Stamped at every (re)spawn site below. 0 until the first spawn lands —
+    // `reapIdle` treats that as "still admitting, leave alone".
+    lastSpawnedAt: 0,
   };
   state.ptys.set(sessionKey, entry);
   return entry;
@@ -1100,6 +1106,9 @@ async function spawnEntry(
 
   try {
     entry.pty = await spawn(spawnOpts);
+    // Stamp the (re)spawn time so the reaper's spawn-grace window restarts
+    // from now — see PtyEntry.lastSpawnedAt + reapIdle.
+    entry.lastSpawnedAt = _clock();
   } catch (err) {
     // If the spawn itself failed AFTER we synthesized an --mcp-config file,
     // clean up the on-disk artifact so the next attempt doesn't leak it on
@@ -1179,6 +1188,10 @@ async function respawnEntry(entry: PtyEntry): Promise<void> {
   entry.pty = null;
   entry.pty = await spawn(opts);
   entry.spawnOpts = opts;
+  // Reset the spawn-grace window on respawn so a healthy long-lived PTY that
+  // crashes doesn't get immediately reaped before its first post-respawn turn
+  // (Codex P1 on PR #149).
+  entry.lastSpawnedAt = _clock();
 }
 
 async function runTurnWithRetries(
@@ -1317,7 +1330,9 @@ async function reapIdle(opts: SupervisorOptions): Promise<void> {
   // forever, so a claude that crashed during spawn (or any case where
   // `lastTurnEndedAt` stays 0) would hold a slot under `maxConcurrent`
   // indefinitely. Give a generous grace period (3× idleReapMinutes) so slow
-  // first-turn cases aren't false-positives, then reap by `createdAt`.
+  // first-turn cases aren't false-positives, then reap by `lastSpawnedAt`.
+  // Keying off `lastSpawnedAt` (not entry-creation time) lets a long-lived PTY
+  // that crashes and respawns get a fresh grace window — Codex P1 on PR #149.
   const spawnGraceCutoff = now - opts.idleReapMinutes * 60_000 * 3;
   const toReap: PtyEntry[] = [];
   for (const entry of state.ptys.values()) {
@@ -1326,8 +1341,12 @@ async function reapIdle(opts: SupervisorOptions): Promise<void> {
     if (entry.kind === "named" && opts.namedAgentsAlwaysAlive) continue;
     const last = entry.pty.lastTurnEndedAt();
     if (last === 0) {
-      // Mid-spawn or stuck: reap only past the grace period.
-      if (entry.createdAt < spawnGraceCutoff) toReap.push(entry);
+      // Mid-spawn or stuck. If `lastSpawnedAt === 0` we haven't even finished
+      // the first spawn yet — leave it alone. Otherwise reap once we're past
+      // the grace window counted from the most recent (re)spawn.
+      if (entry.lastSpawnedAt !== 0 && entry.lastSpawnedAt < spawnGraceCutoff) {
+        toReap.push(entry);
+      }
       continue;
     }
     if (last < cutoff) toReap.push(entry);
