@@ -181,6 +181,28 @@ describe("DiscordAdapter — outbound response.text", () => {
     expect(h.rest.sent.map((m) => m.channelId).sort()).toEqual(["ch-2", "th-1"]);
   });
 
+  it("subscribes agents listed only in primaryChannelByAgent (Codex P2 #151)", async () => {
+    // An operator who sets a primary channel for an agent without listing
+    // the agent in channels/threads/dmAgentId must still get a subscription.
+    // Without this, the parser accepts the config but the adapter mounts
+    // with zero subscriptions and the routed event never arrives.
+    adapter = await startAdapter(h, {
+      routing: {
+        channels: { "ch-2": "ops" },
+        threads: { "th-1": "ops" },
+        primaryChannelByAgent: { "scheduler-only": "ch-9" },
+      },
+    });
+    h.bus.emit({
+      ts: Date.now(),
+      agent_id: "scheduler-only",
+      session_id: "s",
+      topic: "response.text",
+      payload: { text: "scheduler tick", origin: "cron", origin_id: "job:nightly" },
+    });
+    expect(h.rest.sent.map((m) => m.channelId)).toEqual(["ch-9"]);
+  });
+
   it("DROPS channel.permission_request whose origin belongs to another adapter", async () => {
     adapter = await startAdapter(h);
     h.bus.emit({

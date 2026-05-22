@@ -697,6 +697,12 @@ export class SlackAdapter {
     const set = new Set<string>();
     for (const agent of Object.values(this.channels)) set.add(agent);
     if (this.threadAgentId) set.add(this.threadAgentId);
+    // Include agents listed only in `primaryChannelByAgent`. Codex P2 on
+    // PR #151: parser accepts that shape; subscription set must too,
+    // otherwise outbound events never reach the adapter.
+    if (this.primaryChannelByAgent) {
+      for (const a of Object.keys(this.primaryChannelByAgent)) set.add(a);
+    }
     return Array.from(set);
   }
 

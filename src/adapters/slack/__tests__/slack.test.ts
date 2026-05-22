@@ -603,6 +603,27 @@ describe("SlackAdapter — response.text outbound", () => {
     await waitFor(() => api.sent.length >= 2);
     expect(api.sent.map((m) => m.channel).sort()).toEqual(["C100", "C200"]);
   });
+
+  it("subscribes agents listed only in primaryChannelByAgent (Codex P2 #151)", async () => {
+    // Parser allows config that mentions an agent only in
+    // primaryChannelByAgent. Adapter must subscribe that agent or outbound
+    // events never reach Slack.
+    adapter = await startAdapter({
+      routing: {
+        channels: { C100: "triage" },
+        primaryChannelByAgent: { "scheduler-only": "C500" },
+      },
+    });
+    bus.emit({
+      ts: Date.now(),
+      agent_id: "scheduler-only",
+      session_id: "s1",
+      topic: "response.text",
+      payload: { text: "scheduler tick", origin: "cron", origin_id: "job:nightly" },
+    });
+    await waitFor(() => api.sent.length > 0);
+    expect(api.sent.map((m) => m.channel)).toEqual(["C500"]);
+  });
 });
 
 /* ────────────────────────────────────────────────────────────────────── */
