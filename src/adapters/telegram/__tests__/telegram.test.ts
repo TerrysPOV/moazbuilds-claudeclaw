@@ -14,7 +14,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { TelegramAdapter, extractReactionDirectives, isTelegramRateLimit } from "../index";
+import { TelegramAdapter, extractReactionDirectives } from "../index";
 import type { BusCore, SendPromptRequest } from "../../../bus/core";
 import type {
   Subscription,
@@ -303,25 +303,6 @@ describe("extractReactionDirectives", () => {
   it("collapses runs of blank lines after tag removal", () => {
     const { cleanedText } = extractReactionDirectives("a\n\n\n\nb [react:👌]");
     expect(cleanedText).toBe("a\n\nb");
-  });
-});
-
-describe("isTelegramRateLimit (#141 review — spinner stop)", () => {
-  it("treats a 429 as a transient rate-limit (keep spinning)", () => {
-    expect(
-      isTelegramRateLimit(new Error("Telegram API editMessageText: 429 Too Many Requests")),
-    ).toBe(true);
-  });
-
-  it("treats a 400 (deleted/not-modified) as terminal (stop spinning)", () => {
-    expect(isTelegramRateLimit(new Error("Telegram API editMessageText: 400 Bad Request"))).toBe(
-      false,
-    );
-  });
-
-  it("treats non-Error values and unparseable messages as terminal", () => {
-    expect(isTelegramRateLimit("boom")).toBe(false);
-    expect(isTelegramRateLimit(new Error("network down"))).toBe(false);
   });
 });
 

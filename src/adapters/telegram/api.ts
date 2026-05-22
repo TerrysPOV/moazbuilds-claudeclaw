@@ -42,20 +42,29 @@ export function createTelegramApi(token: string): TelegramApi {
   // to that chat WITHOUT hitting the API, so a misbehaving caller (e.g. a
   // progress spinner) can't sustain the ban and it clears on its own.
   const floodUntil = new Map<string, number>();
-  async function call<T>(
+  // Per-chat send serialization (#154). Telegram rate-limits per chat, so two
+  // concurrent in-flight sends to the same chat would race the flood-cooldown
+  // write (neither's 429 blocks the other) and risk a burst. Chaining sends per
+  // chat keeps at most one in flight; `getUpdates` (no chat_id) is never chained.
+  const chatTail = new Map<string, Promise<unknown>>();
+
+  async function dispatch<T>(
     method: string,
     body: Record<string, unknown>,
-    signal?: AbortSignal,
+    signal: AbortSignal | undefined,
+    chatKey: string,
   ): Promise<T> {
-    const chatVal = (body as { chat_id?: unknown }).chat_id;
-    const chatKey = chatVal === undefined || chatVal === null ? "" : String(chatVal);
     if (chatKey) {
-      const until = floodUntil.get(chatKey) ?? 0;
-      const remaining = until - Date.now();
-      if (remaining > 0) {
-        throw new Error(
-          `Telegram API ${method}: 429 flood cooldown, ${Math.ceil(remaining / 1000)}s remaining for chat ${chatKey}`,
-        );
+      const until = floodUntil.get(chatKey);
+      if (until !== undefined) {
+        const remaining = until - Date.now();
+        if (remaining > 0) {
+          throw new Error(
+            `Telegram API ${method}: 429 flood cooldown, ${Math.ceil(remaining / 1000)}s remaining for chat ${chatKey}`,
+          );
+        }
+        // Cooldown elapsed — evict so the map doesn't grow unbounded (#154).
+        floodUntil.delete(chatKey);
       }
     }
     const res = await fetch(`${API_BASE}${token}/${method}`, {
@@ -82,6 +91,34 @@ export function createTelegramApi(token: string): TelegramApi {
       );
     }
     return (await res.json()) as T;
+  }
+
+  async function call<T>(
+    method: string,
+    body: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    const chatVal = (body as { chat_id?: unknown }).chat_id;
+    const chatKey = chatVal === undefined || chatVal === null ? "" : String(chatVal);
+    if (!chatKey) {
+      return dispatch<T>(method, body, signal, "");
+    }
+    // Chain this send after the chat's previous one (success or failure).
+    const prev = chatTail.get(chatKey) ?? Promise.resolve();
+    const run = prev.then(
+      () => dispatch<T>(method, body, signal, chatKey),
+      () => dispatch<T>(method, body, signal, chatKey),
+    );
+    const tail = run.then(
+      () => {},
+      () => {},
+    );
+    chatTail.set(chatKey, tail);
+    // Drop the tail once it settles and nothing newer chained (bounded growth).
+    void tail.then(() => {
+      if (chatTail.get(chatKey) === tail) chatTail.delete(chatKey);
+    });
+    return run;
   }
 
   return {

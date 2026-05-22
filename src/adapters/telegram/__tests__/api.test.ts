@@ -67,3 +67,38 @@ describe("createTelegramApi — per-chat flood cooldown", () => {
     );
   });
 });
+
+describe("createTelegramApi — per-chat send serialization (#154)", () => {
+  function stubConcurrencyTracker(): { maxConcurrent: number } {
+    const state = { inFlight: 0, maxConcurrent: 0 };
+    globalThis.fetch = (async () => {
+      state.inFlight += 1;
+      state.maxConcurrent = Math.max(state.maxConcurrent, state.inFlight);
+      await new Promise((r) => setTimeout(r, 25));
+      state.inFlight -= 1;
+      return new Response(JSON.stringify({ ok: true, result: {} }), { status: 200 });
+    }) as typeof fetch;
+    return state;
+  }
+
+  it("never has two in-flight sends to the same chat at once", async () => {
+    const tracker = stubConcurrencyTracker();
+    const api = createTelegramApi("test-token");
+    await Promise.all([
+      api.sendMessage({ chat_id: 1, text: "a" }),
+      api.sendMessage({ chat_id: 1, text: "b" }),
+      api.sendMessage({ chat_id: 1, text: "c" }),
+    ]);
+    expect(tracker.maxConcurrent).toBe(1);
+  });
+
+  it("lets different chats send concurrently", async () => {
+    const tracker = stubConcurrencyTracker();
+    const api = createTelegramApi("test-token");
+    await Promise.all([
+      api.sendMessage({ chat_id: 1, text: "a" }),
+      api.sendMessage({ chat_id: 2, text: "b" }),
+    ]);
+    expect(tracker.maxConcurrent).toBe(2);
+  });
+});

@@ -85,18 +85,6 @@ function eventBelongsToTelegram(event: BusEvent): boolean {
   return !CHANNEL_DRIVEN_ORIGINS.has(origin as BusOrigin);
 }
 
-/**
- * Whether a failed Telegram API call is a transient 429 rate-limit (worth
- * retrying) versus a terminal error. `createTelegramApi` throws errors of
- * the form `Telegram API <method>: <status> <statusText>`, so the HTTP
- * status is recoverable from the message. Used by the spinner loop to
- * decide whether to keep animating or stop — a deleted placeholder yields
- * a 400 that would otherwise loop forever.
- */
-export function isTelegramRateLimit(err: unknown): boolean {
-  return err instanceof Error && /: 429\b/.test(err.message);
-}
-
 export class TelegramAdapter {
   private readonly bus: BusCore;
   private readonly api: TelegramApi;
