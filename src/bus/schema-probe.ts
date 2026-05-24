@@ -145,6 +145,8 @@ async function captureClaudeVersion(claudeBin: string, timeoutMs = 5000): Promis
       // On Windows `claude` resolves to `claude.cmd`; since the CVE-2024-27980
       // fix Node refuses to spawn a .cmd/.bat without a shell (EINVAL/EFTYPE),
       // so route through the shell there. Args are static — no injection risk.
+      // (runner.ts resolves the underlying claude.exe instead — that's for
+      // Bun.spawn + long argvs; here we're on node:child_process with `--version`.)
       shell: process.platform === "win32",
     });
     let out = "";
