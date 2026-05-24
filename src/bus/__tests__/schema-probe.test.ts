@@ -291,6 +291,8 @@ describe("encodeCwd", () => {
   it("encodes Windows separators and the drive colon on win32", () => {
     // Verified against claude.exe on a Win11 host: C:\Users\foo\bar -> C--Users-foo-bar.
     expect(encodeCwd("C:\\Users\\foo\\bar", "win32")).toBe("C--Users-foo-bar");
+    // Forward-slash Windows paths encode the same way.
+    expect(encodeCwd("C:/Users/foo/bar", "win32")).toBe("C--Users-foo-bar");
     // POSIX must NOT touch ':' (a legal path char) — only '/' becomes '-'.
     expect(encodeCwd("/home/foo:bar/baz", "linux")).toBe("-home-foo:bar-baz");
   });
