@@ -67,9 +67,9 @@ If you see a PR titled **"chore: sync upstream"** — that's the robot doing its
 
 ## What's new in v2.0 — Bus runtime is the default
 
-As of v2.0 (May 2026), ClaudeClaw+ runs on a new **event-bus architecture**. The legacy `claude -p` subprocess path (`runtime: "pty"`) still exists as a one-release-cycle opt-out, but every new install defaults to `runtime: "bus"`.
+As of v2.0 (May 2026), ClaudeClaw+ runs on a new **event-bus architecture** by default. The `claude -p` subprocess path (`runtime: "pty"`) remains a **permanent first-class option** — especially for enterprise deployments where API billing is the safer or only viable route (audit trails, cost ceilings, regulatory constraints). Operators pick per deployment: bus for subscription-billed interactive work, `claude -p` for API-billed programmatic work. Both are fully supported, side by side.
 
-Here's what changes:
+Here's what changes when you pick the bus runtime:
 
 - **One long-lived `claude` process per declared agent**, not a fresh subprocess per event. Subscription billing covers daemon work; the Agent SDK credit pool stays untouched.
 - **Typed event bus (`BusCore`)** sits between adapters (Discord, Telegram, Slack, web UI, cron, REST, CLI) and agents. Inbound events publish to topics; agents subscribe; replies flow back as `response.text`, `channel.permission_request`, or `system.request_human`.
@@ -79,6 +79,8 @@ Here's what changes:
 - **MCP multiplexer** fronts shared MCP servers behind a single HTTP endpoint with per-agent identity tokens — no per-PTY process explosion.
 
 Architecture spec: [`docs/ClaudeClaw_Plus_Bus_Architecture_Spec.md`](docs/ClaudeClaw_Plus_Bus_Architecture_Spec.md).
+
+Huge thanks to [@Nibbler1250](https://github.com/Nibbler1250) for landing many of the heavy adapter pieces that made the bus runtime production-ready — composite-keyed routing, inline progress UX, the per-chat flood protection, the Windows host validation, and the getUpdates timeout recovery. The bus is shipping today because of that work.
 
 ---
 
@@ -217,19 +219,31 @@ Adapter coverage as of v2.0:
 
 These features originated as PRs to `moazbuilds/claudeclaw` and have been closed upstream — they're out of scope for the lightweight core and live here permanently. Links below point to the originating PRs so you can read the full rationale.
 
-### PTY runtime — legacy fallback (was the v1 path; bus is now default)
+### `claude -p` runtime — permanent first-class option for API-billed deployments
 
 **Tracking issue: [#61](https://github.com/TerrysPOV/ClaudeClaw-Plus/issues/61) · Merged PR: [#62](https://github.com/TerrysPOV/ClaudeClaw-Plus/pull/62)**
 
-The PTY runtime kicked off the work to escape `claude -p` billing (Anthropic's 2026-06-15 split routes non-interactive calls to a separate Agent SDK credit pool). It graduated into the bus runtime — the bus uses the same PTY supervision internally but adds the typed event bus, multi-channel routing, per-agent isolation, and the MCP multiplexer on top.
+`runtime: "pty"` selects the `claude -p` subprocess path — one `claude -p` invocation per event. From 2026-06-15 onwards this routes through Anthropic's Agent SDK credit pool (API billing), separate from the Pro/Max subscription pool used by interactive sessions.
 
-If you're on a v1 deployment and not yet ready to migrate, you can opt back for one release cycle:
+This path is **not** going away. For many production deployments — particularly enterprise installs with audit, cost-ceiling, or regulatory constraints — API billing is the safer or only viable route. We keep `claude -p` as a permanent, fully supported first-class option:
 
 ```json
 "runtime": "pty"
 ```
 
-The PTY-only path keeps the v1 behaviour byte-identical (`claude -p` subprocesses for every event). No bus, no multi-channel routing, no per-agent isolation. New deployments should not pick this — use `runtime: "bus"` (the default).
+**When to pick `claude -p` over bus:**
+
+- **Audit / compliance**: every invocation is its own subprocess with a clean stdin/stdout boundary — easier to log, intercept, and reason about than a long-lived interactive session.
+- **Predictable cost ceilings**: API billing is metered per-token; subscription billing is harder to attribute per-request.
+- **Regulatory / data-residency**: some setups require the API path specifically because of vendor contract scope.
+- **No long-lived processes**: each event is a clean subprocess; no per-agent state to manage, no PTY supervision, no MCP multiplexer.
+
+**When to pick bus over `claude -p`:**
+
+- **Subscription billing**: daemon work bills against your existing Pro/Max subscription, not the Agent SDK pool.
+- **Lower latency**: long-lived `claude` sessions skip the per-event cold start.
+- **Multi-channel routing**: same agent reachable from Discord/Telegram/Slack/web UI with origin-aware replies.
+- **Permission gate inline**: tool calls prompt for approval in whichever channel you're on.
 
 #### Settings block (defaults shown)
 

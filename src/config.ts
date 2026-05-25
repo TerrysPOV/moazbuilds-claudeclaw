@@ -200,8 +200,10 @@ const DEFAULT_SETTINGS: Settings = {
   watchdog: { maxConsecutiveTimeouts: null, maxRuntimeSeconds: null },
   session: { autoRotate: false, maxMessages: 50, maxAgeHours: 24, summaryPath: "" },
   // Default runtime: `bus` (Sprint 5.4 flip after Hetzner staging soak ended
-  // 2026-05-25). Operators on existing v1 deployments who haven't migrated
-  // can opt back to `runtime: "pty"` in settings.json for one release cycle.
+  // 2026-05-25). `runtime: "pty"` remains as a permanent first-class option
+  // for operators who need the `claude -p` / API-billed path — particularly
+  // enterprise deployments where audit, cost-ceiling, or regulatory
+  // constraints make API billing the safer or only viable route.
   runtime: "bus",
   // Default no agents. Operators who opt in to `runtime: "bus"` declare
   // agents explicitly. Spec §5.3 / §10 Sprint 5.2.
@@ -604,10 +606,12 @@ export interface Settings {
   timeouts: TimeoutsConfig;
   /**
    * Daemon runtime selector. Defaults to `"bus"` (event-bus + per-agent
-   * processes, multi-channel routing, MCP multiplexer). Operators on
-   * pre-v2 deployments can opt back to `"pty"` in `settings.json` for the
-   * legacy `claude -p` subprocess path — the migration window stays open
-   * for one release cycle.
+   * processes, multi-channel routing, MCP multiplexer) — subscription-billed
+   * interactive mode. `"pty"` selects the `claude -p` subprocess path —
+   * API-billed (Agent SDK pool post-2026-06-15), kept as a permanent
+   * first-class option for enterprise deployments where API billing is the
+   * safer or only viable route (audit trails, predictable cost ceilings,
+   * regulatory constraints).
    */
   runtime: RuntimeMode;
   /**
