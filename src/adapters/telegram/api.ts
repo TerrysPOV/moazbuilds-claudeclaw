@@ -16,6 +16,29 @@ import type { TelegramApi } from "./types";
 const API_BASE = "https://api.telegram.org/bot";
 
 /**
+ * Client-side hard-timeout buffer (ms) added on top of the `getUpdates`
+ * server-side long-poll window. The long-poll itself can legitimately hold
+ * the connection open for `timeoutSeconds`; we only want to abort a request
+ * that is genuinely stuck (half-open socket after a gateway 502/504 or a
+ * network blip), so the client timeout is `timeoutSeconds*1000 + BUFFER`.
+ * Without this, a stuck `await getUpdates(...)` never resolves and never
+ * rejects, freezing the poll loop silently — the bot goes deaf with no error
+ * logged until a manual restart. See `index.ts` `pollLoop`: a TimeoutError
+ * (distinct from stop()'s AbortError) falls through to the catch → sleep →
+ * retry, so the loop self-heals.
+ */
+export const GETUPDATES_TIMEOUT_BUFFER_MS = 5_000;
+
+/** Options for {@link createTelegramApi}. */
+export interface TelegramApiOptions {
+  /**
+   * Override the {@link GETUPDATES_TIMEOUT_BUFFER_MS} buffer. Primarily for
+   * tests that need a short client timeout; production uses the default.
+   */
+  getUpdatesTimeoutBufferMs?: number;
+}
+
+/**
  * Build a `TelegramApi` instance bound to a particular bot token.
  *
  * `allowed_updates` differences vs `src/commands/telegram.ts:2177`:
@@ -34,7 +57,8 @@ const API_BASE = "https://api.telegram.org/bot";
  *   - Errors throw with `${method}: ${status} ${statusText}` so the
  *     adapter's `safe*` wrappers can log a useful one-liner.
  */
-export function createTelegramApi(token: string): TelegramApi {
+export function createTelegramApi(token: string, options: TelegramApiOptions = {}): TelegramApi {
+  const getUpdatesBufferMs = options.getUpdatesTimeoutBufferMs ?? GETUPDATES_TIMEOUT_BUFFER_MS;
   // Per-chat flood cooldown. Telegram answers a flooded chat with HTTP 429 and
   // a `parameters.retry_after` (seconds). Until that window passes, every
   // further send to that chat is rejected too — and each rejected attempt can
@@ -123,6 +147,16 @@ export function createTelegramApi(token: string): TelegramApi {
 
   return {
     async getUpdates(offset, timeoutSeconds, signal) {
+      // `timeout` is the SERVER-side long-poll window; on its own there is no
+      // client-side deadline, so a half-open connection makes this await hang
+      // forever and freezes the poll loop. Layer a client hard-timeout that
+      // fires `timeoutSeconds + buffer` later. `AbortSignal.timeout` aborts
+      // with a TimeoutError (NOT the AbortError that stop()'s manual abort
+      // produces), and `AbortSignal.any` forwards whichever source fires
+      // first — so the loop's catch keeps treating stop() as a clean exit
+      // while a genuine hang surfaces as a retryable error.
+      const deadline = AbortSignal.timeout(timeoutSeconds * 1000 + getUpdatesBufferMs);
+      const combined = signal ? AbortSignal.any([signal, deadline]) : deadline;
       return call(
         "getUpdates",
         {
@@ -130,7 +164,7 @@ export function createTelegramApi(token: string): TelegramApi {
           timeout: timeoutSeconds,
           allowed_updates: ["message", "edited_message", "callback_query"],
         },
-        signal,
+        combined,
       );
     },
     async sendMessage(params) {
