@@ -102,3 +102,67 @@ describe("createTelegramApi — per-chat send serialization (#154)", () => {
     expect(tracker.maxConcurrent).toBe(2);
   });
 });
+
+/**
+ * Hung long-poll recovery. A half-open connection (gateway 502/504 / network
+ * blip) leaves `fetch` neither resolving nor rejecting; without a client-side
+ * deadline `getUpdates` hangs forever and the poll loop freezes silently — the
+ * bot goes deaf with no error logged. `getUpdates` layers a client hard-timeout
+ * (`timeoutSeconds + buffer`) so a stuck request aborts and surfaces as a
+ * retryable error the loop can recover from.
+ */
+describe("createTelegramApi — getUpdates client timeout", () => {
+  /** Fetch that honors the abort signal like the real one but never resolves on its own. */
+  function stubHangingFetch(): { calls: number } {
+    const state = { calls: 0 };
+    globalThis.fetch = ((_url: string, init?: { signal?: AbortSignal }) => {
+      state.calls += 1;
+      return new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        if (!signal) return; // mimic a request that never settles
+        if (signal.aborted) {
+          reject(signal.reason);
+          return;
+        }
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    }) as typeof fetch;
+    return state;
+  }
+
+  it("aborts a hung getUpdates within the client timeout instead of hanging forever", async () => {
+    const tracker = stubHangingFetch();
+    // timeoutSeconds=0 → client deadline is just the 80ms buffer.
+    const api = createTelegramApi("test-token", { getUpdatesTimeoutBufferMs: 80 });
+    const neverAbort = new AbortController();
+
+    const start = Date.now();
+    let caught: unknown;
+    await api.getUpdates(0, 0, neverAbort.signal).catch((e) => {
+      caught = e;
+    });
+    const elapsed = Date.now() - start;
+
+    expect(tracker.calls).toBe(1);
+    // The call rejected (did not hang) well inside a generous bound.
+    expect(elapsed).toBeLessThan(2000);
+    // A timeout abort surfaces as TimeoutError — distinct from stop()'s
+    // AbortError, so the poll loop logs + retries rather than treating it as
+    // a clean stop.
+    expect((caught as { name?: string })?.name).toBe("TimeoutError");
+  });
+
+  it("propagates the caller's stop() abort as AbortError (clean-stop path preserved)", async () => {
+    const tracker = stubHangingFetch();
+    // Large buffer so the timeout never fires first — the caller's abort wins.
+    const api = createTelegramApi("test-token", { getUpdatesTimeoutBufferMs: 60_000 });
+    const stop = new AbortController();
+
+    const p = api.getUpdates(0, 30, stop.signal).catch((e) => e);
+    stop.abort(); // mimic adapter stop()
+    const err = (await p) as { name?: string };
+
+    expect(tracker.calls).toBe(1);
+    expect(err?.name).toBe("AbortError");
+  });
+});
