@@ -914,3 +914,66 @@ describe("TelegramAdapter — stop()", () => {
     expect(elapsed).toBeLessThan(500);
   });
 });
+
+/* ────────────────────────────────────────────────────────────────────── */
+/* poll loop recovery from a hung / timed-out getUpdates                    */
+/* ────────────────────────────────────────────────────────────────────── */
+
+describe("TelegramAdapter — poll loop recovers from a timed-out getUpdates", () => {
+  it("logs the failure and keeps polling after a non-abort rejection", async () => {
+    // A getUpdates that rejects its FIRST call with a TimeoutError — exactly
+    // what the client-side hard-timeout throws when a long-poll hangs half-open
+    // — then delegates to the normal fake. A TimeoutError is NOT an AbortError,
+    // so the loop's catch must log + sleep + retry (self-heal) rather than
+    // break (which is reserved for stop()). Before the api.ts fix, the await
+    // simply never settled and the loop froze silently.
+    const inner = new FakeTelegramApi();
+    let calls = 0;
+    const flaky: TelegramApi = {
+      getUpdates: (offset, timeoutSeconds, signal) => {
+        calls += 1;
+        if (calls === 1) {
+          const err = new Error("The operation timed out.");
+          (err as Error & { name: string }).name = "TimeoutError";
+          return Promise.reject(err);
+        }
+        return inner.getUpdates(offset, timeoutSeconds, signal);
+      },
+      sendMessage: (p) => inner.sendMessage(p),
+      editMessageText: (p) => inner.editMessageText(p),
+      setMessageReaction: (p) => inner.setMessageReaction(p),
+      answerCallbackQuery: (p) => inner.answerCallbackQuery(p),
+    };
+
+    const errors: unknown[][] = [];
+    const logger = {
+      warn: () => {},
+      info: () => {},
+      error: (...a: unknown[]) => {
+        errors.push(a);
+      },
+    };
+
+    adapter = await startAdapter({ api: flaky, logger, pollIntervalMs: 5 });
+
+    // Loop must get past the first (rejected) call — proof it didn't freeze.
+    await waitFor(() => calls >= 2);
+
+    // And it dispatches a normal inbound update after recovering.
+    inner.enqueueUpdates([
+      {
+        message: {
+          message_id: 1,
+          from: { id: 42 },
+          chat: { id: 100, type: "private" },
+          text: "after recovery",
+        },
+      },
+    ]);
+    await waitFor(() => bus.prompts.length > 0);
+
+    expect(bus.prompts[0]?.text).toBe("after recovery");
+    // The timeout surfaced in the logs (observability), it wasn't swallowed.
+    expect(errors.some((a) => String(a[0]).includes("getUpdates failed"))).toBe(true);
+  });
+});
