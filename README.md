@@ -80,6 +80,8 @@ Here's what changes when you pick the bus runtime:
 
 Architecture spec: [`docs/ClaudeClaw_Plus_Bus_Architecture_Spec.md`](docs/ClaudeClaw_Plus_Bus_Architecture_Spec.md).
 
+Huge thanks to [@Nibbler1250](https://github.com/Nibbler1250) for landing many of the heavy adapter pieces that made the bus runtime production-ready — composite-keyed routing, inline progress UX, the per-chat flood protection, the Windows host validation, and the getUpdates timeout recovery. The bus is shipping today because of that work.
+
 ---
 
 ## Getting Started in 5 Minutes
