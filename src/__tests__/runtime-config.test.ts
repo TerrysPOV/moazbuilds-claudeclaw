@@ -41,36 +41,36 @@ afterAll(async () => {
   }
 });
 
-describe("parseSettings — runtime field (Sprint 5.1)", () => {
-  it('defaults to "pty" when the field is absent', async () => {
+describe("parseSettings — runtime field (Sprint 5.4 flip — bus is default)", () => {
+  it('defaults to "bus" when the field is absent', async () => {
     await writeRawSettings({});
     await reloadSettings();
-    expect(getSettings().runtime).toBe("pty");
+    expect(getSettings().runtime).toBe("bus");
   });
 
-  it('accepts "bus"', async () => {
+  it('accepts "bus" explicitly', async () => {
     await writeRawSettings({ runtime: "bus" });
     await reloadSettings();
     expect(getSettings().runtime).toBe("bus");
   });
 
-  it('accepts "pty" explicitly', async () => {
+  it('accepts "pty" (legacy opt-out for pre-v2 deployments)', async () => {
     await writeRawSettings({ runtime: "pty" });
     await reloadSettings();
     expect(getSettings().runtime).toBe("pty");
   });
 
-  it('falls back to "pty" on an unknown value', async () => {
+  it('falls back to "bus" on an unknown value', async () => {
     // Unknown string — parseRuntimeMode logs a warning but never throws.
     await writeRawSettings({ runtime: "buss" });
     await reloadSettings();
-    expect(getSettings().runtime).toBe("pty");
+    expect(getSettings().runtime).toBe("bus");
   });
 
-  it('falls back to "pty" when the field is non-string', async () => {
+  it('falls back to "bus" when the field is non-string', async () => {
     await writeRawSettings({ runtime: 42 });
     await reloadSettings();
-    expect(getSettings().runtime).toBe("pty");
+    expect(getSettings().runtime).toBe("bus");
   });
 
   it("trims whitespace before matching", async () => {

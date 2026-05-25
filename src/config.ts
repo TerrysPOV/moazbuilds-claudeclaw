@@ -199,9 +199,10 @@ const DEFAULT_SETTINGS: Settings = {
   },
   watchdog: { maxConsecutiveTimeouts: null, maxRuntimeSeconds: null },
   session: { autoRotate: false, maxMessages: 50, maxAgeHours: 24, summaryPath: "" },
-  // Default `pty` keeps v1 behaviour byte-identical. Sprint 5.4 will flip
-  // this to `bus` after staging validation.
-  runtime: "pty",
+  // Default runtime: `bus` (Sprint 5.4 flip after Hetzner staging soak ended
+  // 2026-05-25). Operators on existing v1 deployments who haven't migrated
+  // can opt back to `runtime: "pty"` in settings.json for one release cycle.
+  runtime: "bus",
   // Default no agents. Operators who opt in to `runtime: "bus"` declare
   // agents explicitly. Spec §5.3 / §10 Sprint 5.2.
   agents: [],
@@ -602,10 +603,11 @@ export interface Settings {
   sessionTimeoutMs: number;
   timeouts: TimeoutsConfig;
   /**
-   * Daemon runtime selector. Defaults to `"pty"` for v1 compatibility.
-   * Sprint 5.4 will flip the default to `"bus"` after Hetzner staging
-   * validation; until then operators opt in by setting this to `"bus"`
-   * in `settings.json`.
+   * Daemon runtime selector. Defaults to `"bus"` (event-bus + per-agent
+   * processes, multi-channel routing, MCP multiplexer). Operators on
+   * pre-v2 deployments can opt back to `"pty"` in `settings.json` for the
+   * legacy `claude -p` subprocess path — the migration window stays open
+   * for one release cycle.
    */
   runtime: RuntimeMode;
   /**
@@ -958,18 +960,19 @@ const VALID_RUNTIMES: ReadonlySet<RuntimeMode> = new Set(["pty", "bus"]);
 
 /**
  * Parse `settings.runtime`. Unknown / missing values fall back to the
- * v1-compatible `"pty"` default. Unknown values are logged so operators
- * notice typos (e.g. `runtime: "buss"`) rather than silently sliding back
- * to PTY.
+ * default `"bus"` (event-bus runtime, the v2.0 architecture). Operators
+ * who haven't migrated from v1 can explicitly set `runtime: "pty"`.
+ * Unknown values are logged so typos (e.g. `runtime: "buss"`) surface
+ * rather than silently selecting bus.
  */
 function parseRuntimeMode(raw: unknown): RuntimeMode {
-  if (typeof raw !== "string" || raw.length === 0) return "pty";
+  if (typeof raw !== "string" || raw.length === 0) return "bus";
   const trimmed = raw.trim() as RuntimeMode;
   if (VALID_RUNTIMES.has(trimmed)) return trimmed;
   console.warn(
-    `[config] settings.runtime="${raw}" is not a valid mode (expected "pty" | "bus"); falling back to "pty"`,
+    `[config] settings.runtime="${raw}" is not a valid mode (expected "pty" | "bus"); falling back to "bus"`,
   );
-  return "pty";
+  return "bus";
 }
 
 /**
