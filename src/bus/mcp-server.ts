@@ -79,6 +79,45 @@ export const CHANNEL_PERMISSION_CAPABILITY = "claude/channel/permission";
  */
 export const CHANNEL_ID = "plus-bus";
 
+/**
+ * Flatten a metadata object for the `notifications/claude/channel` `meta`
+ * payload (#169). Adapter metadata can carry nested objects or arrays — for
+ * example Discord attachment payloads at `adapters/discord/index.ts:286`
+ * land as:
+ *
+ *   { attachments: { images: [{ filename, url, ... }], voices: [...], ... } }
+ *
+ * Some downstream surfaces stringify each `meta` value with the default
+ * `String(v)` coercion, which produces the literal `"[object Object]"` for
+ * nested objects/arrays — Discord attachments stop being usable.
+ *
+ * This helper preserves primitives (string / number / boolean) verbatim and
+ * JSON-stringifies anything else (objects, arrays, null) so the agent can
+ * `JSON.parse` per-field when it needs structured access. Exported for
+ * tests.
+ */
+export function flattenChannelMeta(meta: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(meta)) {
+    if (v === undefined) continue;
+    if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") {
+      out[k] = v;
+    } else {
+      // Objects, arrays, null — everything claude would otherwise render as
+      // "[object Object]". JSON.stringify preserves structure as a string the
+      // agent can parse back.
+      try {
+        out[k] = JSON.stringify(v);
+      } catch {
+        // Circular reference or BigInt — fall back to a safe placeholder
+        // rather than throwing and breaking the whole prompt delivery.
+        out[k] = "[unserializable]";
+      }
+    }
+  }
+  return out;
+}
+
 /* ───────────────────────────────────────────────────────────────────── */
 /* IPC transport contract                                                */
 /* ───────────────────────────────────────────────────────────────────── */
@@ -380,16 +419,23 @@ export class BusMcpServer {
     // `{channel_id, payload: {text, metadata}}` shape from the v2 spec was
     // unverified speculation and would be rejected by the runtime. Sprint 1
     // integration corrected the spec to match aerolalit.
+    //
+    // #169: Adapter metadata can contain nested objects/arrays (e.g. Discord
+    // attachment payloads at adapters/discord/index.ts:286). Some downstream
+    // surfaces stringify these values directly and produce `[object Object]`.
+    // Flatten via `flattenChannelMeta` so object/array values land as JSON
+    // strings the agent can parse, rather than the default `String(v)`
+    // coercion which throws away structure entirely.
     void this.mcp
       .notification({
         method: "notifications/claude/channel",
         params: {
           content: msg.text,
-          meta: {
+          meta: flattenChannelMeta({
             origin: msg.origin,
             origin_id: msg.origin_id,
             ...(msg.metadata ?? {}),
-          },
+          }),
         },
       })
       .catch((err: unknown) => {
