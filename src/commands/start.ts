@@ -519,6 +519,28 @@ export async function start(args: string[] = []) {
         }
         handle.attachAdapters(adapters);
 
+        // Issue #166: write the daemon-generated architecture doc so the
+        // spawned agent reads its own runtime state at bootstrap. Best-effort
+        // — failures here log but do not block startup, because a missing
+        // arch doc degrades agent diagnostic quality but doesn't break
+        // operation.
+        try {
+          const { collectArchitectureSnapshot } = await import("../architecture-doc-snapshot");
+          const { writeArchitectureDoc, defaultArchitectureDocPath } = await import(
+            "../architecture-doc"
+          );
+          const snapshot = await collectArchitectureSnapshot({
+            settings,
+            spawnedAgentIds: handle.spawnedAgentIds,
+            adapters: adapters.map((a) => ({ name: a.name })),
+          });
+          const path = defaultArchitectureDocPath(process.cwd());
+          writeArchitectureDoc(snapshot, path);
+          console.log(`[${ts()}] wrote architecture doc: ${path}`);
+        } catch (docErr) {
+          console.warn(`[${ts()}] architecture doc write failed:`, docErr);
+        }
+
         // Sprint 5.2c: wire BusScheduler with heartbeat + jobs against
         // the first spawned agent (matches legacy single-global-agent
         // shape). The handle's stop() lifecycle owns scheduler
