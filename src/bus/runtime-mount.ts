@@ -33,6 +33,7 @@ import { SessionManager } from "./session-manager";
 import { wireSlashCommands } from "./wiring";
 import type { MountedAdapter } from "./adapter-wiring";
 import { stopBusAdapters } from "./adapter-wiring";
+import { detectOrphanAgents, formatOrphanWarnings } from "./orphan-agent-detect";
 
 export interface BusRuntimeHandle {
   /** The mounted BusCore. Adapters / tests subscribe via this. */
@@ -126,6 +127,13 @@ export interface MountBusRuntimeOptions {
    * stays predictable for agents that DO leave supervision unset.
    */
   spawnOrigin?: BusOrigin;
+  /**
+   * Project root used by the orphan-agent detector (issue #167) to scan
+   * `agents/<name>/jobs/` for directories the operator has populated but
+   * not declared in `settings.agents[]`. Defaults to `process.cwd()`.
+   * Tests inject a fixture root.
+   */
+  projectRoot?: string;
   /**
    * Adapters already mounted by the daemon (Sprint 5.2b). The mount
    * function does not construct adapters itself — the daemon wires
@@ -245,6 +253,15 @@ export async function mountBusRuntime(
     // fold-in lets the caller register adapters AFTER mount returns via
     // `attachAdapters`. Backwards-compatible: `opts.adapters` still
     // accepted for callers that wired before mount.
+    // Issue #167: catch the silent-job-death class (operator has
+    // agents/<name>/jobs/* on disk but didn't declare <name> in
+    // settings.agents[], so prompts publish with no consumer). Pure scan,
+    // fires once at startup.
+    const orphanReport = detectOrphanAgents(opts.agents ?? [], opts.projectRoot ?? process.cwd());
+    for (const line of formatOrphanWarnings(orphanReport)) {
+      logger.warn(line);
+    }
+
     const adapters: MountedAdapter[] = opts.adapters ? [...opts.adapters] : [];
     // Sprint 5.2c (PR #125): the daemon attaches a `BusScheduler`
     // handle after mount so heartbeat + cron triggers are torn down

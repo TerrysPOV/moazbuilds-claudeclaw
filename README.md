@@ -145,6 +145,8 @@ At least one agent is **required** under bus runtime — without it the daemon m
 
 Each agent has its own working directory, system prompt file, and memory file. See `BusAgentSettings` in [`src/config.ts`](src/config.ts) for the full per-agent shape.
 
+> ⚠ **Important if you have an `agents/` directory on disk.** Every directory under `agents/<name>/` with jobs in it MUST have a matching entry in `settings.agents[]`. If not, the bus runtime publishes prompts targeting `agent_id: <name>` but no process is subscribed, and your jobs silently fail. The daemon now logs `[bus-runtime] WARN: agent dir "<name>" has N scheduled job(s) ... but is not declared in settings.agents` at startup when a mismatch is detected — fix the warning either by adding `{ "id": "<name>" }` to `settings.agents` or by removing the orphan `agents/<name>/jobs/` directory.
+
 ### 5. Primary channel per agent (Discord + Slack)
 
 Without this, cron/heartbeat replies fan out to **every** channel routed to the agent. With it, those non-channel-driven events go to one designated channel only. Highly recommended on Discord/Slack with multi-channel setups:

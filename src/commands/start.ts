@@ -507,6 +507,7 @@ export async function start(args: string[] = []) {
         bus,
         sessionManager,
         agents: agentConfigs,
+        projectRoot: process.cwd(),
       });
       // The mount succeeded — from here on, ANY error must call
       // handle.stop() before falling through to legacy, otherwise the
