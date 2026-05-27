@@ -636,6 +636,57 @@ describe("TelegramAdapter — response.text outbound", () => {
     expect(api.sendMessages[0]?.text).toBe("reply for 100");
   });
 
+  it("preserves message_thread_id for the origin chat via lastTopicPerChat (Codex P2)", async () => {
+    // Codex review on the original #139 commit: when chat A (forum topic 5)
+    // and chat B share the same agent and prompts interleave, lastChatPerAgent
+    // only holds one chat at a time. The origin_id route for the OTHER chat
+    // would drop its message_thread_id and reply to the supergroup's general
+    // topic instead of the originating thread.
+    adapter = await startAdapter({
+      routing: { chats: { "100": "triage", "200": "triage" } },
+    });
+    // Prime chat 100 inside forum topic 5.
+    api.enqueueUpdates([
+      {
+        message: {
+          message_id: 50,
+          from: { id: 42 },
+          chat: { id: 100, type: "supergroup" },
+          message_thread_id: 5,
+          text: "from chat 100 topic 5",
+        },
+      },
+    ]);
+    await waitFor(() => bus.prompts.length === 1);
+
+    // Interleave: chat 200 (no thread) sends a prompt. Cache now points at
+    // 200 with NO thread — exactly the scenario Codex flagged.
+    api.enqueueUpdates([
+      {
+        message: {
+          message_id: 51,
+          from: { id: 42 },
+          chat: { id: 200, type: "private" },
+          text: "from chat 200",
+        },
+      },
+    ]);
+    await waitFor(() => bus.prompts.length === 2);
+
+    // Reply to chat 100's prompt. Without the lastTopicPerChat fallback,
+    // message_thread_id would be undefined.
+    bus.emit({
+      ts: Date.now(),
+      agent_id: "triage",
+      session_id: "s1",
+      topic: "response.text",
+      payload: { text: "reply for 100 topic 5", origin: "telegram", origin_id: "100" },
+    });
+    await waitFor(() => api.sendMessages.length > 0);
+    expect(api.sendMessages[0]?.chat_id).toBe(100);
+    expect(api.sendMessages[0]?.message_thread_id).toBe(5);
+  });
+
   it("falls back to targetForAgent when origin is absent (cron/heartbeat)", async () => {
     adapter = await startAdapter();
     await feedInbound();

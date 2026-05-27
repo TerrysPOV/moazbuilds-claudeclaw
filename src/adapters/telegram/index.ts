@@ -107,6 +107,17 @@ export class TelegramAdapter {
 
   /** Last inbound per agent — target for outbound + reaction message id. */
   private readonly lastChatPerAgent = new Map<string, PendingPrompt>();
+  /**
+   * Last-known forum-topic id per chat. Codex review on #139: when chat A
+   * (forum topic 5) and chat B share the same agent and prompts interleave,
+   * `lastChatPerAgent` only holds one chat at a time, so the origin_id route
+   * for the OTHER chat would drop its `message_thread_id` and reply to the
+   * supergroup's general topic instead of the originating thread. Populated
+   * on every inbound; read by {@link targetForOriginOrAgent} when the cache
+   * doesn't match the origin_id chat. Holds `undefined` for non-forum chats
+   * so the difference between "never seen" and "non-threaded" is observable.
+   */
+  private readonly lastTopicPerChat = new Map<number, number | undefined>();
   /** Last outbound bot message per agent — target for edit_message + spinner. */
   private readonly lastBotMessage = new Map<
     string,
@@ -348,6 +359,7 @@ export class TelegramAdapter {
       message_thread_id: message.message_thread_id,
     };
     this.lastChatPerAgent.set(agentId, pending);
+    this.lastTopicPerChat.set(chatId, message.message_thread_id);
 
     // Typing indicator + auto-spinner: the instant a message arrives, post a
     // braille placeholder and animate it so the user sees activity before
@@ -743,15 +755,21 @@ export class TelegramAdapter {
 
   /**
    * Pick an outbound chat for the agent honoring the event's
-   * `origin_id` when `origin === "telegram"` (issue #139). When the
-   * cached `lastChatPerAgent[agent]` chat_id matches the event's
-   * origin_id we borrow the cached `message_thread_id` so threaded
-   * chats still reply in their forum topic — but we always zero out
-   * `source_message_id` because the cache tracks the *most recent*
-   * inbound, not the one this reply corresponds to. Letting the cached
-   * source_message_id leak through here would react on a newer
-   * (unrelated) message when two prompts arrive from the same chat
-   * before the first response lands.
+   * `origin_id` when `origin === "telegram"` (issue #139). We always
+   * zero out `source_message_id` because the cache tracks the *most
+   * recent* inbound, not the one this reply corresponds to — letting it
+   * leak would react on a newer (unrelated) message when two prompts
+   * arrive from the same chat before the first response lands.
+   *
+   * For `message_thread_id`: prefer the cached `lastChatPerAgent[agent]`
+   * value when its chat_id matches the origin_id (most accurate — same
+   * agent, same chat, last inbound). Otherwise fall back to
+   * `lastTopicPerChat[origin_id]` so forum threading still works when
+   * two chats sharing the same agent interleave prompts (Codex P2 on
+   * the original #139 commit). A perfect fix would carry the originating
+   * thread id through the bus payload as `origin_thread_id`; that's
+   * upstream work in BusCore + every adapter, and this two-level cache
+   * covers the common-case routing without it.
    *
    * Falls back to {@link targetForAgent} for events without an origin
    * (cron / heartbeat / cli / rest) or when the origin isn't telegram.
@@ -770,7 +788,10 @@ export class TelegramAdapter {
       // Infinity in one check — tighter than `isFinite`.
       if (Number.isInteger(chatId)) {
         const cached = this.lastChatPerAgent.get(agentId);
-        const threadId = cached && cached.chat_id === chatId ? cached.message_thread_id : undefined;
+        const threadId =
+          cached && cached.chat_id === chatId
+            ? cached.message_thread_id
+            : this.lastTopicPerChat.get(chatId);
         return {
           chat_id: chatId,
           source_message_id: 0,
