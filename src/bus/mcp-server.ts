@@ -21,10 +21,13 @@
  * `plugin:plus-bus@local` no longer works.
  *
  * Env vars (set by Session Manager when spawning claude):
- *   CCAW_AGENT_ID  — stable slug for the agent; tags every outbound IPC frame
- *   CCAW_BUS_SOCK  — absolute UDS path (preferred)
- *   CCAW_BUS_PORT  — fallback TCP port (used only if CCAW_BUS_SOCK is unset)
- *   CCAW_BUS_TOKEN — required for TCP fallback (HMAC handshake; TODO Sprint 2)
+ *   CCAW_AGENT_ID        — stable slug for the agent; tags every outbound IPC frame
+ *   CCAW_BUS_SOCK        — absolute UDS path (preferred)
+ *   CCAW_BUS_PORT        — fallback TCP port (used only if CCAW_BUS_SOCK is unset)
+ *   CCAW_BUS_TOKEN       — required for TCP fallback (HMAC handshake; TODO Sprint 2)
+ *   CCAW_PERMISSION_MODE — agent's permission_mode (issue #172); controls whether
+ *                          permission_request notifications are forwarded to Bus
+ *                          core or short-circuited locally
  *
  * This file is gated by `runtime: bus` config — DO NOT import from
  * `src/runner.ts` or `src/commands/start.ts` (spec §12.5 plugin shim is
@@ -283,8 +286,56 @@ const RequestHumanArgsSchema = z.object({
 export interface BusMcpServerOptions {
   agentId: string;
   ipc: IpcTransport;
+  /**
+   * Agent's permission_mode. Controls whether `permission_request` MCP
+   * notifications arriving at this plugin are forwarded to Bus core
+   * (operator approval card) or short-circuited with a native auto-response.
+   * Issue #172.
+   *
+   * - `bypassPermissions` / `acceptEdits` → short-circuit. Auto-respond
+   *   `allow` and never forward to Bus core. Native CLI `--permission-mode`
+   *   should already prevent the notification arriving; this is defence-in-depth.
+   * - `dontAsk` → short-circuit. Auto-respond `deny` (operator intent: don't
+   *   ask the human, treat un-pre-approved requests as denied).
+   * - `default` / `plan` / `auto` (or unset) → forward to Bus core for the
+   *   human-in-the-loop approval card.
+   *
+   * The IPC `IpcHello` always advertises both `claude/channel` and
+   * `claude/channel/permission` (Bus core's handshake gate in `core-ipc.ts`
+   * treats both as mandatory). The mode gate is applied only inside the
+   * notification handler — keeping the wire contract stable while letting
+   * the plugin obey operator intent.
+   */
+  permissionMode?: string;
   /** Optional injected MCP server (tests pass a Server bound to InMemoryTransport). */
   mcp?: Server;
+}
+
+/**
+ * Decide whether the plus-bus plugin should forward `permission_request`
+ * notifications to Bus core. Exported so tests can pin behaviour to a
+ * single source of truth across the helper and the constructor.
+ *
+ * Returns `false` for modes where claude's native `--permission-mode`
+ * handler is the source of truth (`bypassPermissions`, `dontAsk`,
+ * `acceptEdits`) and `true` otherwise (`default`, `plan`, `auto`, or
+ * anything unrecognised — fail-safe to human-in-the-loop).
+ */
+export function shouldForwardPermissionRequests(permissionMode?: string): boolean {
+  if (permissionMode === "bypassPermissions") return false;
+  if (permissionMode === "dontAsk") return false;
+  if (permissionMode === "acceptEdits") return false;
+  return true;
+}
+
+/**
+ * Mode-aware short-circuit behaviour when this plugin drops a
+ * `permission_request` instead of forwarding it. Mirrors claude's native
+ * `--permission-mode` semantics so the operator's intent is preserved
+ * even if a notification leaks through.
+ */
+export function shortCircuitBehavior(permissionMode?: string): "allow" | "deny" {
+  return permissionMode === "dontAsk" ? "deny" : "allow";
 }
 
 /**
@@ -302,12 +353,16 @@ export class BusMcpServer {
   readonly mcp: Server;
   readonly ipc: IpcTransport;
   readonly agentId: string;
+  readonly forwardPermissions: boolean;
+  readonly shortCircuit: "allow" | "deny";
 
   private readonly pendingAnswers = new Map<string, PendingAnswer>();
 
   constructor(opts: BusMcpServerOptions) {
     this.agentId = opts.agentId;
     this.ipc = opts.ipc;
+    this.forwardPermissions = shouldForwardPermissionRequests(opts.permissionMode);
+    this.shortCircuit = shortCircuitBehavior(opts.permissionMode);
     this.mcp = opts.mcp ?? buildMcpServer();
     this.wireMcp();
     this.wireIpc();
@@ -315,7 +370,10 @@ export class BusMcpServer {
 
   /**
    * Run the handshake — call once after MCP transport is connected. Sends
-   * `IpcHello` declaring both capability strings (Spike 0.1).
+   * `IpcHello` declaring both required channel capabilities. Bus core's
+   * `core-ipc.ts:REQUIRED_MCP_CAPABILITIES` treats both as mandatory, so the
+   * advertised set is fixed regardless of `permission_mode`. The mode-based
+   * short-circuit is applied at the notification handler (issue #172).
    */
   sendHello(): void {
     const hello: IpcHello = {
@@ -366,6 +424,39 @@ export class BusMcpServer {
 
     // Permission flow inbound — forwarded to Bus core (§5.1).
     this.mcp.setNotificationHandler(PermissionRequestNotificationSchema, async ({ params }) => {
+      // Issue #172: when the agent's permission_mode is one that claude's
+      // native handler already resolves (`bypassPermissions`, `acceptEdits`,
+      // `dontAsk`), do NOT forward the permission_request to Bus core —
+      // that would surface a human approval card to the operator and
+      // override the configured mode. Auto-respond with the mode-aware
+      // behaviour (`allow` for bypassPermissions/acceptEdits, `deny` for
+      // dontAsk) so claude doesn't hang.
+      if (!this.forwardPermissions) {
+        // Same charset check the forward path applies — claude generates
+        // request_ids per `[a-km-z]{5}` (REQUEST_ID_PATTERN). If a malformed
+        // id arrives here (control chars, log-injection bytes) drop it
+        // without echoing back so neither stderr nor the auto-response
+        // carries unvalidated content.
+        if (!REQUEST_ID_PATTERN.test(params.request_id)) {
+          process.stderr.write(
+            `Bus MCP: short-circuit: dropping permission_request with invalid request_id (length=${params.request_id.length}).\n`,
+          );
+          return;
+        }
+        const behavior = this.shortCircuit;
+        process.stderr.write(
+          `Bus MCP: short-circuiting permission_request "${params.request_id}" with behavior="${behavior}" (agent permission_mode skips the bus path).\n`,
+        );
+        void this.mcp
+          .notification({
+            method: "notifications/claude/channel/permission",
+            params: { request_id: params.request_id, behavior },
+          })
+          .catch((err: unknown) => {
+            process.stderr.write(`Bus MCP: short-circuit notification failed: ${String(err)}\n`);
+          });
+        return;
+      }
       // Defence-in-depth: assert charset before forwarding so a malformed
       // upstream request fails fast with a useful Bus-side error instead
       // of polluting the audit log.
@@ -630,8 +721,9 @@ export async function startBusMcpServer(
   if (!agentId) {
     throw new Error("Bus MCP: CCAW_AGENT_ID env var is required");
   }
+  const permissionMode = env.CCAW_PERMISSION_MODE?.trim() || undefined;
   const ipc = await connectBusIpc(env);
-  const bus = new BusMcpServer({ agentId, ipc });
+  const bus = new BusMcpServer({ agentId, ipc, permissionMode });
   const transport = new StdioServerTransport();
   await bus.mcp.connect(transport);
   bus.sendHello();

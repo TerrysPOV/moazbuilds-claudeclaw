@@ -19,6 +19,8 @@ import {
   CHANNEL_BASE_CAPABILITY,
   CHANNEL_PERMISSION_CAPABILITY,
   buildMcpServer,
+  shortCircuitBehavior,
+  shouldForwardPermissionRequests,
   type IpcTransport,
 } from "../mcp-server.js";
 import { REQUEST_ID_PATTERN, type IpcMessage } from "../types.js";
@@ -107,10 +109,10 @@ interface Harness {
   close(): Promise<void>;
 }
 
-async function makeHarness(agentId = "test-agent"): Promise<Harness> {
+async function makeHarness(agentId = "test-agent", permissionMode?: string): Promise<Harness> {
   const ipc = makeFakeIpc();
   const mcp = buildMcpServer();
-  const bus = new BusMcpServer({ agentId, ipc, mcp });
+  const bus = new BusMcpServer({ agentId, ipc, mcp, permissionMode });
 
   const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
 
@@ -182,6 +184,69 @@ describe("BusMcpServer — handshake", () => {
     expect(hello.capabilities).toContain(CHANNEL_BASE_CAPABILITY);
     expect(hello.capabilities).toContain(CHANNEL_PERMISSION_CAPABILITY);
     expect(hello.capabilities.length).toBe(2);
+  });
+
+  it("sendHello() emits both capabilities regardless of permission_mode (#172 — core-ipc gate is mandatory)", async () => {
+    for (const mode of ["bypassPermissions", "dontAsk", "acceptEdits", "plan", "default", "auto"]) {
+      const localH = await makeHarness("agent-mode-test", mode);
+      localH.bus.sendHello();
+      const hello = take(localH.ipc.sent[0], "hello");
+      if (hello.type !== "hello") throw new Error("type narrowing");
+      expect(hello.capabilities).toContain(CHANNEL_BASE_CAPABILITY);
+      expect(hello.capabilities).toContain(CHANNEL_PERMISSION_CAPABILITY);
+      expect(hello.capabilities.length).toBe(2);
+      await localH.close();
+    }
+  });
+});
+
+describe("BusMcpServer — permission_mode short-circuit decisions (#172)", () => {
+  // The IpcHello capability set is fixed at both required strings (Bus core
+  // gates the handshake on both — see core-ipc.ts:REQUIRED_MCP_CAPABILITIES).
+  // The mode-aware short-circuit is applied inside the permission_request
+  // notification handler. These tests pin the helper logic that drives it.
+
+  it("`shouldForwardPermissionRequests` forwards by default and short-circuits the three bypass modes", () => {
+    expect(shouldForwardPermissionRequests(undefined)).toBe(true);
+    expect(shouldForwardPermissionRequests("default")).toBe(true);
+    expect(shouldForwardPermissionRequests("plan")).toBe(true);
+    expect(shouldForwardPermissionRequests("auto")).toBe(true);
+    expect(shouldForwardPermissionRequests("bypassPermissions")).toBe(false);
+    expect(shouldForwardPermissionRequests("dontAsk")).toBe(false);
+    expect(shouldForwardPermissionRequests("acceptEdits")).toBe(false);
+    // Unrecognised modes fail-safe to human-in-the-loop.
+    expect(shouldForwardPermissionRequests("nonsense")).toBe(true);
+  });
+
+  it("`shortCircuitBehavior` is mode-aware: dontAsk → deny, others → allow", () => {
+    expect(shortCircuitBehavior("dontAsk")).toBe("deny");
+    expect(shortCircuitBehavior("bypassPermissions")).toBe("allow");
+    expect(shortCircuitBehavior("acceptEdits")).toBe("allow");
+    expect(shortCircuitBehavior("default")).toBe("allow");
+    expect(shortCircuitBehavior(undefined)).toBe("allow");
+  });
+
+  it("BusMcpServer instance state reflects the mode", () => {
+    const ipc = makeFakeIpc();
+    const mcp = buildMcpServer();
+    const bus = new BusMcpServer({ agentId: "a", ipc, mcp, permissionMode: "bypassPermissions" });
+    expect(bus.forwardPermissions).toBe(false);
+    expect(bus.shortCircuit).toBe("allow");
+  });
+
+  it("BusMcpServer instance state for dontAsk: short-circuit with deny", () => {
+    const ipc = makeFakeIpc();
+    const mcp = buildMcpServer();
+    const bus = new BusMcpServer({ agentId: "a", ipc, mcp, permissionMode: "dontAsk" });
+    expect(bus.forwardPermissions).toBe(false);
+    expect(bus.shortCircuit).toBe("deny");
+  });
+
+  it("BusMcpServer instance state for plan: forward to Bus core", () => {
+    const ipc = makeFakeIpc();
+    const mcp = buildMcpServer();
+    const bus = new BusMcpServer({ agentId: "a", ipc, mcp, permissionMode: "plan" });
+    expect(bus.forwardPermissions).toBe(true);
   });
 });
 
@@ -400,6 +465,99 @@ describe("BusMcpServer — permission flow", () => {
     const params = take(h.permissionNotifs[0], "permission notification").params;
     expect(Object.keys(params).sort()).toEqual(["behavior", "request_id"]);
     expect(params.behavior).toBe("deny");
+  });
+
+  it("short-circuits (auto-allow, no IPC forward) when permission_mode=bypassPermissions (#172)", async () => {
+    await h.close(); // close the default-mode harness from beforeEach
+    const localH = await makeHarness("agent-bypass", "bypassPermissions");
+    await localH.client.notification({
+      method: "notifications/claude/channel/permission_request",
+      params: {
+        request_id: "abcde",
+        tool_name: "Bash",
+        description: "x",
+        input_preview: "{}",
+      },
+    });
+    // Wait for the auto-allow notification round-trip.
+    const start = Date.now();
+    while (localH.permissionNotifs.length < 1) {
+      if (Date.now() - start > 1000) throw new Error("auto-allow notification not delivered");
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    // Must NOT have been forwarded to Bus core.
+    expect(localH.ipc.sent.length).toBe(0);
+    // Must have auto-responded `allow`.
+    const params = take(localH.permissionNotifs[0], "permission notification").params;
+    expect(params.request_id).toBe("abcde");
+    expect(params.behavior).toBe("allow");
+    h = localH; // afterEach will close
+  });
+
+  it("short-circuits with `deny` when permission_mode=dontAsk (#172)", async () => {
+    await h.close();
+    const localH = await makeHarness("agent-dontask", "dontAsk");
+    await localH.client.notification({
+      method: "notifications/claude/channel/permission_request",
+      params: {
+        request_id: "qwert",
+        tool_name: "Write",
+        description: "x",
+        input_preview: "{}",
+      },
+    });
+    const start = Date.now();
+    while (localH.permissionNotifs.length < 1) {
+      if (Date.now() - start > 1000) throw new Error("auto-deny notification not delivered");
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    expect(localH.ipc.sent.length).toBe(0);
+    const params = take(localH.permissionNotifs[0], "permission notification").params;
+    expect(params.behavior).toBe("deny");
+    h = localH;
+  });
+
+  it("short-circuits with `allow` when permission_mode=acceptEdits (#172)", async () => {
+    await h.close();
+    const localH = await makeHarness("agent-accept", "acceptEdits");
+    await localH.client.notification({
+      method: "notifications/claude/channel/permission_request",
+      params: {
+        request_id: "fghij",
+        tool_name: "Edit",
+        description: "x",
+        input_preview: "{}",
+      },
+    });
+    const start = Date.now();
+    while (localH.permissionNotifs.length < 1) {
+      if (Date.now() - start > 1000) throw new Error("auto-allow notification not delivered");
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    expect(localH.ipc.sent.length).toBe(0);
+    const params = take(localH.permissionNotifs[0], "permission notification").params;
+    expect(params.behavior).toBe("allow");
+    h = localH;
+  });
+
+  it("short-circuit path also rejects a permission_request with invalid request_id charset", async () => {
+    await h.close();
+    const localH = await makeHarness("agent-bypass-bad", "bypassPermissions");
+    await localH.client.notification({
+      method: "notifications/claude/channel/permission_request",
+      params: {
+        // Contains 'l' (excluded by REQUEST_ID_PATTERN) and is too long.
+        request_id: "BAD\nINJECT",
+        tool_name: "Bash",
+        description: "x",
+        input_preview: "{}",
+      },
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    // Must be dropped — no IPC forward AND no echo-back notification.
+    expect(localH.ipc.sent.length).toBe(0);
+    expect(localH.permissionNotifs.length).toBe(0);
+    h = localH;
   });
 
   it("rejects a permission_request with a request_id outside the [a-km-z]{5} charset", async () => {

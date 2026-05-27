@@ -142,6 +142,16 @@ function buildChildEnv(agent: AgentConfig, busSocketPath: string): Record<string
   const env = cleanSpawnEnv();
   env.CCAW_AGENT_ID = agent.id;
   env.CCAW_BUS_SOCK = busSocketPath;
+  // Issue #172: pass the agent's permission_mode to the plus-bus MCP server
+  // so it can decide whether to FORWARD `permission_request` notifications
+  // to Bus core (operator approval card) or short-circuit them locally with
+  // a native auto-response. When the mode is one claude's native handler
+  // resolves itself (`bypassPermissions`, `acceptEdits`, `dontAsk`), the
+  // plugin auto-responds and never forwards — otherwise we'd hijack the
+  // operator's intent back into a human approval loop. The IpcHello
+  // always declares both required capabilities; Bus core's handshake gate
+  // (`core-ipc.ts:REQUIRED_MCP_CAPABILITIES`) requires both.
+  env.CCAW_PERMISSION_MODE = agent.permission_mode ?? "bypassPermissions";
   // Pin the bun runtime path to the daemon's own bun rather than
   // whatever `which bun` resolves to in the spawned claude's PATH.
   // Used by `scripts/start-bus-mcp` to launch the plus-bus MCP server.
