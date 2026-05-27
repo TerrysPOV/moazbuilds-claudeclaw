@@ -590,6 +590,67 @@ describe("TelegramAdapter — response.text outbound", () => {
     expect(api.editMessages.length).toBe(editsAfterFinal);
     expect(api.sendMessages[1]?.text).toBe("afterthought");
   });
+
+  it("routes response.text to origin_id when origin is telegram (issue #139)", async () => {
+    adapter = await startAdapter({
+      routing: { chats: { "100": "triage", "200": "triage" } },
+    });
+    // Prime the per-agent cache from chat 100 first — the bug this guards
+    // against is the cache leaking across chats sharing one agent.
+    api.enqueueUpdates([
+      {
+        message: {
+          message_id: 50,
+          from: { id: 42 },
+          chat: { id: 100, type: "private" },
+          text: "from chat 100",
+        },
+      },
+    ]);
+    await waitFor(() => bus.prompts.length === 1);
+
+    // Interleave: chat 200 sends a prompt. Now lastChatPerAgent[triage] = 200.
+    api.enqueueUpdates([
+      {
+        message: {
+          message_id: 51,
+          from: { id: 42 },
+          chat: { id: 200, type: "private" },
+          text: "from chat 200",
+        },
+      },
+    ]);
+    await waitFor(() => bus.prompts.length === 2);
+
+    // The reply to chat 100's prompt arrives. Without origin_id routing,
+    // targetForAgent would return the cached 200 entry and misroute.
+    bus.emit({
+      ts: Date.now(),
+      agent_id: "triage",
+      session_id: "s1",
+      topic: "response.text",
+      payload: { text: "reply for 100", origin: "telegram", origin_id: "100" },
+    });
+    await waitFor(() => api.sendMessages.length > 0);
+    expect(api.sendMessages[0]?.chat_id).toBe(100);
+    expect(api.sendMessages[0]?.text).toBe("reply for 100");
+  });
+
+  it("falls back to targetForAgent when origin is absent (cron/heartbeat)", async () => {
+    adapter = await startAdapter();
+    await feedInbound();
+
+    bus.emit({
+      ts: Date.now(),
+      agent_id: "triage",
+      session_id: "s1",
+      topic: "response.text",
+      payload: { text: "heartbeat tick", origin: "heartbeat", origin_id: "hb" },
+    });
+    await waitFor(() => api.sendMessages.length > 0);
+    // No telegram origin → fall through to cached last inbound (chat 100).
+    expect(api.sendMessages[0]?.chat_id).toBe(100);
+  });
 });
 
 /* ────────────────────────────────────────────────────────────────────── */

@@ -410,7 +410,7 @@ export class TelegramAdapter {
     const rawText = typeof payload?.text === "string" ? payload.text : "";
     if (rawText.length === 0) return;
 
-    const target = this.targetForAgent(agentId);
+    const target = this.targetForOriginOrAgent(agentId, event);
     if (!target) {
       this.logger.warn(
         `[telegram-adapter] no target chat for agent ${agentId}; dropping response.text`,
@@ -620,7 +620,7 @@ export class TelegramAdapter {
     const req = event.payload as PermissionRequest | undefined;
     if (!req || typeof req.request_id !== "string") return;
 
-    const target = this.targetForAgent(agentId);
+    const target = this.targetForOriginOrAgent(agentId, event);
     if (!target) {
       this.logger.warn(
         `[telegram-adapter] no target chat for permission_request on agent ${agentId}`,
@@ -661,7 +661,7 @@ export class TelegramAdapter {
     if (typeof payload?.ask_id !== "string" || typeof payload?.question !== "string") {
       return;
     }
-    const target = this.targetForAgent(agentId);
+    const target = this.targetForOriginOrAgent(agentId, event);
     if (!target) {
       this.logger.warn(`[telegram-adapter] no target chat for request_human on agent ${agentId}`);
       return;
@@ -742,10 +742,46 @@ export class TelegramAdapter {
   }
 
   /**
-   * Pick an outbound chat for the agent. Prefers the last inbound (so
-   * replies thread back); falls back to the first chat routed to the
-   * agent so spontaneous events (cron, background tools) still reach
-   * a surface.
+   * Pick an outbound chat for the agent honoring the event's
+   * `origin_id` when `origin === "telegram"` (issue #139). When the
+   * cached `lastChatPerAgent[agent]` chat_id matches the event's
+   * origin_id we prefer the cached `PendingPrompt` because it preserves
+   * `message_thread_id` for threaded chats; otherwise we build a bare
+   * target from the origin_id alone. Falls back to {@link targetForAgent}
+   * for events without an origin (cron / heartbeat / cli / rest) or
+   * when the origin isn't telegram.
+   *
+   * Mirrors Discord (`src/adapters/discord/index.ts` ~L411) and Slack
+   * (`src/adapters/slack/index.ts` ~L577) — see issue #139 for context.
+   */
+  private targetForOriginOrAgent(agentId: string, event: BusEvent): PendingPrompt | null {
+    const payloadWithOrigin = event.payload as { origin?: string; origin_id?: string } | undefined;
+    const origin = payloadWithOrigin?.origin;
+    const originId = payloadWithOrigin?.origin_id;
+    if (origin === "telegram" && typeof originId === "string" && originId.length > 0) {
+      const chatId = Number(originId);
+      if (Number.isFinite(chatId)) {
+        const cached = this.lastChatPerAgent.get(agentId);
+        if (cached && cached.chat_id === chatId) return cached;
+        return { chat_id: chatId, source_message_id: 0 };
+      }
+    }
+    return this.targetForAgent(agentId);
+  }
+
+  /**
+   * Pick an outbound chat for the agent based purely on routing —
+   * used as the fallback when an event has no origin (cron, heartbeat,
+   * cli, rest) or when origin-derived routing can't pin a chat.
+   *
+   * Prefers the last inbound for the agent (so replies thread back);
+   * otherwise the first routed chat so spontaneous events still reach
+   * a surface. Issue #139: outbound `response.text` /
+   * `channel.permission_request` / `system.request_human` with
+   * `origin === "telegram"` now route via {@link targetForOriginOrAgent}
+   * which prefers `origin_id` over this fan-out cache, so two chats
+   * routed to the same agent no longer cross-wire on interleaved
+   * prompts.
    */
   private targetForAgent(agentId: string): PendingPrompt | null {
     const last = this.lastChatPerAgent.get(agentId);
