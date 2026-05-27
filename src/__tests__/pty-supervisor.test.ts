@@ -685,12 +685,23 @@ describe("pty-supervisor retry and backoff", () => {
     // FINAL inner attempt (idx 3) must drop --resume — empty sessionId.
     // This is the corrupted-session escape hatch from issue #177.
     expect(spawnedSessionIds[3]).toBe("");
-    // Critical: the final attempt must ALSO clear newSessionId — otherwise
-    // pty-process.ts:251-253 falls back to `--session-id <newSessionId>`
-    // and re-binds the "fresh" claude to the same pre-allocated UUID that
-    // owns the corrupted JSONL. This was a confidence-92 finding in the
-    // 5-agent review; the regression test is the fix verification.
-    expect(spawnedNewSessionIds[3]).toBeUndefined();
+    // Critical: the final attempt must use a FRESH newSessionId (not the
+    // pre-allocated one from the original spawn). Two failure modes guarded:
+    //   - If we KEPT the original newSessionId, pty-process.ts:251-253
+    //     would fall back to `--session-id <old-uuid>` and re-bind the
+    //     "fresh" claude to the SAME UUID that owns the corrupted JSONL.
+    //     Confidence-92 finding from the original 5-agent review.
+    //   - If we CLEARED newSessionId entirely, PtyProcessImpl._sessionId
+    //     would be "" and persistSessionId would no-op on every turn,
+    //     making the recovered conversation unrecoverable after a reap /
+    //     /kill / restart. Codex P2 on PR #183.
+    // So the final attempt's newSessionId must be (a) defined,
+    // (b) non-empty, and (c) different from any UUID seen earlier.
+    expect(spawnedNewSessionIds[3]).toBeDefined();
+    expect(spawnedNewSessionIds[3]).not.toBe("");
+    expect(spawnedNewSessionIds[3]).not.toBe(spawnedNewSessionIds[0]);
+    expect(spawnedNewSessionIds[3]).not.toBe(spawnedNewSessionIds[1]);
+    expect(spawnedNewSessionIds[3]).not.toBe(spawnedNewSessionIds[2]);
   });
 
   it("does NOT drop --resume when respawnRetries=1 (preserves pre-#175 opt-out)", async () => {

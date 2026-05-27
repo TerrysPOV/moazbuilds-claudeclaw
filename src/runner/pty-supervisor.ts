@@ -1187,16 +1187,32 @@ async function respawnEntry(
       `[pty-supervisor] dropping --resume for ${entry.sessionKey} on final respawn attempt — corrupted-session escape hatch; abandoned sessionId=${lastSessionId} (inspect or remove ~/.claude/projects/<cwd-slug>/${lastSessionId}.jsonl if the crash recurs)\n`,
     );
   }
+  // When abandoning the resume, we need to MINT a fresh `newSessionId`
+  // distinct from the poisoned UUID. Two issues we're avoiding:
+  //
+  //   1. If we kept `entry.spawnOpts.newSessionId` (the original pre-
+  //      allocated UUID), `buildClaudeArgs` (pty-process.ts:251-253) would
+  //      fall back to `--session-id <old-uuid>` for the empty `sessionId`
+  //      and re-bind the "fresh" claude to the SAME UUID that owns the
+  //      corrupted JSONL — silently defeating the escape hatch. This was
+  //      a confidence-92 finding from the 5-agent review.
+  //
+  //   2. If we cleared `newSessionId` entirely (initial fix), claude would
+  //      start a fresh session but `PtyProcessImpl._sessionId` would be ""
+  //      (pty-process.ts:333-334 derives only from sessionId|newSessionId).
+  //      Every subsequent `runTurn` would return an empty sessionId,
+  //      `persistSessionId` would no-op (line 1386 `if (!sessionId) return`),
+  //      and the recovered conversation could not be saved / resumed after
+  //      an idle reap, `/kill`, or daemon restart — Codex P2 on PR #183.
+  //
+  // Minting a fresh UUID via `_newSessionId()` (the same generator used by
+  // `buildSpawnOptions`) lets the post-turn `persistSessionId` path write
+  // it through and keeps recovery working.
+  const freshNewSessionId = abandonResume ? _newSessionId() : undefined;
   const opts: PtyProcessOptions = {
     ...entry.spawnOpts,
     sessionId: abandonResume ? "" : (lastSessionId ?? ""),
-    // When abandoning the resume, ALSO clear `newSessionId`. Otherwise
-    // `buildClaudeArgs` (pty-process.ts:251-253) falls back to passing
-    // `--session-id <newSessionId>` for an empty `sessionId`, which would
-    // re-bind the "fresh" claude to the SAME UUID that owns the corrupted
-    // JSONL we just tried to abandon. The post-turn `persistSessionId`
-    // path will pick up whatever fresh id claude generates on its own.
-    ...(abandonResume ? { newSessionId: undefined } : {}),
+    ...(abandonResume ? { newSessionId: freshNewSessionId } : {}),
   };
 
   // MCP multiplexer (SPEC §4.5 "Respawn behaviour"): rotate the bearer token
