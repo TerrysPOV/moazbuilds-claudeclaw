@@ -461,11 +461,14 @@ class PtyProcessImpl implements PtyProcess {
     this._tailBufLen += bytes.length;
     while (this._tailBufLen > SETTLE_TAIL_MAX_BYTES) {
       if (this._tailBuf.length === 1) {
-        // Single oversized chunk: slice to keep only the trailing
-        // SETTLE_TAIL_MAX_BYTES — preserves the most-recent bytes, which
-        // are the most diagnostically useful (closest to the crash).
+        // Single oversized chunk: COPY the trailing SETTLE_TAIL_MAX_BYTES
+        // into a new buffer. We must use `.slice()` (which copies) rather
+        // than `.subarray()` (which would return a view that pins the
+        // entire oversized ArrayBuffer alive — Codex P2 on PR #185).
+        // Preserves the most-recent bytes, which are the most
+        // diagnostically useful (closest to the crash).
         const chunk = this._tailBuf[0];
-        const keep = chunk.subarray(chunk.length - SETTLE_TAIL_MAX_BYTES);
+        const keep = chunk.slice(chunk.length - SETTLE_TAIL_MAX_BYTES);
         this._tailBuf[0] = keep;
         this._tailBufLen = keep.length;
         break;

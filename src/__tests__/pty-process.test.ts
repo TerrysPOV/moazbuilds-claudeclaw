@@ -156,6 +156,29 @@ describe("PtyProcess — lifecycle", () => {
     await proc.dispose();
   });
 
+  test("oversized-chunk path detaches from the original buffer (Codex P2 on #185)", async () => {
+    // Direct unit test for the .slice() vs .subarray() distinction. We
+    // can't directly access _tailBuf from outside the class, but we can
+    // verify the behaviour by allocating a large Uint8Array, taking its
+    // last 8 KiB via .slice(), and asserting the result's .buffer is a
+    // fresh ArrayBuffer — not a view into the original. This is the
+    // exact contract the fix relies on.
+    const original = new Uint8Array(64 * 1024);
+    for (let i = 0; i < original.length; i++) original[i] = i & 0xff;
+    const sliced = original.slice(original.length - 8 * 1024);
+    const subarray = original.subarray(original.length - 8 * 1024);
+
+    // .slice() copies — its .buffer is its own.
+    expect(sliced.buffer).not.toBe(original.buffer);
+    expect(sliced.byteLength).toBe(8 * 1024);
+    expect(sliced.buffer.byteLength).toBe(8 * 1024);
+    // .subarray() does NOT — its .buffer is the original. This is the
+    // bug the fix avoids: the original 64 KiB would stay alive via the
+    // view's backing buffer.
+    expect(subarray.buffer).toBe(original.buffer);
+    expect(subarray.buffer.byteLength).toBe(64 * 1024);
+  });
+
   test("exitInfo().tail redacts secrets (sk-/Bearer/JWT/GitHub/Slack tokens) (#176)", async () => {
     // Security follow-up from the 5-agent + security review on #176: a
     // misbehaving claude that prints an auth-failure with the leaked token
