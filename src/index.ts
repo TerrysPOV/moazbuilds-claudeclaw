@@ -7,6 +7,7 @@ import { discord } from "./commands/discord";
 import { slack } from "./commands/slack";
 import { send } from "./commands/send";
 import { runFireCommand } from "./commands/fire";
+import { autoLoadClaudeClawEnv } from "./cli-env-autoload";
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -49,8 +50,10 @@ if (command === "--help" || command === "-h" || command === "help") {
 } else if (command === "slack") {
   slack();
 } else if (command === "send") {
+  autoLoadClaudeClawEnv();
   send(args.slice(1));
 } else if (command === "fire") {
+  autoLoadClaudeClawEnv();
   runFireCommand(args.slice(1)).then((code) => process.exit(code));
 } else {
   start();
