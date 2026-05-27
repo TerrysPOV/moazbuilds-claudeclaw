@@ -22,8 +22,10 @@ const LOGS_DIR = join(HEARTBEAT_DIR, "logs");
  * NotebookLM source loading + 6 insight queries, an SEO-optimised content
  * suite across 7 surfaces, fact-check pass, image generation, and Discord
  * notification. The legacy 30-minute cap fired mid-pipeline. Operators with
- * shorter workloads can still override via `sessionTimeoutMs` in
- * `~/.claude/claudeclaw/settings.json`.
+ * shorter workloads can override via `sessionTimeoutMs` in the project-local
+ * settings file the daemon reads — `<cwd>/.claude/claudeclaw/settings.json`,
+ * i.e. relative to the directory the daemon was started in. The `~/.claude/`
+ * path is the Claude CLI's user-scope config, not where this daemon reads.
  *
  * Exported so runner.ts can reference the same value.
  */
