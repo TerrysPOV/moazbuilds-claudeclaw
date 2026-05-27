@@ -511,15 +511,26 @@ export class SessionManager {
       }
     }
 
+    // Issue #165 (PR #184 re-review): the synthesized identity + 0600
+    // bearer file are minted ABOVE, before the spawn primitive runs. If the
+    // primitive throws (bun-pty native fault, ENOENT on commandOverride,
+    // tmux not on PATH), unwinding skips registry insertion + the onExit
+    // cleanup, so without this the just-failed agent's identity is never
+    // revoked and its file never deleted. Clean up then re-throw.
     let proc: PtyAgentProcess | ChildAgentProcess;
-    if (mode === "pty-stdin") {
-      proc = await this.spawnPty(agent, args, env, realCwd);
-    } else if (mode === "process-stream-json" || mode === "process") {
-      proc = this.spawnChild(agent, mode, args, env, realCwd);
-    } else if (mode === "tmux") {
-      proc = this.spawnTmux(agent, args, env, realCwd);
-    } else {
-      throw new Error(`unsupported supervision mode: ${mode satisfies never}`);
+    try {
+      if (mode === "pty-stdin") {
+        proc = await this.spawnPty(agent, args, env, realCwd);
+      } else if (mode === "process-stream-json" || mode === "process") {
+        proc = this.spawnChild(agent, mode, args, env, realCwd);
+      } else if (mode === "tmux") {
+        proc = this.spawnTmux(agent, args, env, realCwd);
+      } else {
+        throw new Error(`unsupported supervision mode: ${mode satisfies never}`);
+      }
+    } catch (err) {
+      this.cleanupAgentMcpConfig(mcpConfigCwd, agent.id);
+      throw err;
     }
 
     // Register the proc + attach the cleanup `onExit` BEFORE awaiting
@@ -537,6 +548,12 @@ export class SessionManager {
     proc.onExit(() => {
       const current = this.agents.get(agent.id);
       if (current && current.proc === proc) {
+        // Issue #165 (PR #184 re-review): a natural exit (crash, OOM,
+        // claude-side auth failure, operator kill) never routes through
+        // stop(), so release the multiplexer identity + delete the 0600
+        // bearer file here too. Idempotent, so it's safe if stop() also
+        // ran (e.g. stop() racing the process's own exit).
+        this.cleanupAgentMcpConfig(current.mcpConfigCwd, agent.id);
         this.agents.delete(agent.id);
       }
     });
@@ -732,11 +749,6 @@ export class SessionManager {
   }
 
   /**
-   * Stop an agent. Per Spike 0.5: write `/quit` via the active supervision
-   * channel; observe process exit; the caller (Bus core) publishes
-   * `session.end` AFTER the process exit fires — not before.
-   */
-  /**
    * Release the multiplexer identity + delete the synthesized per-agent
    * `--mcp-config` (0600 bearer-token file) for an agent that synthesized
    * one (issue #165). `cwd` is the agent's resolved cwd, or undefined when
@@ -765,6 +777,11 @@ export class SessionManager {
     }
   }
 
+  /**
+   * Stop an agent. Per Spike 0.5: write `/quit` via the active supervision
+   * channel; observe process exit; the caller (Bus core) publishes
+   * `session.end` AFTER the process exit fires — not before.
+   */
   stop(agent_id: string): Promise<void> {
     const record = this.agents.get(agent_id);
     if (!record) return Promise.resolve();
