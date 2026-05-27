@@ -24,6 +24,9 @@ export interface LoadResult {
  *   3. `/etc/claudeclaw/.claudeclaw-env` (system-wide install)
  *   4. `~/.claudeclaw-env` (dev/laptop)
  *
+ * Opt-out: set `CLAUDECLAW_ENV_AUTOLOAD=0` to disable entirely (returns
+ * `null` without scanning).
+ *
  * Returns the loaded file + count, or `null` if nothing was found.
  */
 export function autoLoadClaudeClawEnv(
