@@ -770,8 +770,7 @@ export class TelegramAdapter {
       // Infinity in one check — tighter than `isFinite`.
       if (Number.isInteger(chatId)) {
         const cached = this.lastChatPerAgent.get(agentId);
-        const threadId =
-          cached && cached.chat_id === chatId ? cached.message_thread_id : undefined;
+        const threadId = cached && cached.chat_id === chatId ? cached.message_thread_id : undefined;
         return {
           chat_id: chatId,
           source_message_id: 0,
