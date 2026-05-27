@@ -14,8 +14,20 @@ const SETTINGS_FILE = join(HEARTBEAT_DIR, "settings.json");
 const DEFAULT_JOBS_DIR = join(HEARTBEAT_DIR, "jobs");
 const LOGS_DIR = join(HEARTBEAT_DIR, "logs");
 
-/** Default Claude session timeout (30 minutes). Exported so runner.ts can reference the same value. */
-export const DEFAULT_SESSION_TIMEOUT_MS = 30 * 60 * 1000;
+/**
+ * Default Claude session timeout (120 minutes).
+ *
+ * Bumped from 30 minutes (issue #179): named agents like Reg and Suzy run
+ * long pipelines by design — daily-content-research does 8–15 web searches,
+ * NotebookLM source loading + 6 insight queries, an SEO-optimised content
+ * suite across 7 surfaces, fact-check pass, image generation, and Discord
+ * notification. The legacy 30-minute cap fired mid-pipeline. Operators with
+ * shorter workloads can still override via `sessionTimeoutMs` in
+ * `~/.claude/claudeclaw/settings.json`.
+ *
+ * Exported so runner.ts can reference the same value.
+ */
+export const DEFAULT_SESSION_TIMEOUT_MS = 120 * 60 * 1000;
 
 export const DEFAULT_IMAGE_OUTPUT_ROOT = join(HEARTBEAT_DIR, "outbox", "discord");
 
@@ -873,8 +885,8 @@ function parseSettings(raw: Record<string, any>, discordUserIds?: string[]): Set
         : {}),
     },
     sessionTimeoutMs:
-      typeof raw.sessionTimeoutMs === "number" && raw.sessionTimeoutMs > 0
-        ? raw.sessionTimeoutMs
+      Number.isFinite(raw.sessionTimeoutMs) && (raw.sessionTimeoutMs as number) > 0
+        ? (raw.sessionTimeoutMs as number)
         : DEFAULT_SESSION_TIMEOUT_MS,
     timeouts: {
       telegram:

@@ -183,7 +183,10 @@ don't waste time investigating:
 - **Per-job model / timeout overrides not honoured.** Under Bus, route
   the job to a different agent instead (declare a second agent with the
   model you want, set `job.agent: "<that-id>"`). Cleaner architectural
-  fit; documented in PR #126.
+  fit; documented in PR #126. The global per-session cap defaults to
+  **120 minutes** (`sessionTimeoutMs`); override in
+  `~/.claude/claudeclaw/settings.json` if you want a tighter or looser
+  cap.
 - **Upstream Slack features pending.** Issue #121 (allowBots, block /
   attachment text extraction, replyThreadTs) is queued as a separate
   port into the Bus Slack adapter. Not blocking for the
