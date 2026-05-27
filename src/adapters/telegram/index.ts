@@ -745,14 +745,19 @@ export class TelegramAdapter {
    * Pick an outbound chat for the agent honoring the event's
    * `origin_id` when `origin === "telegram"` (issue #139). When the
    * cached `lastChatPerAgent[agent]` chat_id matches the event's
-   * origin_id we prefer the cached `PendingPrompt` because it preserves
-   * `message_thread_id` for threaded chats; otherwise we build a bare
-   * target from the origin_id alone. Falls back to {@link targetForAgent}
-   * for events without an origin (cron / heartbeat / cli / rest) or
-   * when the origin isn't telegram.
+   * origin_id we borrow the cached `message_thread_id` so threaded
+   * chats still reply in their forum topic — but we always zero out
+   * `source_message_id` because the cache tracks the *most recent*
+   * inbound, not the one this reply corresponds to. Letting the cached
+   * source_message_id leak through here would react on a newer
+   * (unrelated) message when two prompts arrive from the same chat
+   * before the first response lands.
+   *
+   * Falls back to {@link targetForAgent} for events without an origin
+   * (cron / heartbeat / cli / rest) or when the origin isn't telegram.
    *
    * Mirrors Discord (`src/adapters/discord/index.ts` ~L411) and Slack
-   * (`src/adapters/slack/index.ts` ~L577) — see issue #139 for context.
+   * (`src/adapters/slack/index.ts` ~L615) — see issue #139 for context.
    */
   private targetForOriginOrAgent(agentId: string, event: BusEvent): PendingPrompt | null {
     const payloadWithOrigin = event.payload as { origin?: string; origin_id?: string } | undefined;
@@ -760,10 +765,18 @@ export class TelegramAdapter {
     const originId = payloadWithOrigin?.origin_id;
     if (origin === "telegram" && typeof originId === "string" && originId.length > 0) {
       const chatId = Number(originId);
-      if (Number.isFinite(chatId)) {
+      // Telegram chat ids are always integers (and can be negative for
+      // groups/channels). `Number.isInteger` rejects NaN, floats, and
+      // Infinity in one check — tighter than `isFinite`.
+      if (Number.isInteger(chatId)) {
         const cached = this.lastChatPerAgent.get(agentId);
-        if (cached && cached.chat_id === chatId) return cached;
-        return { chat_id: chatId, source_message_id: 0 };
+        const threadId =
+          cached && cached.chat_id === chatId ? cached.message_thread_id : undefined;
+        return {
+          chat_id: chatId,
+          source_message_id: 0,
+          ...(threadId !== undefined ? { message_thread_id: threadId } : {}),
+        };
       }
     }
     return this.targetForAgent(agentId);
