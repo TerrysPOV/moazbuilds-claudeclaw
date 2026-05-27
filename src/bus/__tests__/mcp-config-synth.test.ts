@@ -13,7 +13,15 @@
  *      `stop()` revokes the identity + deletes the 0600 config file.
  */
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PtyIdentity } from "../../runner/pty-mcp-config-writer";
@@ -100,6 +108,29 @@ describe("synthesizeBusMcpConfig (issue #165)", () => {
     expect(existsSync(configPathFor(cwd, "a"))).toBe(false);
   });
 
+  it("revokes the just-minted identity when writeConfigForPty throws", async () => {
+    // Maintainer follow-up on the PR #184 third re-review: synth.issue
+    // happens BEFORE writeConfigForPty, and the outer try/catch in
+    // spawnAgentInternal can't see the cwd because mcpConfigCwd is
+    // only assigned AFTER synthesizeBusMcpConfig returns. Without the
+    // inner rollback, an EACCES/ENOSPC during the file write leaks the
+    // multiplexer identity in the issuer's registry forever.
+    const { synth, issued, revoked } = makeSynth();
+    // Make the cwd read-only so writeConfigForPty hits EACCES on its
+    // internal writeFileSync.
+    chmodSync(cwd, 0o500);
+    try {
+      expect(() => synthesizeBusMcpConfig(agentCfg("triage", cwd), synth, cwd)).toThrow();
+    } finally {
+      // Restore for afterEach cleanup.
+      chmodSync(cwd, 0o700);
+    }
+    expect(issued).toEqual(["triage"]);
+    // `revoke` is fire-and-forget — give the microtask queue a tick.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(revoked).toEqual(["triage"]);
+  });
+
   it("writes a per-agent config listing the shared servers with bridge URLs + identity headers", () => {
     const { synth, issued } = makeSynth();
     const out = synthesizeBusMcpConfig(agentCfg("triage", cwd), synth, cwd);
@@ -179,7 +210,10 @@ describe("SessionManager spawn → synthesized --mcp-config in argv (issue #165)
 
     const idx = argv.indexOf("--mcp-config");
     expect(idx).toBeGreaterThanOrEqual(0);
-    expect(argv[idx + 1]).toBe(configPathFor(cwd, "a"));
+    // SessionManager resolves `cwd` through realpathSync, so on macOS the
+    // synthesized argv path is under `/private/var/...` while `cwd` itself
+    // is `/var/...`. Compare against the resolved-path variant.
+    expect(argv[idx + 1]).toBe(configPathFor(realpathSync(cwd), "a"));
     expect(issued).toEqual(["a"]);
     expect(existsSync(configPathFor(cwd, "a"))).toBe(true);
   });
@@ -224,6 +258,12 @@ describe("SessionManager spawn → synthesized --mcp-config in argv (issue #165)
     expect(existsSync(configPathFor(cwd, "a"))).toBe(false);
     // revoke is fire-and-forget on a microtask; let it settle.
     await new Promise((r) => setTimeout(r, 25));
-    expect(revoked).toEqual(["a"]);
+    // PR #184 re-review (commit df52157) added cleanup-in-onExit alongside
+    // the pre-existing stop()-path cleanup, so a clean stop() observes
+    // both paths firing. The double-call is documented as safe per the
+    // idempotency contract on `cleanupAgentMcpConfig`; assert the agent
+    // appears in the revoked list rather than that it appears exactly
+    // once.
+    expect(revoked).toContain("a");
   });
 });

@@ -160,14 +160,29 @@ export function synthesizeBusMcpConfig(
   if (synth.sharedServers.length === 0) return undefined;
 
   const identity = synth.issue(agent.id);
-  const { path } = writeConfigForPty({
-    ptyId: agent.id,
-    cwd,
-    sharedServers: synth.sharedServers.map((name) => ({ name })),
-    perPtyServers: [],
-    bridgeBaseUrl: synth.bridgeBaseUrl(),
-    identity,
-  });
+  // Roll back the just-minted identity if the on-disk write fails
+  // (EACCES, ENOSPC, EROFS, mkdir failure). Without this, the throw
+  // escapes the spawn-dispatch try/catch in `spawnAgentInternal`
+  // because `mcpConfigCwd` is only assigned AFTER this function
+  // returns — `cleanupAgentMcpConfig(undefined, ...)` then short-
+  // circuits via its `if (!cwd) return` guard and the identity stays
+  // alive in the issuer's registry.
+  let path: string;
+  try {
+    ({ path } = writeConfigForPty({
+      ptyId: agent.id,
+      cwd,
+      sharedServers: synth.sharedServers.map((name) => ({ name })),
+      perPtyServers: [],
+      bridgeBaseUrl: synth.bridgeBaseUrl(),
+      identity,
+    }));
+  } catch (err) {
+    Promise.resolve(synth.revoke(agent.id)).catch(() => {
+      // Fire-and-forget; the throw below is the operator-visible signal.
+    });
+    throw err;
+  }
   return path.length > 0 ? path : undefined;
 }
 
