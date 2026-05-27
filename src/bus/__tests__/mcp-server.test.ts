@@ -19,8 +19,7 @@ import {
   CHANNEL_BASE_CAPABILITY,
   CHANNEL_PERMISSION_CAPABILITY,
   buildMcpServer,
-  shortCircuitBehavior,
-  shouldForwardPermissionRequests,
+  decidePermission,
   type IpcTransport,
 } from "../mcp-server.js";
 import { REQUEST_ID_PATTERN, type IpcMessage } from "../types.js";
@@ -200,53 +199,53 @@ describe("BusMcpServer — handshake", () => {
   });
 });
 
-describe("BusMcpServer — permission_mode short-circuit decisions (#172)", () => {
+describe("decidePermission — tool-aware mode routing (#172, Codex P1 on #173)", () => {
   // The IpcHello capability set is fixed at both required strings (Bus core
   // gates the handshake on both — see core-ipc.ts:REQUIRED_MCP_CAPABILITIES).
-  // The mode-aware short-circuit is applied inside the permission_request
+  // The mode + tool gate is applied inside the permission_request
   // notification handler. These tests pin the helper logic that drives it.
 
-  it("`shouldForwardPermissionRequests` forwards by default and short-circuits the three bypass modes", () => {
-    expect(shouldForwardPermissionRequests(undefined)).toBe(true);
-    expect(shouldForwardPermissionRequests("default")).toBe(true);
-    expect(shouldForwardPermissionRequests("plan")).toBe(true);
-    expect(shouldForwardPermissionRequests("auto")).toBe(true);
-    expect(shouldForwardPermissionRequests("bypassPermissions")).toBe(false);
-    expect(shouldForwardPermissionRequests("dontAsk")).toBe(false);
-    expect(shouldForwardPermissionRequests("acceptEdits")).toBe(false);
-    // Unrecognised modes fail-safe to human-in-the-loop.
-    expect(shouldForwardPermissionRequests("nonsense")).toBe(true);
+  it("bypassPermissions → allow for every tool", () => {
+    expect(decidePermission("bypassPermissions", "Edit")).toBe("allow");
+    expect(decidePermission("bypassPermissions", "Bash")).toBe("allow");
+    expect(decidePermission("bypassPermissions", "WebFetch")).toBe("allow");
+    expect(decidePermission("bypassPermissions", "UnknownTool")).toBe("allow");
   });
 
-  it("`shortCircuitBehavior` is mode-aware: dontAsk → deny, others → allow", () => {
-    expect(shortCircuitBehavior("dontAsk")).toBe("deny");
-    expect(shortCircuitBehavior("bypassPermissions")).toBe("allow");
-    expect(shortCircuitBehavior("acceptEdits")).toBe("allow");
-    expect(shortCircuitBehavior("default")).toBe("allow");
-    expect(shortCircuitBehavior(undefined)).toBe("allow");
+  it("dontAsk → deny for every tool", () => {
+    expect(decidePermission("dontAsk", "Edit")).toBe("deny");
+    expect(decidePermission("dontAsk", "Bash")).toBe("deny");
+    expect(decidePermission("dontAsk", "WebFetch")).toBe("deny");
+    expect(decidePermission("dontAsk", "UnknownTool")).toBe("deny");
   });
 
-  it("BusMcpServer instance state reflects the mode", () => {
+  it("acceptEdits → allow ONLY for edit-class tools; forward shell/network/other", () => {
+    // Edit-class tools auto-allowed.
+    expect(decidePermission("acceptEdits", "Edit")).toBe("allow");
+    expect(decidePermission("acceptEdits", "Write")).toBe("allow");
+    expect(decidePermission("acceptEdits", "NotebookEdit")).toBe("allow");
+    expect(decidePermission("acceptEdits", "MultiEdit")).toBe("allow");
+    expect(decidePermission("acceptEdits", "Update")).toBe("allow");
+    // Shell / network / other tools must still go to the operator.
+    expect(decidePermission("acceptEdits", "Bash")).toBe("forward");
+    expect(decidePermission("acceptEdits", "WebFetch")).toBe("forward");
+    expect(decidePermission("acceptEdits", "WebSearch")).toBe("forward");
+    expect(decidePermission("acceptEdits", "Read")).toBe("forward");
+    expect(decidePermission("acceptEdits", "UnknownTool")).toBe("forward");
+  });
+
+  it("default / plan / auto / unset / unrecognised → forward for every tool", () => {
+    for (const mode of [undefined, "default", "plan", "auto", "nonsense"]) {
+      expect(decidePermission(mode, "Edit")).toBe("forward");
+      expect(decidePermission(mode, "Bash")).toBe("forward");
+    }
+  });
+
+  it("BusMcpServer stores the permissionMode for handler-time decisions", () => {
     const ipc = makeFakeIpc();
     const mcp = buildMcpServer();
-    const bus = new BusMcpServer({ agentId: "a", ipc, mcp, permissionMode: "bypassPermissions" });
-    expect(bus.forwardPermissions).toBe(false);
-    expect(bus.shortCircuit).toBe("allow");
-  });
-
-  it("BusMcpServer instance state for dontAsk: short-circuit with deny", () => {
-    const ipc = makeFakeIpc();
-    const mcp = buildMcpServer();
-    const bus = new BusMcpServer({ agentId: "a", ipc, mcp, permissionMode: "dontAsk" });
-    expect(bus.forwardPermissions).toBe(false);
-    expect(bus.shortCircuit).toBe("deny");
-  });
-
-  it("BusMcpServer instance state for plan: forward to Bus core", () => {
-    const ipc = makeFakeIpc();
-    const mcp = buildMcpServer();
-    const bus = new BusMcpServer({ agentId: "a", ipc, mcp, permissionMode: "plan" });
-    expect(bus.forwardPermissions).toBe(true);
+    const bus = new BusMcpServer({ agentId: "a", ipc, mcp, permissionMode: "acceptEdits" });
+    expect(bus.permissionMode).toBe("acceptEdits");
   });
 });
 
@@ -517,7 +516,7 @@ describe("BusMcpServer — permission flow", () => {
     h = localH;
   });
 
-  it("short-circuits with `allow` when permission_mode=acceptEdits (#172)", async () => {
+  it("acceptEdits short-circuits with `allow` for edit tools (Edit)", async () => {
     await h.close();
     const localH = await makeHarness("agent-accept", "acceptEdits");
     await localH.client.notification({
@@ -537,6 +536,51 @@ describe("BusMcpServer — permission flow", () => {
     expect(localH.ipc.sent.length).toBe(0);
     const params = take(localH.permissionNotifs[0], "permission notification").params;
     expect(params.behavior).toBe("allow");
+    h = localH;
+  });
+
+  it("acceptEdits FORWARDS shell/network tools to Bus core (Codex P1 on #173)", async () => {
+    // Critical: under acceptEdits mode, only file-edit tools are
+    // auto-allowed. Bash, WebFetch, etc. must still go to the operator.
+    // A blanket short-circuit would silently widen acceptEdits to act
+    // like bypassPermissions for shell + network.
+    await h.close();
+    const localH = await makeHarness("agent-accept-bash", "acceptEdits");
+    await localH.client.notification({
+      method: "notifications/claude/channel/permission_request",
+      params: {
+        request_id: "bashm",
+        tool_name: "Bash",
+        description: "rm -rf /tmp/cache",
+        input_preview: '{"command":"rm -rf /tmp/cache"}',
+      },
+    });
+    await localH.ipc.awaitSent(1);
+    // Forwarded to Bus core, NOT auto-responded.
+    const out = take(localH.ipc.sent[0], "permission_request");
+    expect(out.type).toBe("permission_request");
+    if (out.type !== "permission_request") throw new Error("type narrowing");
+    expect(out.request.tool_name).toBe("Bash");
+    expect(out.request.request_id).toBe("bashm");
+    // No auto-response — operator must decide.
+    expect(localH.permissionNotifs.length).toBe(0);
+    h = localH;
+  });
+
+  it("acceptEdits forwards WebFetch (network tool) to Bus core", async () => {
+    await h.close();
+    const localH = await makeHarness("agent-accept-net", "acceptEdits");
+    await localH.client.notification({
+      method: "notifications/claude/channel/permission_request",
+      params: {
+        request_id: "fetcm",
+        tool_name: "WebFetch",
+        description: "fetch example.com",
+        input_preview: '{"url":"https://example.com"}',
+      },
+    });
+    await localH.ipc.awaitSent(1);
+    expect(localH.permissionNotifs.length).toBe(0);
     h = localH;
   });
 

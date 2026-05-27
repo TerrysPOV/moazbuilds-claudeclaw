@@ -287,24 +287,27 @@ export interface BusMcpServerOptions {
   agentId: string;
   ipc: IpcTransport;
   /**
-   * Agent's permission_mode. Controls whether `permission_request` MCP
-   * notifications arriving at this plugin are forwarded to Bus core
-   * (operator approval card) or short-circuited with a native auto-response.
-   * Issue #172.
+   * Agent's permission_mode. Controls how `permission_request` MCP
+   * notifications arriving at this plugin are routed: forwarded to Bus
+   * core (operator approval card) or short-circuited with a native
+   * auto-response. Issue #172 + Codex P1 on PR #173.
    *
-   * - `bypassPermissions` / `acceptEdits` → short-circuit. Auto-respond
-   *   `allow` and never forward to Bus core. Native CLI `--permission-mode`
-   *   should already prevent the notification arriving; this is defence-in-depth.
-   * - `dontAsk` → short-circuit. Auto-respond `deny` (operator intent: don't
-   *   ask the human, treat un-pre-approved requests as denied).
-   * - `default` / `plan` / `auto` (or unset) → forward to Bus core for the
+   * Decisions per (mode, tool) pair are made by `decidePermission()`:
+   * - `bypassPermissions` → `"allow"` for every tool.
+   * - `dontAsk` → `"deny"` for every tool.
+   * - `acceptEdits` → `"allow"` for edit-class tools (Edit, Write,
+   *   NotebookEdit, MultiEdit, Update); `"forward"` for everything else
+   *   (Bash, WebFetch, etc.) — matching native CLI semantics. A blanket
+   *   short-circuit here would silently widen `acceptEdits` to bypass
+   *   permissions for shell / network calls.
+   * - `default` / `plan` / `auto` / unset → forward to Bus core for the
    *   human-in-the-loop approval card.
    *
    * The IPC `IpcHello` always advertises both `claude/channel` and
    * `claude/channel/permission` (Bus core's handshake gate in `core-ipc.ts`
-   * treats both as mandatory). The mode gate is applied only inside the
-   * notification handler — keeping the wire contract stable while letting
-   * the plugin obey operator intent.
+   * treats both as mandatory). The mode + tool gate is applied only inside
+   * the notification handler — keeping the wire contract stable while
+   * letting the plugin obey operator intent.
    */
   permissionMode?: string;
   /** Optional injected MCP server (tests pass a Server bound to InMemoryTransport). */
@@ -312,30 +315,55 @@ export interface BusMcpServerOptions {
 }
 
 /**
- * Decide whether the plus-bus plugin should forward `permission_request`
- * notifications to Bus core. Exported so tests can pin behaviour to a
- * single source of truth across the helper and the constructor.
- *
- * Returns `false` for modes where claude's native `--permission-mode`
- * handler is the source of truth (`bypassPermissions`, `dontAsk`,
- * `acceptEdits`) and `true` otherwise (`default`, `plan`, `auto`, or
- * anything unrecognised — fail-safe to human-in-the-loop).
+ * Tool names that `--permission-mode acceptEdits` is documented to
+ * auto-allow without prompting. Anything outside this set under
+ * `acceptEdits` mode must still go through the operator approval flow
+ * — that's the whole point of `acceptEdits` vs `bypassPermissions`.
+ * Source: claude CLI docs ("acceptEdits auto-allows file edits but
+ * still prompts for shell/network").
  */
-export function shouldForwardPermissionRequests(permissionMode?: string): boolean {
-  if (permissionMode === "bypassPermissions") return false;
-  if (permissionMode === "dontAsk") return false;
-  if (permissionMode === "acceptEdits") return false;
-  return true;
-}
+const ACCEPT_EDITS_AUTO_ALLOW_TOOLS = new Set([
+  "Edit",
+  "Write",
+  "NotebookEdit",
+  "MultiEdit",
+  "Update",
+]);
+
+export type PermissionDecision = "forward" | "allow" | "deny";
 
 /**
- * Mode-aware short-circuit behaviour when this plugin drops a
- * `permission_request` instead of forwarding it. Mirrors claude's native
- * `--permission-mode` semantics so the operator's intent is preserved
- * even if a notification leaks through.
+ * Decide what the plus-bus plugin should do with a `permission_request`
+ * notification for `toolName` under the given `permissionMode`. Returns:
+ *
+ * - `"forward"` — forward to Bus core for the human-in-the-loop card.
+ * - `"allow"` — short-circuit; auto-respond `behavior: "allow"`.
+ * - `"deny"` — short-circuit; auto-respond `behavior: "deny"`.
+ *
+ * Mode semantics mirror claude's native `--permission-mode` flag:
+ * - `bypassPermissions` → `"allow"` for every tool.
+ * - `dontAsk` → `"deny"` for every tool.
+ * - `acceptEdits` → `"allow"` for edit-class tools (Edit/Write/
+ *   NotebookEdit/MultiEdit/Update), `"forward"` for everything else.
+ *   This is the Codex P1 fix on PR #173: a blanket short-circuit
+ *   silently widened `acceptEdits` to bypass permissions for shell /
+ *   network tools.
+ * - `default` / `plan` / `auto` / unset / unrecognised → `"forward"`
+ *   (fail-safe to human-in-the-loop).
+ *
+ * Exported so tests pin behaviour to a single source of truth across
+ * the helper and the constructor's notification handler.
  */
-export function shortCircuitBehavior(permissionMode?: string): "allow" | "deny" {
-  return permissionMode === "dontAsk" ? "deny" : "allow";
+export function decidePermission(
+  permissionMode: string | undefined,
+  toolName: string,
+): PermissionDecision {
+  if (permissionMode === "bypassPermissions") return "allow";
+  if (permissionMode === "dontAsk") return "deny";
+  if (permissionMode === "acceptEdits") {
+    return ACCEPT_EDITS_AUTO_ALLOW_TOOLS.has(toolName) ? "allow" : "forward";
+  }
+  return "forward";
 }
 
 /**
@@ -353,16 +381,14 @@ export class BusMcpServer {
   readonly mcp: Server;
   readonly ipc: IpcTransport;
   readonly agentId: string;
-  readonly forwardPermissions: boolean;
-  readonly shortCircuit: "allow" | "deny";
+  readonly permissionMode: string | undefined;
 
   private readonly pendingAnswers = new Map<string, PendingAnswer>();
 
   constructor(opts: BusMcpServerOptions) {
     this.agentId = opts.agentId;
     this.ipc = opts.ipc;
-    this.forwardPermissions = shouldForwardPermissionRequests(opts.permissionMode);
-    this.shortCircuit = shortCircuitBehavior(opts.permissionMode);
+    this.permissionMode = opts.permissionMode;
     this.mcp = opts.mcp ?? buildMcpServer();
     this.wireMcp();
     this.wireIpc();
@@ -424,14 +450,16 @@ export class BusMcpServer {
 
     // Permission flow inbound — forwarded to Bus core (§5.1).
     this.mcp.setNotificationHandler(PermissionRequestNotificationSchema, async ({ params }) => {
-      // Issue #172: when the agent's permission_mode is one that claude's
-      // native handler already resolves (`bypassPermissions`, `acceptEdits`,
-      // `dontAsk`), do NOT forward the permission_request to Bus core —
-      // that would surface a human approval card to the operator and
-      // override the configured mode. Auto-respond with the mode-aware
-      // behaviour (`allow` for bypassPermissions/acceptEdits, `deny` for
-      // dontAsk) so claude doesn't hang.
-      if (!this.forwardPermissions) {
+      // Issue #172 + Codex P1 on PR #173: route the permission_request
+      // based on the agent's permission_mode AND the requested tool. For
+      // bypassPermissions / dontAsk we short-circuit every tool. For
+      // acceptEdits we short-circuit only edit-class tools (Edit, Write,
+      // NotebookEdit, MultiEdit, Update) and forward shell / network /
+      // other tools to Bus core for operator approval — matching claude's
+      // native `--permission-mode acceptEdits` semantics. Everything else
+      // (default, plan, auto, unset) forwards.
+      const decision = decidePermission(this.permissionMode, params.tool_name);
+      if (decision !== "forward") {
         // Same charset check the forward path applies — claude generates
         // request_ids per `[a-km-z]{5}` (REQUEST_ID_PATTERN). If a malformed
         // id arrives here (control chars, log-injection bytes) drop it
@@ -443,14 +471,13 @@ export class BusMcpServer {
           );
           return;
         }
-        const behavior = this.shortCircuit;
         process.stderr.write(
-          `Bus MCP: short-circuiting permission_request "${params.request_id}" with behavior="${behavior}" (agent permission_mode skips the bus path).\n`,
+          `Bus MCP: short-circuiting permission_request "${params.request_id}" tool="${params.tool_name}" with behavior="${decision}" (permission_mode="${this.permissionMode ?? ""}").\n`,
         );
         void this.mcp
           .notification({
             method: "notifications/claude/channel/permission",
-            params: { request_id: params.request_id, behavior },
+            params: { request_id: params.request_id, behavior: decision },
           })
           .catch((err: unknown) => {
             process.stderr.write(`Bus MCP: short-circuit notification failed: ${String(err)}\n`);
