@@ -172,6 +172,7 @@ describe("parseSettings — pty defaults", () => {
         enabled: true,
         idleReapMinutes: 30,
         maxRetries: 5,
+        respawnRetries: 3,
         backoffMs: [1000, 2000, 4000, 8000, 16000],
         namedAgentsAlwaysAlive: true,
         turnIdleTimeoutMs: 5000,
@@ -185,6 +186,50 @@ describe("parseSettings — pty defaults", () => {
     await writeRawSettings(explicitDefaults);
     await reloadSettings();
     expect(getSettings().pty).toEqual(explicitDefaults.pty);
+  });
+
+  it("defaults respawnRetries to 3 when omitted (#175)", async () => {
+    await writeRawSettings({});
+    await reloadSettings();
+    expect(getSettings().pty.respawnRetries).toBe(3);
+  });
+
+  it("accepts custom respawnRetries when finite and >= 1", async () => {
+    await writeRawSettings({ pty: { respawnRetries: 5 } });
+    await reloadSettings();
+    expect(getSettings().pty.respawnRetries).toBe(5);
+
+    await writeRawSettings({ pty: { respawnRetries: 1 } });
+    await reloadSettings();
+    expect(getSettings().pty.respawnRetries).toBe(1);
+  });
+
+  it("rejects invalid respawnRetries, falls back to default", async () => {
+    await writeRawSettings({ pty: { respawnRetries: 0 } });
+    await reloadSettings();
+    expect(getSettings().pty.respawnRetries).toBe(3);
+
+    await writeRawSettings({ pty: { respawnRetries: -1 } });
+    await reloadSettings();
+    expect(getSettings().pty.respawnRetries).toBe(3);
+
+    await writeRawSettings({ pty: { respawnRetries: "lots" as unknown as number } });
+    await reloadSettings();
+    expect(getSettings().pty.respawnRetries).toBe(3);
+  });
+
+  it("caps respawnRetries at 20 (footgun guard per security review on #175)", async () => {
+    await writeRawSettings({ pty: { respawnRetries: 100 } });
+    await reloadSettings();
+    expect(getSettings().pty.respawnRetries).toBe(20);
+
+    await writeRawSettings({ pty: { respawnRetries: 20 } });
+    await reloadSettings();
+    expect(getSettings().pty.respawnRetries).toBe(20);
+
+    await writeRawSettings({ pty: { respawnRetries: 21 } });
+    await reloadSettings();
+    expect(getSettings().pty.respawnRetries).toBe(20);
   });
 
   it("defaults maxConcurrent to 32 when omitted", async () => {

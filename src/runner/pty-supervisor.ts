@@ -24,9 +24,14 @@
  *   - Crash-respawn-replay: on PtyClosedError or PtyTurnTimeoutError, the
  *     supervisor disposes the dead PTY, sleeps `backoffMs[i]`, respawns
  *     (via cached spawn options + last-known sessionId for --resume), and
- *     retries the SAME prompt up to `maxRetries` times. After exhaustion the
- *     supervisor surfaces a structured error in RunOnPtyResult.stderr and
- *     exitCode=1; execClaude treats this as any other non-zero exit.
+ *     retries the SAME prompt up to `maxRetries` times (outer loop). Each
+ *     outer retry first tries to respawn the PTY up to `respawnRetries`
+ *     times (inner loop — issue #175). If the inner loop is exhausted the
+ *     outer loop terminates early with a "respawn failed after N attempts"
+ *     error rather than consuming the remaining outer budget. After
+ *     exhaustion the supervisor surfaces a structured error in
+ *     RunOnPtyResult.stderr and exitCode=1; execClaude treats this as any
+ *     other non-zero exit.
  *
  *   - Settings are re-read via getSettings() on every call — never cached
  *     across calls — so hot-reload works. The reap interval is rebuilt
@@ -208,6 +213,9 @@ export function injectCleanSpawnEnv(fn: CleanSpawnEnvFn | null): void {
 export interface SupervisorOptions {
   idleReapMinutes: number;
   maxRetries: number;
+  /** Inner retry budget for `respawnEntry()` after a retryable `runTurn`
+   *  failure. Issue #175. */
+  respawnRetries: number;
   backoffMs: number[];
   namedAgentsAlwaysAlive: boolean;
 }
@@ -379,6 +387,7 @@ export function __resetSupervisorForTests(): void {
   _buildChildEnv = null;
   _maxConcurrentOverride = null;
   _maxRetriesOverride = null;
+  _respawnRetriesOverride = null;
   _newSessionId = () => crypto.randomUUID();
   _mcpIssueIdentity = null;
   _mcpRevokeIdentity = null;
@@ -471,6 +480,7 @@ export async function initSupervisor(): Promise<void> {
   const opts: SupervisorOptions = {
     idleReapMinutes: settings.pty.idleReapMinutes,
     maxRetries: settings.pty.maxRetries,
+    respawnRetries: settings.pty.respawnRetries,
     backoffMs: settings.pty.backoffMs,
     namedAgentsAlwaysAlive: settings.pty.namedAgentsAlwaysAlive,
   };
@@ -663,6 +673,8 @@ function readSupervisorOptions(): SupervisorOptions {
   return {
     idleReapMinutes: settings.pty.idleReapMinutes,
     maxRetries: _maxRetriesOverride != null ? _maxRetriesOverride : settings.pty.maxRetries,
+    respawnRetries:
+      _respawnRetriesOverride != null ? _respawnRetriesOverride : settings.pty.respawnRetries,
     backoffMs: settings.pty.backoffMs,
     namedAgentsAlwaysAlive: settings.pty.namedAgentsAlwaysAlive,
   };
@@ -711,6 +723,8 @@ async function getOrCreateEntry(
 let _maxConcurrentOverride: number | null = null;
 /** Test-only override for maxRetries. */
 let _maxRetriesOverride: number | null = null;
+/** Test-only override for respawnRetries. Issue #175. */
+let _respawnRetriesOverride: number | null = null;
 
 /** For tests only. Override the maxConcurrent cap without writing to disk. */
 export function injectMaxConcurrentForTests(cap: number | null): void {
@@ -720,6 +734,11 @@ export function injectMaxConcurrentForTests(cap: number | null): void {
 /** For tests only. Override maxRetries without writing to disk. */
 export function injectMaxRetriesForTests(n: number | null): void {
   _maxRetriesOverride = n;
+}
+
+/** For tests only. Override respawnRetries without writing to disk. */
+export function injectRespawnRetriesForTests(n: number | null): void {
+  _respawnRetriesOverride = n;
 }
 
 /**
@@ -1194,6 +1213,45 @@ async function respawnEntry(entry: PtyEntry): Promise<void> {
   entry.lastSpawnedAt = _clock();
 }
 
+/**
+ * Issue #175: retry `respawnEntry()` itself.
+ *
+ * The outer `runTurnWithRetries` loop catches retryable `runTurn` failures
+ * (PTY closed, turn timeout) and respawns the PTY between turns. Before this
+ * helper existed, a single failed respawn would `return errorResult(...)`
+ * and truncate the outer `maxRetries` envelope (default 5) to 1 attempt —
+ * production observed 26% of `daily-digest` / `daily-content-research`
+ * cron runs giving up after the first respawn failure with *"PTY for claude
+ * exited before TUI settled"*.
+ *
+ * This helper retries `respawnEntry()` up to `max(1, opts.respawnRetries)`
+ * times (the floor guards against accidental 0 from a test injection; the
+ * config parser separately enforces ≥ 1 with default 3) with the existing
+ * backoff schedule. On total exhaustion it throws the last error; the outer
+ * loop wraps the thrown error in a "respawn failed after N attempts"
+ * message and returns `errorResult(...)` for the operator.
+ *
+ * Issue #177 (separate) tracks dropping `--resume <sessionId>` on the final
+ * attempt as a corrupted-session escape hatch. This helper does the retry
+ * envelope; the resume fallback is layered on top.
+ */
+async function respawnEntryWithRetries(entry: PtyEntry, opts: SupervisorOptions): Promise<void> {
+  const attempts = Math.max(1, opts.respawnRetries);
+  let lastErr: unknown = new Error("respawnEntryWithRetries: no attempts made");
+  for (let i = 0; i < attempts; i++) {
+    try {
+      await respawnEntry(entry);
+      return;
+    } catch (err) {
+      lastErr = err;
+      if (i === attempts - 1) break;
+      const delay = pickBackoff(opts.backoffMs, i);
+      await _sleep(delay);
+    }
+  }
+  throw lastErr;
+}
+
 async function runTurnWithRetries(
   entry: PtyEntry,
   prompt: string,
@@ -1264,10 +1322,10 @@ async function runTurnWithRetries(
       attempt += 1;
       await _sleep(delay);
       try {
-        await respawnEntry(entry);
+        await respawnEntryWithRetries(entry, supervisorOpts);
       } catch (respawnErr) {
         return errorResult(
-          `[pty-supervisor] respawn failed for ${entry.sessionKey} after ${attempt} attempt(s): ${(respawnErr as Error).message}`,
+          `[pty-supervisor] respawn failed for ${entry.sessionKey} after ${supervisorOpts.respawnRetries} attempt(s) (outer turn-retry ${attempt}): ${(respawnErr as Error).message}`,
         );
       }
     }

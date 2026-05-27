@@ -24,6 +24,7 @@ import {
   injectEnsureAgentDir,
   injectMaxConcurrentForTests,
   injectMaxRetriesForTests,
+  injectRespawnRetriesForTests,
   injectNewSessionId,
   injectIsSessionResumable,
   killAllPtys,
@@ -510,6 +511,122 @@ describe("pty-supervisor retry and backoff", () => {
     expect(result.sessionId).toBeUndefined();
     expect(result.stderr).toMatch(/max retries/);
     expect(result.stderr).toMatch(/global/);
+  });
+
+  it("retries respawnEntry on failure (issue #175 — was: 1 attempt = give up)", async () => {
+    // Reproduce the production failure: the long-lived claude died on a
+    // turn (PtyClosedError → retryable), supervisor tries to respawn, but
+    // the fresh claude "exits before TUI settled" — the spawn throws.
+    // Pre-#175 behaviour: supervisor gave up after one bad respawn,
+    // truncating the 5-retry envelope. Post-#175: it retries the respawn
+    // itself respawnRetries=3 times.
+    const sleeps: number[] = [];
+    injectSleep(async (ms) => {
+      sleeps.push(ms);
+    });
+
+    let globalCalls = 0;
+    let spawnIndex = 0;
+    const spawned: FakePtyHandle[] = [];
+    const spawn: SpawnPty = async () => {
+      const idx = spawnIndex++;
+      // Initial spawn (idx=0) succeeds. First respawn (idx=1) throws —
+      // simulating "PTY for claude exited before TUI settled". Second
+      // respawn (idx=2) succeeds.
+      if (idx === 1) {
+        throw new Error("PTY for claude exited before TUI settled (pid=99999)");
+      }
+      const handle = makeFakePty(`respawn-retry-${idx}`, {
+        onTurn: async (prompt) => {
+          const callNum = globalCalls++;
+          if (callNum === 0) {
+            throw new PtyClosedError(`respawn-retry-${idx}`, 1, "SIGPIPE");
+          }
+          return {
+            text: `recovered:${prompt}`,
+            bytesCaptured: 0,
+            cleanBoundary: true,
+            sessionId: "s",
+          };
+        },
+      });
+      spawned.push(handle);
+      return handle;
+    };
+    injectSpawnPty(spawn);
+    await initSupervisor();
+
+    const result = await runOnPty("global", "hi", { timeoutMs: 1000 });
+    expect(result.exitCode).toBe(0);
+    expect(result.rawStdout).toBe("recovered:hi");
+    // 3 spawn calls observed: initial + first (failing) respawn + second
+    // (succeeding) respawn. Only 2 reached the FakePty stage (the failing
+    // one threw before reaching makeFakePty).
+    expect(spawnIndex).toBe(3);
+    expect(spawned.length).toBe(2);
+    // Sleeps:
+    // - 1× outer backoff (between turn fail and respawn) = 1000ms
+    // - 1× inner backoff (between failed respawn and retry) = 1000ms
+    expect(sleeps).toEqual([1000, 1000]);
+  });
+
+  it("bails after respawnRetries exhaustions with a structured error", async () => {
+    injectSleep(async () => {});
+    // Bound the test: maxRetries=1 outer turn-retry, respawnRetries=2 inner.
+    // The first respawn fails, the retry also fails → bail after 2 attempts.
+    injectMaxRetriesForTests(1);
+    injectRespawnRetriesForTests(2);
+
+    let spawnIndex = 0;
+    const spawn: SpawnPty = async () => {
+      const idx = spawnIndex++;
+      if (idx === 0) {
+        return makeFakePty("permabad-0", {
+          onTurn: async () => {
+            throw new PtyClosedError("permabad-0", 1, "SIGPIPE");
+          },
+        });
+      }
+      // Every respawn attempt fails fast.
+      throw new Error("PTY for claude exited before TUI settled (pid=12345)");
+    };
+    injectSpawnPty(spawn);
+    await initSupervisor();
+
+    const result = await runOnPty("global", "hi", { timeoutMs: 1000 });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toMatch(/respawn failed.*2 attempt\(s\)/);
+    expect(result.stderr).toMatch(/exited before TUI settled/);
+    // 1 initial spawn + 2 inner respawn attempts = 3 total spawn calls.
+    expect(spawnIndex).toBe(3);
+  });
+
+  it("respects respawnRetries=1 (one attempt only — pre-#175 behaviour, configurable)", async () => {
+    // Operators who want to opt back into the old "give up fast" behaviour
+    // can set pty.respawnRetries = 1.
+    injectSleep(async () => {});
+    injectMaxRetriesForTests(1);
+    injectRespawnRetriesForTests(1);
+
+    let spawnIndex = 0;
+    const spawn: SpawnPty = async () => {
+      const idx = spawnIndex++;
+      if (idx === 0) {
+        return makeFakePty("once-bad-0", {
+          onTurn: async () => {
+            throw new PtyClosedError("once-bad-0", 1, null);
+          },
+        });
+      }
+      throw new Error("respawn fail");
+    };
+    injectSpawnPty(spawn);
+    await initSupervisor();
+
+    const result = await runOnPty("global", "hi", { timeoutMs: 1000 });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toMatch(/respawn failed.*1 attempt\(s\)/);
+    expect(spawnIndex).toBe(2); // initial + 1 respawn attempt
   });
 
   it("does NOT retry on non-retryable errors", async () => {

@@ -174,6 +174,7 @@ const DEFAULT_SETTINGS: Settings = {
     enabled: false,
     idleReapMinutes: 30,
     maxRetries: 5,
+    respawnRetries: 3,
     backoffMs: [1000, 2000, 4000, 8000, 16000],
     namedAgentsAlwaysAlive: true,
     turnIdleTimeoutMs: 5000,
@@ -508,8 +509,17 @@ export interface PtyConfig {
   /** Maximum number of crash-respawn-replay attempts per event.
    *  Default: 5. */
   maxRetries: number;
+  /** Maximum number of `respawnEntry()` attempts after each retryable
+   *  `runTurn` failure. The outer `maxRetries` budget controls how many
+   *  turn replays we attempt; this inner budget controls how many times
+   *  we try to bring the PTY back up between turns. Before this was
+   *  introduced (issue #175), a single failed respawn would truncate the
+   *  outer envelope to one attempt, causing production cron jobs to give
+   *  up after one bad respawn. Default: 3. */
+  respawnRetries: number;
   /** Backoff between retries (ms). Cycles through this list; if maxRetries
-   *  exceeds the list length, the last value is reused.
+   *  exceeds the list length, the last value is reused. The same array is
+   *  reused for inner respawn retries.
    *  Default: [1000, 2000, 4000, 8000, 16000]. */
   backoffMs: number[];
   /** When true, agents under agents/*\/ get a PTY pre-spawned at startup and
@@ -922,6 +932,14 @@ function parseSettings(raw: Record<string, any>, discordUserIds?: string[]): Set
         Number.isFinite(raw.pty?.maxRetries) && Number(raw.pty.maxRetries) >= 0
           ? Number(raw.pty.maxRetries)
           : 5,
+      respawnRetries:
+        Number.isFinite(raw.pty?.respawnRetries) && Number(raw.pty.respawnRetries) >= 1
+          ? // Cap at 20 to prevent footgun config (security review on #175):
+            // every inner attempt sleeps the backoff schedule (max 16s after
+            // the array runs out), so an operator who sets a huge value can
+            // wedge a cron turn for hours waiting on hopeless respawns.
+            Math.min(20, Number(raw.pty.respawnRetries))
+          : 3,
       backoffMs:
         Array.isArray(raw.pty?.backoffMs) &&
         raw.pty.backoffMs.length > 0 &&
