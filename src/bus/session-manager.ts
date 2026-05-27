@@ -567,6 +567,12 @@ export class SessionManager {
         ((agentId: string, sessionId: string) => createSession(sessionId, agentId));
       await persist(agent.id, fresh);
       agent.session_id = fresh;
+      // Issue #165 (PR #184 review): this attempt may have synthesized an
+      // --mcp-config (minted a multiplexer identity + wrote a 0600 file).
+      // The retry below re-synthesizes from scratch, so revoke this
+      // attempt's identity + delete its file first — otherwise the identity
+      // leaks and a stale file lingers if the retry fails before rewriting.
+      this.cleanupAgentMcpConfig(mcpConfigCwd, agent.id);
       // The proc that emitted the collision marker has exited; clear
       // its registry slot so the recursive respawn doesn't trip the
       // `already spawned` guard (the `onExit` cleanup above may not
@@ -580,7 +586,8 @@ export class SessionManager {
     if (collision) {
       // Retried once and still colliding — surface a real error so the
       // operator notices instead of silently looping. Same registry-
-      // slot cleanup as the rotation path.
+      // slot + MCP-config cleanup as the rotation path.
+      this.cleanupAgentMcpConfig(mcpConfigCwd, agent.id);
       const current = this.agents.get(agent.id);
       if (current && current.proc === proc) {
         this.agents.delete(agent.id);
@@ -729,34 +736,43 @@ export class SessionManager {
    * channel; observe process exit; the caller (Bus core) publishes
    * `session.end` AFTER the process exit fires — not before.
    */
+  /**
+   * Release the multiplexer identity + delete the synthesized per-agent
+   * `--mcp-config` (0600 bearer-token file) for an agent that synthesized
+   * one (issue #165). `cwd` is the agent's resolved cwd, or undefined when
+   * no config was synthesized (then this is a no-op). Best-effort: revoke
+   * is documented idempotent and `deleteConfigForPty` swallows ENOENT, so a
+   * double-call (e.g. stop() racing the onExit auto-cleanup, or a
+   * collision-retry followed by stop()) is safe.
+   */
+  private cleanupAgentMcpConfig(cwd: string | undefined, agentId: string): void {
+    if (!cwd) return;
+    try {
+      deleteConfigForPty(cwd, agentId);
+    } catch (err) {
+      (this.options.logger ?? console).warn(
+        `[bus-session] agent=${agentId} mcp-config cleanup failed`,
+        err,
+      );
+    }
+    if (this.mcpSynth) {
+      Promise.resolve(this.mcpSynth.revoke(agentId)).catch((err) =>
+        (this.options.logger ?? console).warn(
+          `[bus-session] agent=${agentId} mcp identity revoke failed`,
+          err,
+        ),
+      );
+    }
+  }
+
   stop(agent_id: string): Promise<void> {
     const record = this.agents.get(agent_id);
     if (!record) return Promise.resolve();
     return new Promise<void>((resolve) => {
       const finalise = (): void => {
         // Issue #165: release the multiplexer identity + delete the
-        // synthesized per-agent --mcp-config (0600 bearer-token file) when
-        // this spawn had one. Best-effort: revoke is documented idempotent
-        // and deleteConfigForPty swallows ENOENT, so a double-call (stop()
-        // racing the onExit auto-cleanup) is safe.
-        if (record.mcpConfigCwd) {
-          try {
-            deleteConfigForPty(record.mcpConfigCwd, agent_id);
-          } catch (err) {
-            (this.options.logger ?? console).warn(
-              `[bus-session] agent=${agent_id} mcp-config cleanup failed`,
-              err,
-            );
-          }
-          if (this.mcpSynth) {
-            Promise.resolve(this.mcpSynth.revoke(agent_id)).catch((err) =>
-              (this.options.logger ?? console).warn(
-                `[bus-session] agent=${agent_id} mcp identity revoke failed`,
-                err,
-              ),
-            );
-          }
-        }
+        // synthesized per-agent --mcp-config when this spawn had one.
+        this.cleanupAgentMcpConfig(record.mcpConfigCwd, agent_id);
         // Drop from registry (the onExit handler installed in spawnAgent()
         // will also do this; harmless to do twice).
         this.agents.delete(agent_id);

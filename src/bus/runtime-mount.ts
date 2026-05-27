@@ -11,13 +11,17 @@
  *   - Slash-command relay via `wireSlashCommands`.
  *   - Teardown handle.
  *
- * Sprint 5.2a (this PR) adds:
+ * Sprint 5.2a adds:
  *   - Auto-spawn of named agents from `settings.agents` (resolved into
- *     `AgentConfig` via `resolveBusAgentConfigs`).
+ *     `AgentConfig` via `resolveBusAgentConfigs`). Issue #165: this spawn
+ *     is now skippable at mount via `deferSpawn: true` — the daemon then
+ *     calls `handle.spawnAgents()` after the MCP multiplexer issuer is
+ *     wired, so spawned agents get a synthesized `--mcp-config`.
  *   - `BusRuntimeHandle.stop()` now stops every spawned agent in addition
  *     to tearing down BusCore.
  *   - Rollback of partial mounts: if agent N+1 fails to spawn, agents
- *     0..N are stopped before the error is re-thrown.
+ *     0..N are stopped before the error is re-thrown. The same batch
+ *     rollback backs `handle.spawnAgents()`.
  *
  * Sprint 5.2b will follow with adapter wiring (Discord / Telegram /
  * Slack / WebUi) using a routing-config schema; Sprint 5.2c adds

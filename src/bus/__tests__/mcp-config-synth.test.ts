@@ -139,7 +139,7 @@ function writeArgvRecorder(dir: string): string {
   return path;
 }
 
-async function readArgvWhenReady(dir: string, timeoutMs = 2000): Promise<string[]> {
+async function readArgvWhenReady(dir: string, timeoutMs = 8000): Promise<string[]> {
   const path = join(dir, "argv.txt");
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {

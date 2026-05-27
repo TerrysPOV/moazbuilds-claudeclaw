@@ -471,7 +471,6 @@ export async function start(args: string[] = []) {
     try {
       const { mountBusRuntime, resolveDaemonSocketPath } = await import("../bus/runtime-mount");
       const { resolveBusAgentConfigs } = await import("../bus/agent-resolver");
-      const { wireBusAdapters } = await import("../bus/adapter-wiring");
       const { BusCoreImpl } = await import("../bus/core");
       const { SessionManager } = await import("../bus/session-manager");
 
@@ -487,19 +486,19 @@ export async function start(args: string[] = []) {
         .map((r) => r.config)
         .filter((c): c is NonNullable<typeof c> => c !== null);
 
-      // Boot order matters. PR #123 Codex P1+P2 fold-in:
+      // Boot order matters. PR #123 Codex P1+P2 + issue #165:
       //   1. Build BusCore + SessionManager (no I/O yet).
-      //   2. mountBusRuntime — starts the IPC server + spawns agents.
-      //      Bus is now live and addressable.
-      //   3. wireBusAdapters — adapters call `adapter.start()` which
-      //      kicks off their poll loops / opens HTTP listeners.
-      //      MUST come AFTER step 2 so prompts that arrive during the
-      //      adapter's first poll have a live bus + agents to dispatch
-      //      to (Codex P2: prompt-loss race).
-      //   4. handle.attachAdapters — the handle's stop() lifecycle now
-      //      owns the adapters; any error in step 5+ that falls
-      //      through to the catch tears them down (Codex P1: adapter
-      //      leak on partial mount failure).
+      //   2. mountBusRuntime with `deferSpawn: true` — starts the IPC
+      //      server + slash relay + orphan scan, but does NOT spawn agents
+      //      yet. The bus is live and addressable; no agents registered.
+      //   3. (after the MCP multiplexer block below) wire the synthesizer,
+      //      `handle.spawnAgents()`, THEN `wireBusAdapters` +
+      //      `handle.attachAdapters`. Issue #165: agents must spawn after
+      //      the multiplexer issuer is wired (so they get `--mcp-config`),
+      //      and adapters must start AFTER agents exist (Codex P2:
+      //      prompt-loss race — adapters polling with zero registered
+      //      agents would silently drop inbound prompts).
+      // Search "Issue #165: deferred bus agent spawn" for step 3.
       const socketPath = resolveDaemonSocketPath();
       const bus = new BusCoreImpl({ socketPath });
       const sessionManager = new SessionManager({ busSocketPath: socketPath });
@@ -507,46 +506,12 @@ export async function start(args: string[] = []) {
         bus,
         sessionManager,
         agents: agentConfigs,
-        // Issue #165: defer the agent spawn. The MCP multiplexer identity
-        // issuer is wired AFTER this mount (it depends on
-        // pluginManager.startServices()). Spawning agents now would build
-        // their claude PTYs before the issuer exists, so buildClaudeArgs
-        // would synthesize no `--mcp-config` and every mcp.shared server
-        // would be unreachable for the agent's whole lifetime. We spawn
-        // below, after the multiplexer block, via handle.spawnAgents().
         deferSpawn: true,
         projectRoot: process.cwd(),
       });
-      // The mount succeeded — from here on, ANY error must call
-      // handle.stop() before falling through to legacy, otherwise the
-      // bus IPC server + spawned agents leak.
-      try {
-        const { adapters, errors } = await wireBusAdapters({ bus, settings });
-        for (const [name, msg] of Object.entries(errors)) {
-          console.warn(`[${ts()}] Bus adapter "${name}" failed to mount: ${msg}`);
-        }
-        handle.attachAdapters(adapters);
-
-        // Issue #165: agent spawn, BusScheduler wiring, and the
-        // architecture-doc write all moved to AFTER the MCP multiplexer
-        // block (search "Issue #165: deferred bus agent spawn"). The
-        // scheduler targets the first spawned agent id, and the arch doc
-        // reports the spawned set — both depend on the spawn, which now
-        // happens once the multiplexer issuer is wired.
-      } catch (wireErr) {
-        // Adapter / scheduler wiring threw — stop the handle (which
-        // already owns the bus + agents + whatever was attached
-        // before this throw) before re-throwing to the outer catch.
-        try {
-          await handle.stop();
-        } catch (stopErr) {
-          console.error(`[${ts()}] handle.stop() during wire rollback failed`, stopErr);
-        }
-        throw wireErr;
-      }
       busRuntimeHandle = handle;
-      busRuntimeSpawnedAgents = handle.spawnedAgentIds;
-      busRuntimeAdapterNames = handle.mountedAdapterNames;
+      busRuntimeSpawnedAgents = handle.spawnedAgentIds; // [] until deferred spawn
+      busRuntimeAdapterNames = handle.mountedAdapterNames; // [] until adapters wired
       busCoreForWebUi = bus;
     } catch (err) {
       console.error(
@@ -593,6 +558,15 @@ export async function start(args: string[] = []) {
   // which means flipping this back to false so the legacy adapter + legacy
   // heartbeat paths re-engage.
   let skipLegacyAdapters = busRuntimeHandle !== null;
+
+  // Issue #165: bus adapters are now wired AFTER the deferred agent spawn
+  // (below the multiplexer block), so `busRuntimeAdapterNames` is still
+  // empty at the startup-banner + legacy-skip logs above this point. Use
+  // the configured-intent list (same token/busRouting predicates
+  // wireBusAdapters uses) so those logs report the right platforms.
+  const configuredBusAdapters: readonly string[] = busRuntimeHandle
+    ? (await import("../bus/adapter-wiring")).configuredBusAdapterNames(settings)
+    : [];
 
   let mcpProxyStarted: Promise<void> = Promise.resolve();
 
@@ -644,9 +618,9 @@ export async function start(args: string[] = []) {
         ? "no agents declared"
         : `${settings.agents.length} agent(s) declared (spawn deferred until MCP issuer wired)`;
     const adaptersLabel =
-      busRuntimeAdapterNames.length === 0
-        ? "no adapters"
-        : `adapters=[${busRuntimeAdapterNames.join(", ")}]`;
+      configuredBusAdapters.length === 0
+        ? "no adapters configured"
+        : `adapters=[${configuredBusAdapters.join(", ")}] (wired after agents)`;
     console.log(`  Runtime: bus (Bus stack mounted, ${agentsLabel}, ${adaptersLabel})`);
   } else if (settings.runtime === "bus") {
     console.log(`  Runtime: bus (Bus mount failed; legacy surfaces only)`);
@@ -712,7 +686,7 @@ export async function start(args: string[] = []) {
 
   if (skipLegacyAdapters) {
     console.log(
-      `  Telegram: handled by Bus adapter${busRuntimeAdapterNames.includes("telegram") ? "" : " (not configured)"}`,
+      `  Telegram: handled by Bus adapter${configuredBusAdapters.includes("telegram") ? "" : " (not configured)"}`,
     );
   } else {
     await initTelegram(currentSettings.telegram.token, currentSettings.telegram.receiveEnabled);
@@ -754,7 +728,7 @@ export async function start(args: string[] = []) {
 
   if (skipLegacyAdapters) {
     console.log(
-      `  Discord: handled by Bus adapter${busRuntimeAdapterNames.includes("discord") ? "" : " (not configured)"}`,
+      `  Discord: handled by Bus adapter${configuredBusAdapters.includes("discord") ? "" : " (not configured)"}`,
     );
   } else {
     await initDiscord(currentSettings.discord.token);
@@ -788,7 +762,7 @@ export async function start(args: string[] = []) {
 
   if (skipLegacyAdapters) {
     console.log(
-      `  Slack: handled by Bus adapter${busRuntimeAdapterNames.includes("slack") ? "" : " (not configured)"}`,
+      `  Slack: handled by Bus adapter${configuredBusAdapters.includes("slack") ? "" : " (not configured)"}`,
     );
   } else {
     await initSlack(currentSettings.slack.botToken, currentSettings.slack.appToken);
@@ -872,6 +846,16 @@ export async function start(args: string[] = []) {
         `[mcp-multiplexer] startup failed (non-fatal, falling back to per-PTY MCP discovery): ${msg}`,
       );
     }
+  } else if (settings.mcp.shared.length > 0 && !settings.web.enabled) {
+    // Issue #165 (PR #184 review): mcp.shared is configured but web is
+    // disabled, so the multiplexer never starts and the synthesizer is
+    // never wired — bus agents launch with NO --mcp-config and every
+    // mcp.shared server is silently unreachable. Warn loudly so the
+    // operator isn't left with the exact silent-failure mode this fix
+    // set out to kill. (Enable web, or clear mcp.shared.)
+    console.warn(
+      `[mcp-multiplexer] settings.mcp.shared is set (${settings.mcp.shared.join(", ")}) but web.enabled is false — the multiplexer cannot mount its HTTP routes, so bus agents will spawn WITHOUT --mcp-config and these servers will be unreachable. Set web.enabled: true to use mcp.shared.`,
+    );
   }
 
   // Issue #165: deferred bus agent spawn. The MCP multiplexer issuer is now
@@ -887,6 +871,22 @@ export async function start(args: string[] = []) {
     try {
       await busRuntimeHandle.spawnAgents();
       busRuntimeSpawnedAgents = busRuntimeHandle.spawnedAgentIds;
+
+      // Issue #165 / PR #123 Codex P2: wire adapters AFTER agents are
+      // spawned. Adapters call adapter.start() (poll loops / HTTP
+      // listeners) on mount, so wiring them before any agent is registered
+      // would let an inbound prompt hit a live bus with zero targets and be
+      // silently dropped during the multiplexer-start window.
+      const { wireBusAdapters } = await import("../bus/adapter-wiring");
+      const { adapters, errors } = await wireBusAdapters({
+        bus: busRuntimeHandle.bus,
+        settings: currentSettings,
+      });
+      for (const [name, msg] of Object.entries(errors)) {
+        console.warn(`[${ts()}] Bus adapter "${name}" failed to mount: ${msg}`);
+      }
+      busRuntimeHandle.attachAdapters(adapters);
+      busRuntimeAdapterNames = busRuntimeHandle.mountedAdapterNames;
 
       const { wireBusScheduler } = await import("../bus/scheduler-wiring");
       const schedulerHandle = await wireBusScheduler({

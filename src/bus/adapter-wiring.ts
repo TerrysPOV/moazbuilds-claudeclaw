@@ -96,6 +96,25 @@ export async function wireBusAdapters(
 }
 
 /**
+ * The adapter names `wireBusAdapters` WOULD mount for these settings —
+ * computed from the same token/busRouting predicates the per-adapter mount
+ * functions use, without constructing or starting anything. Single source
+ * of truth for "which bus adapters are configured", so startup logs that
+ * run BEFORE the (now deferred, issue #165) wiring can report intent
+ * accurately. Order matches `wireBusAdapters`.
+ */
+export function configuredBusAdapterNames(
+  settings: WireBusAdaptersOptions["settings"],
+): MountedAdapter["name"][] {
+  const names: MountedAdapter["name"][] = [];
+  if (settings.discord?.token && settings.discord?.busRouting) names.push("discord");
+  if (settings.telegram?.token && settings.telegram?.busRouting) names.push("telegram");
+  if (settings.slack?.botToken && settings.slack?.busRouting) names.push("slack");
+  if (settings.web?.bus) names.push("webui");
+  return names;
+}
+
+/**
  * Stop every adapter in reverse-construction order. Errors from one
  * adapter's stop() are logged and the loop continues so a single
  * misbehaving adapter can't block daemon shutdown.
