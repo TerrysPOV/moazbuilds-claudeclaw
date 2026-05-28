@@ -37,6 +37,12 @@ describe("isHostAllowed (loopback bind 127.0.0.1)", () => {
     expect(isHostAllowed("[::1]", bind)).toBe(true);
   });
 
+  it("allows the bare IPv6 loopback ::1 (not mangled by port strip)", () => {
+    // Regression guard: a naive /:\d+$/ strip would turn `::1` into `:`
+    // and reject it even though `::1` is in the allowlist.
+    expect(isHostAllowed("::1", bind)).toBe(true);
+  });
+
   it("is case-insensitive on the hostname", () => {
     expect(isHostAllowed("LOCALHOST:4632", bind)).toBe(true);
   });
@@ -63,6 +69,13 @@ describe("isHostAllowed (specific LAN bind)", () => {
 
   it("rejects a different LAN IP", () => {
     expect(isHostAllowed("192.168.1.99:4632", "192.168.1.50")).toBe(false);
+  });
+
+  it("allows a bare IPv6 LAN bind host (not mangled by port strip)", () => {
+    // `fe80::1` would strip to `fe80:` under a naive /:\d+$/ — the
+    // IPv6-aware hostnameOf leaves bare IPv6 intact.
+    expect(isHostAllowed("fe80::1", "fe80::1")).toBe(true);
+    expect(isHostAllowed("fe80::2", "fe80::1")).toBe(false);
   });
 });
 

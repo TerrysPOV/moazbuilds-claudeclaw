@@ -122,9 +122,29 @@ function getOrCreateSessionId(req: Request): { sessionId: string; setCookie?: st
  */
 export function isHostAllowed(hostHeader: string, bindHost: string): boolean {
   if (bindHost === "0.0.0.0" || bindHost === "::") return true;
-  const hostname = hostHeader.replace(/:\d+$/, "").toLowerCase();
+  const hostname = hostnameOf(hostHeader);
   const allowed = new Set(["127.0.0.1", "localhost", "[::1]", "::1", bindHost.toLowerCase()]);
   return allowed.has(hostname);
+}
+
+/**
+ * Extract the hostname from a Host header, dropping the optional `:port`.
+ * IPv6-aware so a bare `::1` or a LAN bind like `fe80::1` isn't mangled
+ * by a naive `:\d+$` strip (which would turn `::1` into `:`):
+ *   - `[::1]:4632` / `[::1]`     → `[::1]`   (bracketed IPv6; strip after `]`)
+ *   - `::1` / `fe80::1`          → unchanged (bare IPv6 — 2+ colons, no port)
+ *   - `localhost:8080` / `1.2.3.4:80` / `host` → port stripped if present
+ */
+function hostnameOf(hostHeader: string): string {
+  const h = hostHeader.toLowerCase();
+  if (h.startsWith("[")) {
+    const close = h.indexOf("]");
+    return close === -1 ? h : h.slice(0, close + 1);
+  }
+  // A valid Host header never carries a port on a bare (unbracketed) IPv6,
+  // so 2+ colons means bare IPv6 — leave it intact.
+  if ((h.match(/:/g)?.length ?? 0) > 1) return h;
+  return h.replace(/:\d+$/, "");
 }
 
 /** Returns a 403 Response if the CSRF token is missing or invalid, otherwise null. */
@@ -162,7 +182,8 @@ export function startWebUi(opts: StartWebUiOptions): WebServerHandle {
       // or VS Code forward sends the CLIENT-side port (8080) in Host,
       // not the bind port (4632), so the daemon 421'd its own dashboard.
       // Runs before the plugin gateway so /mcp/* and /api/plugin/* are
-      // covered too; the local MCP bridge calls with Host `127.0.0.1`.
+      // covered too; the local MCP bridge calls with Host
+      // `127.0.0.1:<port>`, whose hostname (127.0.0.1) is allowlisted.
       const host = req.headers.get("host") ?? "";
       if (!isHostAllowed(host, opts.host)) {
         return new Response("Bad Host", { status: 421 });
