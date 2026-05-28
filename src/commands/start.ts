@@ -39,8 +39,12 @@ import {
 import { getDayAndMinuteAtOffset, buildClockPromptPrefix } from "../timezone";
 import { isHeartbeatExcludedAt, isHeartbeatExcludedNow } from "../heartbeat-windows";
 import { startWebUi, type WebServerHandle } from "../web";
+<<<<<<< HEAD
 import { streamBusPrompt } from "../bus/webui-bridge";
 import { initializeJobSystem } from "../orchestrator/resumable-jobs";
+=======
+import { getOrCreateWebToken } from "../ui/auth";
+>>>>>>> upstream/master
 import type { Job } from "../jobs";
 import { isWizardTrigger, hasActiveWizard, handleWizardInput } from "./plugin-wizard";
 import { PluginManager, setPluginManager } from "../plugins";
@@ -997,7 +1001,7 @@ export async function start(args: string[] = []) {
     return code === "EADDRINUSE" || message.includes("EADDRINUSE");
   }
 
-  function startWebWithFallback(host: string, preferredPort: number): WebServerHandle {
+  function startWebWithFallback(host: string, preferredPort: number, token: string): WebServerHandle {
     const maxAttempts = 10;
     let lastError: unknown;
     for (let i = 0; i < maxAttempts; i++) {
@@ -1006,6 +1010,7 @@ export async function start(args: string[] = []) {
         return startWebUi({
           host,
           port: candidatePort,
+          token,
           getSnapshot: () => ({
             pid: process.pid,
             startedAt: daemonStartedAt,
@@ -1126,10 +1131,31 @@ export async function start(args: string[] = []) {
     throw lastError;
   }
 
+  // Allowlists are now fail-closed: an empty list blocks all users rather than allowing all.
+  // Deployments that previously relied on an empty allowedUserIds meaning "allow everyone"
+  // must add explicit IDs to continue working.
+  if (currentSettings.telegram.token && currentSettings.telegram.allowedUserIds.length === 0) {
+    console.error("Refusing to start: telegram.token is set but telegram.allowedUserIds is empty.");
+    console.error("The allowlist is now fail-closed; an empty list blocks all users.");
+    console.error("Add your Telegram user ID(s) to telegram.allowedUserIds in .claude/claudeclaw/settings.json.");
+    console.error("Run `claudeclaw config` for guided setup, or see the README for migration steps.");
+    process.exit(1);
+  }
+
+  if (currentSettings.discord.token && currentSettings.discord.allowedUserIds.length === 0) {
+    console.error("Refusing to start: discord.token is set but discord.allowedUserIds is empty.");
+    console.error("The allowlist is now fail-closed; an empty list blocks all users.");
+    console.error("Add your Discord user ID(s) to discord.allowedUserIds in .claude/claudeclaw/settings.json.");
+    console.error("Run `claudeclaw config` for guided setup, or see the README for migration steps.");
+    process.exit(1);
+  }
+
   if (webEnabled) {
     currentSettings.web.enabled = true;
-    web = startWebWithFallback(currentSettings.web.host, webPort);
+    const webToken = await getOrCreateWebToken();
+    web = startWebWithFallback(currentSettings.web.host, webPort, webToken);
     currentSettings.web.port = web.port;
+<<<<<<< HEAD
     console.log(
       `[${new Date().toLocaleTimeString()}] Web UI listening on http://${web.host}:${web.port}` +
         (skipLegacyAdapters ? " (bus-aware)" : ""),
@@ -1143,6 +1169,9 @@ export async function start(args: string[] = []) {
         `[${new Date().toLocaleTimeString()}] Web UI: bus adapter also mounted on ${currentSettings.web.bus?.bind ?? "(no bind configured)"}`,
       );
     }
+=======
+    console.log(`[${ts()}] Web UI: http://${web.host}:${web.port}/?token=${webToken}`);
+>>>>>>> upstream/master
   }
 
   // --- Helpers ---
