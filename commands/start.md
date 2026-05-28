@@ -123,11 +123,11 @@ Start the heartbeat daemon for this project. Follow these steps exactly:
 
    The bus runtime only spawns processes for agents declared in `settings.agents[]`. If an `agents/<name>/` directory has scheduled jobs but `<name>` is not declared, the scheduler fires prompts to the bus with `agent_id: <name>` and they sit `status: "pending"` forever — silent job death. The daemon warns at startup (PR #168), but the wizard can offer to fix it inline.
 
-   Run this scan (only counts `*.md` files — matches what the daemon's loader and the orphan-detect warning treat as a "job"; see `src/bus/orphan-agent-detect.ts` + `src/jobs.ts:loadJobs`):
+   Run this scan (only counts `.md` files — matches what the daemon's loader and the orphan-detect warning treat as a "job"; see `src/bus/orphan-agent-detect.ts` + `src/jobs.ts:loadJobs`). Uses `ls -A | grep` so dot-prefixed `.md` files (e.g. `.draft.md`) are counted to match the daemon's `endsWith(".md")` check, but `.swp`/`.bak` editor files are excluded by the regex anchor:
    ```bash
    for d in agents/*/; do
      name=$(basename "$d")
-     job_count=$(ls -1 "${d}jobs/"*.md 2>/dev/null | wc -l | tr -d ' ')
+     job_count=$(ls -1A "${d}jobs/" 2>/dev/null | grep -cE '\.md$' | tr -d ' ')
      [ "$job_count" -gt 0 ] && echo "${name}:${job_count}"
    done
    ```
@@ -150,10 +150,11 @@ Start the heartbeat daemon for this project. Follow these steps exactly:
      - agents/suzy/  (3 jobs)
    ```
 
-   If "Yes": append each orphan to `settings.agents`. Match step 5's permission-mode convention exactly:
-   - If the wizard's headless answer was "Yes — headless (Recommended)" (or permissions were already configured for headless), write `{ "id": "<name>" }` with NO `permission_mode` field — the resolver default delivers headless behaviour.
-   - If the wizard's headless answer was "No — confirm each Bash/Write call", write `{ "id": "<name>", "permission_mode": "plan" }`, matching what step 5 does for existing entries.
-   - If permissions were not configured this wizard run AND no prior `.claude/claudeclaw/permission-mode.json` exists, default to no `permission_mode` (relies on resolver default).
+   If "Yes": append each orphan to `settings.agents`. Match step 5's permission-mode convention exactly — every orphan gets the SAME `permission_mode` treatment that step 5 would apply to a new agent in the current wizard state:
+
+   - **If the wizard asked about permissions this run AND the answer was "No — confirm each Bash/Write call"** → write `{ "id": "<name>", "permission_mode": "plan" }`.
+   - **If the wizard asked about permissions this run AND the answer was "Yes — headless (Recommended)"** → write `{ "id": "<name>" }` with NO `permission_mode` field (resolver default delivers headless).
+   - **If the wizard skipped the permissions question this run** (it was already configured), read `.claude/claudeclaw/permission-mode.json`. If it exists and `{ "mode": "plan" }`, write `{ "id": "<name>", "permission_mode": "plan" }` — matching what existing agents would have got under step 5's "No" branch on a prior run. Otherwise (file absent OR mode is anything else) write `{ "id": "<name>" }` with no `permission_mode` — resolver-default headless, matching prior-run "Yes".
 
    Write the updated `settings.json`. Tell the user "Added N orphan agent(s) to settings.agents."
 
