@@ -47,7 +47,7 @@ Start the heartbeat daemon for this project. Follow these steps exactly:
    Use AskUserQuestion:
    - "Your settings are already configured. Want to change anything?" (header: "Settings", options: "Keep current settings", "Reconfigure")
 
-   If they choose "Keep current settings", skip to step 6 (first contact question).
+   If they choose "Keep current settings", skip to step 5a (orphan detection still runs — it's the most likely failure on re-runs of an existing setup) and then on to step 6.
    If they choose "Reconfigure", proceed to step 5 below as if nothing was configured.
 
    **If SOME sections are configured and others are not**, show the already-configured sections as a summary, then only ask about the unconfigured sections in step 5.
@@ -132,11 +132,15 @@ Start the heartbeat daemon for this project. Follow these steps exactly:
    done
    ```
 
-   Read `.claude/claudeclaw/settings.json` and parse `settings.agents[].id` (treat missing/empty as `[]`). For each `<name>:<count>` from the scan, if `<name>` is NOT in the declared id list, it's an orphan.
+   Read `.claude/claudeclaw/settings.json` and parse `settings.agents[].id` (treat missing/empty as `[]`). For each `<name>:<count>` from the scan, if `<name>` is NOT in the declared id list, it's an orphan candidate.
 
-   **If no orphans found**, proceed to step 6.
+   **Validate each orphan candidate against the bus agent id regex** `^[a-z0-9][a-z0-9_-]{0,35}$` (the same pattern `src/config.ts:1044` rejects with; an invalid id would be silently skipped by the runtime, so adding it to settings.agents accomplishes nothing). Split candidates into two buckets:
+   - **Valid orphans** — eligible to add via the AskUserQuestion below.
+   - **Invalid orphans** — surface a single warning to the user listing each invalid dir name + why (uppercase / special char / too long / starts with dash or underscore) and instructing them to rename the directory before re-running the wizard. Do NOT offer to add these.
 
-   **If orphans found**, show the list and use AskUserQuestion:
+   **If no valid orphans found**, proceed to step 6 (after the invalid-name warning if any).
+
+   **If valid orphans found**, show the list and use AskUserQuestion:
    - Question: "Found agent directories on disk with jobs but not declared in settings.agents. The bus runtime won't spawn them, so their scheduled jobs will silently fail. Add them?"
    - Header: "Orphan agents"
    - Options:
