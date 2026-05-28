@@ -123,11 +123,11 @@ Start the heartbeat daemon for this project. Follow these steps exactly:
 
    The bus runtime only spawns processes for agents declared in `settings.agents[]`. If an `agents/<name>/` directory has scheduled jobs but `<name>` is not declared, the scheduler fires prompts to the bus with `agent_id: <name>` and they sit `status: "pending"` forever — silent job death. The daemon warns at startup (PR #168), but the wizard can offer to fix it inline.
 
-   Run this scan:
+   Run this scan (only counts `*.md` files — matches what the daemon's loader and the orphan-detect warning treat as a "job"; see `src/bus/orphan-agent-detect.ts` + `src/jobs.ts:loadJobs`):
    ```bash
    for d in agents/*/; do
      name=$(basename "$d")
-     job_count=$(ls -1 "${d}jobs/" 2>/dev/null | wc -l | tr -d ' ')
+     job_count=$(ls -1 "${d}jobs/"*.md 2>/dev/null | wc -l | tr -d ' ')
      [ "$job_count" -gt 0 ] && echo "${name}:${job_count}"
    done
    ```
@@ -140,7 +140,7 @@ Start the heartbeat daemon for this project. Follow these steps exactly:
    - Question: "Found agent directories on disk with jobs but not declared in settings.agents. The bus runtime won't spawn them, so their scheduled jobs will silently fail. Add them?"
    - Header: "Orphan agents"
    - Options:
-     - "Yes — add with bypassPermissions (Recommended)" (description: "Adds `{ id: <name>, permission_mode: 'bypassPermissions' }` per orphan. Inherits the same headless default the wizard already applies.")
+     - "Yes — add (Recommended)" (description: "Adds `{ id: <name> }` per orphan, mirroring step 5's permission-mode rule: nothing written for headless (resolver default applies), `permission_mode: \"plan\"` written if the headless answer was \"No — confirm each Bash/Write call\".")
      - "No — leave as-is" (description: "Jobs for the orphan agent(s) will continue to silently fail until you declare them manually.")
 
    Show the orphan list in the question body, e.g.:
@@ -150,7 +150,12 @@ Start the heartbeat daemon for this project. Follow these steps exactly:
      - agents/suzy/  (3 jobs)
    ```
 
-   If "Yes": append each orphan to `settings.agents` as `{ "id": "<name>", "permission_mode": "<wizard's permission_mode answer or 'bypassPermissions'>" }`. Write the updated `settings.json`. Tell the user "Added N orphan agent(s) to settings.agents."
+   If "Yes": append each orphan to `settings.agents`. Match step 5's permission-mode convention exactly:
+   - If the wizard's headless answer was "Yes — headless (Recommended)" (or permissions were already configured for headless), write `{ "id": "<name>" }` with NO `permission_mode` field — the resolver default delivers headless behaviour.
+   - If the wizard's headless answer was "No — confirm each Bash/Write call", write `{ "id": "<name>", "permission_mode": "plan" }`, matching what step 5 does for existing entries.
+   - If permissions were not configured this wizard run AND no prior `.claude/claudeclaw/permission-mode.json` exists, default to no `permission_mode` (relies on resolver default).
+
+   Write the updated `settings.json`. Tell the user "Added N orphan agent(s) to settings.agents."
 
    If "No": write nothing — the daemon's startup warning will continue to flag them on every restart.
 
