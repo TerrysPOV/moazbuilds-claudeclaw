@@ -47,7 +47,7 @@ Start the heartbeat daemon for this project. Follow these steps exactly:
    Use AskUserQuestion:
    - "Your settings are already configured. Want to change anything?" (header: "Settings", options: "Keep current settings", "Reconfigure")
 
-   If they choose "Keep current settings", skip to step 6 (first contact question).
+   If they choose "Keep current settings", skip to step 5a (orphan detection still runs — it's the most likely failure on re-runs of an existing setup) and then on to step 6.
    If they choose "Reconfigure", proceed to step 5 below as if nothing was configured.
 
    **If SOME sections are configured and others are not**, show the already-configured sections as a summary, then only ask about the unconfigured sections in step 5.
@@ -118,6 +118,51 @@ Start the heartbeat daemon for this project. Follow these steps exactly:
      - "No — confirm each Bash/Write call" → write `.claude/claudeclaw/permission-mode.json` with `{"mode": "plan"}` (the legacy `claude -p` runner reads this). AND, for each existing entry in `settings.agents` (if any), set the agent's `permission_mode` to `"plan"` so the bus runtime picks it up per-agent. If `settings.agents` is empty, only the legacy file needs writing — bus agents added later will need a manual `permission_mode` field (this is intentional; bus agents are explicit per-agent configs).
 
    Update `.claude/claudeclaw/settings.json` with their answers.
+
+5a. **Detect orphan agent directories** (issue #167):
+
+   The bus runtime only spawns processes for agents declared in `settings.agents[]`. If an `agents/<name>/` directory has scheduled jobs but `<name>` is not declared, the scheduler fires prompts to the bus with `agent_id: <name>` and they sit `status: "pending"` forever — silent job death. The daemon warns at startup (PR #168), but the wizard can offer to fix it inline.
+
+   Run this scan (only counts `.md` files — matches what the daemon's loader and the orphan-detect warning treat as a "job"; see `src/bus/orphan-agent-detect.ts` + `src/jobs.ts:loadJobs`). Uses `ls -A | grep` so dot-prefixed `.md` files (e.g. `.draft.md`) are counted to match the daemon's `endsWith(".md")` check, but `.swp`/`.bak` editor files are excluded by the regex anchor:
+   ```bash
+   for d in agents/*/; do
+     name=$(basename "$d")
+     job_count=$(ls -1A "${d}jobs/" 2>/dev/null | grep -cE '\.md$' | tr -d ' ')
+     [ "$job_count" -gt 0 ] && echo "${name}:${job_count}"
+   done
+   ```
+
+   Read `.claude/claudeclaw/settings.json` and parse `settings.agents[].id` (treat missing/empty as `[]`). For each `<name>:<count>` from the scan, if `<name>` is NOT in the declared id list, it's an orphan candidate.
+
+   **Validate each orphan candidate against the bus agent id regex** `^[a-z0-9][a-z0-9_-]{0,35}$` (the same pattern `src/config.ts:1044` rejects with; an invalid id would be silently skipped by the runtime, so adding it to settings.agents accomplishes nothing). Split candidates into two buckets:
+   - **Valid orphans** — eligible to add via the AskUserQuestion below.
+   - **Invalid orphans** — surface a single warning to the user listing each invalid dir name + why (uppercase / special char / too long / starts with dash or underscore) and instructing them to rename the directory before re-running the wizard. Do NOT offer to add these.
+
+   **If no valid orphans found**, proceed to step 6 (after the invalid-name warning if any).
+
+   **If valid orphans found**, show the list and use AskUserQuestion:
+   - Question: "Found agent directories on disk with jobs but not declared in settings.agents. The bus runtime won't spawn them, so their scheduled jobs will silently fail. Add them?"
+   - Header: "Orphan agents"
+   - Options:
+     - "Yes — add (Recommended)" (description: "Adds `{ id: <name> }` per orphan, mirroring step 5's permission-mode rule: nothing written for headless (resolver default applies), `permission_mode: \"plan\"` written if the headless answer was \"No — confirm each Bash/Write call\".")
+     - "No — leave as-is" (description: "Jobs for the orphan agent(s) will continue to silently fail until you declare them manually.")
+
+   Show the orphan list in the question body, e.g.:
+   ```
+   Orphans detected:
+     - agents/reg/   (7 jobs)
+     - agents/suzy/  (3 jobs)
+   ```
+
+   If "Yes": append each orphan to `settings.agents`. Match step 5's permission-mode convention exactly — every orphan gets the SAME `permission_mode` treatment that step 5 would apply to a new agent in the current wizard state:
+
+   - **If the wizard asked about permissions this run AND the answer was "No — confirm each Bash/Write call"** → write `{ "id": "<name>", "permission_mode": "plan" }`.
+   - **If the wizard asked about permissions this run AND the answer was "Yes — headless (Recommended)"** → write `{ "id": "<name>" }` with NO `permission_mode` field (resolver default delivers headless).
+   - **If the wizard skipped the permissions question this run** (it was already configured), read `.claude/claudeclaw/permission-mode.json`. If it exists and `{ "mode": "plan" }`, write `{ "id": "<name>", "permission_mode": "plan" }` — matching what existing agents would have got under step 5's "No" branch on a prior run. Otherwise (file absent OR mode is anything else) write `{ "id": "<name>" }` with no `permission_mode` — resolver-default headless, matching prior-run "Yes".
+
+   Write the updated `settings.json`. Tell the user "Added N orphan agent(s) to settings.agents."
+
+   If "No": write nothing — the daemon's startup warning will continue to flag them on every restart.
 
 6. **Launch/start action**:
    ```bash
