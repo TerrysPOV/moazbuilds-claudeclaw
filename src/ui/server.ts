@@ -15,11 +15,17 @@ import { runUserMessage } from "../runner";
 import { readKanban, writeKanban, type KanbanBoard } from "./services/kanban";
 import { getHttpGateway } from "../plugins/http-gateway.js";
 
-// --- Security: CSRF Protection ---
-// NOTE: The Web UI has no built-in authentication. CSRF protection prevents
-// cross-origin browser attacks but does not prevent direct API access.
-// For production use, deploy behind a reverse proxy with authentication
-// (e.g. Cloudflare Access, nginx basic auth, or OAuth2 proxy).
+// --- Security: layered defenses ---
+// The Web UI has several layers:
+//   - Per-session CSRF tokens (below) on state-changing routes.
+//   - Host-header validation + cross-origin POST/DELETE rejection in the
+//     fetch handler (issue #164 items 2/3).
+//   - A persisted 256-bit web token (`getOrCreateWebToken`, issue #164
+//     item 1) with byte-safe `checkToken`. NOTE: as of PR A the token is
+//     generated but NOT yet enforced on `/api/*` — enforcement + the
+//     dashboard auto-token UX land in PR B. Until then, treat direct
+//     `/api/*` access as unauthenticated and, for untrusted networks,
+//     still deploy behind a reverse proxy with authentication.
 const CSRF_HEADER_NAME = "X-CSRF-Token";
 const MAX_CSRF_TOKENS = 10000;
 
