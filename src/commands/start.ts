@@ -1,5 +1,6 @@
 import { writeFile, unlink, mkdir } from "fs/promises";
 import { existsSync } from "fs";
+import { randomBytes } from "crypto";
 import { homedir } from "os";
 import { extractErrorDetail } from "../messaging";
 import { join } from "path";
@@ -998,7 +999,11 @@ export async function start(args: string[] = []) {
     return code === "EADDRINUSE" || message.includes("EADDRINUSE");
   }
 
-  function startWebWithFallback(host: string, preferredPort: number): WebServerHandle {
+  function startWebWithFallback(
+    host: string,
+    preferredPort: number,
+    token: string,
+  ): WebServerHandle {
     const maxAttempts = 10;
     let lastError: unknown;
     for (let i = 0; i < maxAttempts; i++) {
@@ -1007,6 +1012,7 @@ export async function start(args: string[] = []) {
         return startWebUi({
           host,
           port: candidatePort,
+          token,
           getSnapshot: () => ({
             pid: process.pid,
             startedAt: daemonStartedAt,
@@ -1129,16 +1135,23 @@ export async function start(args: string[] = []) {
 
   if (webEnabled) {
     currentSettings.web.enabled = true;
-    // Issue #164 item 1: mint + persist a 256-bit web token at
-    // .claude/claudeclaw/web.token (0600) on first start. PR A only
-    // provisions the file; enforcement on /api/* + the dashboard
-    // auto-token UX land in PR B (with a browser soak test).
+    // Issue #164: mint + persist a 256-bit web token at
+    // .claude/claudeclaw/web.token (0600) on first start, then enforce it
+    // on every /api/* route. On the rare chance provisioning fails (e.g.
+    // unwritable .claude dir) we fall back to an in-memory random token so
+    // the server still boots WITH auth rather than unauthenticated — the
+    // operator just won't have the file to read; they can restart once the
+    // dir is writable.
+    let webToken: string;
     try {
-      await getOrCreateWebToken();
+      webToken = await getOrCreateWebToken();
     } catch (err) {
-      console.warn(`[${ts()}] could not provision web.token: ${extractErrorDetail(err)}`);
+      console.warn(
+        `[${ts()}] could not persist web.token, using in-memory token: ${extractErrorDetail(err)}`,
+      );
+      webToken = randomBytes(32).toString("base64url");
     }
-    web = startWebWithFallback(currentSettings.web.host, webPort);
+    web = startWebWithFallback(currentSettings.web.host, webPort, webToken);
     currentSettings.web.port = web.port;
     console.log(
       `[${new Date().toLocaleTimeString()}] Web UI listening on http://${web.host}:${web.port}` +

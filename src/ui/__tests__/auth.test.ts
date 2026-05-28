@@ -29,40 +29,6 @@ function req(
   return new Request(url, { headers });
 }
 
-describe("checkBearer (issue #164 item 4 — byte-safe)", () => {
-  it("returns 503 when no token configured", async () => {
-    const { checkBearer } = await import("../auth");
-    const res = checkBearer(req({ Authorization: "Bearer x" }), undefined);
-    expect(res?.status).toBe(503);
-  });
-
-  it("accepts a matching Bearer token", async () => {
-    const { checkBearer } = await import("../auth");
-    const res = checkBearer(req({ Authorization: "Bearer sekret" }), "sekret");
-    expect(res).toBeNull();
-  });
-
-  it("rejects a wrong token with 401", async () => {
-    const { checkBearer } = await import("../auth");
-    const res = checkBearer(req({ Authorization: "Bearer nope" }), "sekret");
-    expect(res?.status).toBe(401);
-  });
-
-  it("rejects a missing header with 401", async () => {
-    const { checkBearer } = await import("../auth");
-    const res = checkBearer(req({}), "sekret");
-    expect(res?.status).toBe(401);
-  });
-
-  it("does NOT throw on a non-ASCII provided token of different byte length", async () => {
-    const { checkBearer } = await import("../auth");
-    // "café" is 4 chars but 5 bytes — the old char-length compare could
-    // mismatch buffer lengths and (with raw timingSafeEqual) throw.
-    const res = checkBearer(req({ Authorization: "Bearer café" }), "test");
-    expect(res?.status).toBe(401);
-  });
-});
-
 describe("checkToken (issue #164 — byte-safe, header + query)", () => {
   it("accepts the token via Authorization header", async () => {
     const { checkToken } = await import("../auth");

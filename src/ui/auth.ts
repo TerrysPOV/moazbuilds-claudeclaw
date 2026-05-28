@@ -2,7 +2,6 @@ import { readFile, writeFile, chmod, mkdir } from "fs/promises";
 import { existsSync } from "fs";
 import { randomBytes, timingSafeEqual } from "crypto";
 import { dirname, join } from "path";
-import { json } from "./http";
 
 /**
  * Resolved lazily (not at module load) so it tracks the daemon's actual
@@ -48,23 +47,6 @@ export function checkToken(req: Request, expected: string): boolean {
   const provided = m?.[1] ?? new URL(req.url).searchParams.get("token") ?? "";
   if (!provided) return false;
   return safeEqual(provided, expected);
-}
-
-/**
- * Bearer-header auth guard for the legacy `/api/inject` route. Hardened
- * for issue #164 item 4: the previous implementation used a plain `!==`
- * string compare which is neither constant-time nor byte-length safe.
- * Now routes through `safeEqual`.
- */
-export function checkBearer(req: Request, token: string | undefined): Response | null {
-  if (!token) return json({ ok: false, error: "API token not configured" }, 503);
-  const header = req.headers.get("Authorization") ?? "";
-  const m = header.match(/^Bearer\s+(.+)$/i);
-  const provided = m?.[1] ?? "";
-  if (!provided || !safeEqual(provided, token)) {
-    return json({ ok: false, error: "Unauthorized" }, 401);
-  }
-  return null;
 }
 
 function safeEqual(provided: string, expected: string): boolean {

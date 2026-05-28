@@ -2,7 +2,7 @@ import { timingSafeEqual, randomUUID } from "crypto";
 import { tmpdir } from "node:os";
 import { htmlPage } from "./page/html";
 import { clampInt, json } from "./http";
-import { checkBearer } from "./auth";
+import { checkToken } from "./auth";
 import type { StartWebUiOptions, WebServerHandle } from "./types";
 import { buildState, buildTechnicalInfo, sanitizeSettings } from "./services/state";
 import { readHeartbeatSettings, updateHeartbeatSettings } from "./services/settings";
@@ -17,15 +17,14 @@ import { getHttpGateway } from "../plugins/http-gateway.js";
 
 // --- Security: layered defenses ---
 // The Web UI has several layers:
-//   - Per-session CSRF tokens (below) on state-changing routes.
+//   - A persisted 256-bit web token (`getOrCreateWebToken`, issue #164)
+//     with byte-safe `checkToken`, ENFORCED on every `/api/*` route in
+//     the fetch handler below (`/api/health` is the only pre-auth API
+//     route; `/api/inject` also accepts the legacy `settings.apiToken`).
+//     The dashboard reads the token from `?token=` on first load.
 //   - Host-header validation + cross-origin POST/DELETE rejection in the
 //     fetch handler (issue #164 items 2/3).
-//   - A persisted 256-bit web token (`getOrCreateWebToken`, issue #164
-//     item 1) with byte-safe `checkToken`. NOTE: as of PR A the token is
-//     generated but NOT yet enforced on `/api/*` — enforcement + the
-//     dashboard auto-token UX land in PR B. Until then, treat direct
-//     `/api/*` access as unauthenticated and, for untrusted networks,
-//     still deploy behind a reverse proxy with authentication.
+//   - Per-session CSRF tokens (below) on state-changing routes.
 const CSRF_HEADER_NAME = "X-CSRF-Token";
 const MAX_CSRF_TOKENS = 10000;
 
@@ -222,8 +221,27 @@ export function startWebUi(opts: StartWebUiOptions): WebServerHandle {
         });
       }
 
+      // Health check is intentionally pre-auth so monitors / load balancers
+      // work unauthenticated.
       if (url.pathname === "/api/health") {
         return json({ ok: true, now: Date.now() });
+      }
+
+      // Issue #164 PR B: require the web token for every /api/* route.
+      // The HTML shell ("/" above) and /api/health (above) stay pre-auth;
+      // the dashboard JS reads the token from `?token=` on first load and
+      // attaches it as `Authorization: Bearer` to every subsequent fetch.
+      // /api/inject ALSO accepts the legacy settings.apiToken so existing
+      // automation keeps working. (Plugin gateway + /mcp/* routes are
+      // handled earlier in the fetch handler and never reach here.)
+      if (url.pathname.startsWith("/api/")) {
+        const validWebToken = checkToken(req, opts.token);
+        const apiToken = opts.getSnapshot().settings.apiToken;
+        const validApiToken =
+          url.pathname === "/api/inject" && !!apiToken && checkToken(req, apiToken);
+        if (!validWebToken && !validApiToken) {
+          return json({ ok: false, error: "unauthorized" }, 401);
+        }
       }
 
       if (url.pathname === "/api/csrf-token") {
@@ -475,8 +493,9 @@ export function startWebUi(opts: StartWebUiOptions): WebServerHandle {
       }
 
       if (url.pathname === "/api/inject" && req.method === "POST") {
-        const authErr = checkBearer(req, opts.getSnapshot().settings.apiToken);
-        if (authErr) return authErr;
+        // Auth already enforced by the /api/* block above (web token OR
+        // the legacy settings.apiToken). No extra checkBearer here — it
+        // would wrongly reject a valid web-token-only request.
         try {
           const body = await req.json();
           const message = typeof body.message === "string" ? body.message.trim() : "";

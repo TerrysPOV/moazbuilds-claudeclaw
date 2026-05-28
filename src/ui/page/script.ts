@@ -1,5 +1,51 @@
 export const pageScript = String.raw`    const $ = (id) => document.getElementById(id);
 
+    // --- Web token auth (issue #164 PR B) ---
+    // All /api/* routes now require the 256-bit web token. On first load
+    // we read it from the ?token= query param (how the operator opens the
+    // dashboard), persist it to sessionStorage, then strip it from the URL
+    // so it doesn't linger in history / Referer headers. Every same-origin
+    // /api/ fetch then carries it as an Authorization: Bearer header via
+    // the wrapper below — covering both raw fetch() and mutatingFetch.
+    (function initWebToken() {
+      try {
+        const u = new URL(window.location.href);
+        const t = u.searchParams.get("token");
+        if (t) {
+          sessionStorage.setItem("ccaw_web_token", t);
+          u.searchParams.delete("token");
+          window.history.replaceState({}, document.title, u.pathname + u.search + u.hash);
+        }
+      } catch (e) {
+        /* sessionStorage / URL unavailable — fall through unauthenticated */
+      }
+    })();
+    function getWebToken() {
+      try {
+        return sessionStorage.getItem("ccaw_web_token") || "";
+      } catch (e) {
+        return "";
+      }
+    }
+    const _origFetch = window.fetch.bind(window);
+    window.fetch = function (input, init) {
+      init = init || {};
+      const url = typeof input === "string" ? input : (input && input.url) || "";
+      const isApi =
+        url.indexOf("/api/") === 0 || url.indexOf(window.location.origin + "/api/") === 0;
+      if (isApi) {
+        const tok = getWebToken();
+        if (tok) {
+          const h = new Headers(
+            init.headers || (typeof input !== "string" && input.headers) || {},
+          );
+          if (!h.has("Authorization")) h.set("Authorization", "Bearer " + tok);
+          init.headers = h;
+        }
+      }
+      return _origFetch(input, init);
+    };
+
     // --- CSRF token management for mutating requests ---
     let _csrfToken = null;
     async function getCsrfToken() {
@@ -980,6 +1026,43 @@ export const pageScript = String.raw`    const $ = (id) => document.getElementBy
     startTypewriter();
     updateQuickJobUi();
     setQuickView(quickView);
+
+    // Issue #164 PR B: if the dashboard was opened without a ?token= and
+    // none is cached, /api/* calls will 401. Show a non-blocking banner
+    // with a paste field instead of leaving a silently broken page. No
+    // prompt()/alert() — those block the page and break browser tooling.
+    function showTokenBanner() {
+      if (document.getElementById("ccaw-token-banner")) return;
+      const bar = document.createElement("div");
+      bar.id = "ccaw-token-banner";
+      bar.style.cssText =
+        "position:fixed;top:0;left:0;right:0;z-index:9999;background:#b91c1c;color:#fff;" +
+        "padding:10px 14px;font:14px system-ui,sans-serif;display:flex;gap:8px;align-items:center;justify-content:center;";
+      const label = document.createElement("span");
+      label.textContent = "Web token required. Paste it (from .claude/claudeclaw/web.token):";
+      const input = document.createElement("input");
+      input.type = "password";
+      input.style.cssText = "flex:0 1 320px;padding:4px 8px;border-radius:4px;border:0;color:#111;";
+      const btn = document.createElement("button");
+      btn.textContent = "Save";
+      btn.style.cssText =
+        "padding:4px 12px;border-radius:4px;border:0;background:#fff;color:#b91c1c;cursor:pointer;font-weight:600;";
+      btn.onclick = function () {
+        const v = input.value.trim();
+        if (!v) return;
+        try {
+          sessionStorage.setItem("ccaw_web_token", v);
+        } catch (e) {}
+        bar.remove();
+        loadSettings();
+        refreshState();
+      };
+      bar.appendChild(label);
+      bar.appendChild(input);
+      bar.appendChild(btn);
+      document.body.appendChild(bar);
+    }
+    if (!getWebToken()) showTokenBanner();
 
     loadSettings();
     refreshState();
