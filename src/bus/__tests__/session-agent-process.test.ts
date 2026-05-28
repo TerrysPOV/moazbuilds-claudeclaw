@@ -3,7 +3,7 @@
  *
  * Uses a fake `PtyHandle` that records every `write` so we can assert:
  *   - concurrent `send_prompt_stream` calls serialise (no byte interleave),
- *   - a real prompt cancels the pending boot dialog-dismiss CR timers.
+ *   - a real prompt disengages the boot-dialog watcher (issue #193).
  */
 import { describe, expect, it } from "bun:test";
 import { PtyAgentProcess, type PtyHandle } from "../session-agent-process";
@@ -38,22 +38,29 @@ describe("PtyAgentProcess.send_prompt_stream", () => {
     expect(writes).toEqual(["first", "\r", "second", "\r"]);
   });
 
-  it("cancels pending dialog-dismiss timers on the first prompt", async () => {
-    const { handle, writes } = fakePty();
-    let stray = 0;
-    const timers = [10, 20, 30].map((ms) =>
-      setTimeout(() => {
-        stray += 1;
-        handle.write("\r");
-      }, ms),
-    );
-    const proc = new PtyAgentProcess("alpha", handle, timers);
+  it("disengages the boot-dialog watcher once a real prompt is dispatched", async () => {
+    const writes: string[] = [];
+    let dataCb: ((d: string) => void) | null = null;
+    const handle: PtyHandle = {
+      pid: 1234,
+      onData: (cb) => {
+        dataCb = cb;
+        return { dispose() {} };
+      },
+      onExit: () => ({ dispose() {} }),
+      write: (data: string) => {
+        writes.push(data);
+      },
+      kill: () => {},
+    };
+    const proc = new PtyAgentProcess("alpha", handle);
 
-    await proc.send_prompt_stream("hi");
-    // Wait well past the longest timer; none should have fired.
+    await proc.send_prompt_stream("hi"); // claude has reached the REPL
+    writes.length = 0;
+    // A dialog-looking chunk arriving AFTER the first prompt must be ignored —
+    // the watcher disengages so it can't inject keys mid-session.
+    dataCb?.("...\u276f 2. Yes, I accept...");
     await new Promise((r) => setTimeout(r, 60));
-
-    expect(stray).toBe(0);
-    expect(writes).toEqual(["hi", "\r"]);
+    expect(writes).toEqual([]);
   });
 });

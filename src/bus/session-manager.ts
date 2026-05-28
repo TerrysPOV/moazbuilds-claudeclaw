@@ -678,31 +678,12 @@ export class SessionManager {
         env,
       }),
     );
-    // Dismiss the WARNING: Loading development channels TUI dialog claude
-    // shows when `--dangerously-load-development-channels` is set AND the
-    // `tengu_harbor` feature flag is on for the account. Default selection is
-    // "I am using this for local development" so a single Enter accepts it.
-    //
-    // On accounts WITH the flag, the dialog blocks claude at boot — it never
-    // reaches the REPL, so no prompt ever lands and the surface looks dead.
-    // The original 1.5s + 4s pair was insufficient: on slower boots the dialog
-    // renders after 4s, so both writes land before it exists and are lost.
-    // Retry across a wider window. Each `\r` after the dialog is gone is an
-    // empty REPL submit (no-op turn), harmless. Accounts WITHOUT the flag
-    // never render the dialog and the writes are cheap insurance.
-    // Hand the timer handles to the process so the first real prompt cancels
-    // any still-pending CR — otherwise a 5s/8s dismiss write could submit a
-    // mid-turn prompt now that the same PTY carries real prompts (#141 P2).
-    const dialogDismissTimers = [1000, 2500, 5000, 8000].map((ms) =>
-      setTimeout(() => {
-        try {
-          pty.write("\r");
-        } catch {
-          /* pty may have exited already — non-fatal */
-        }
-      }, ms),
-    );
-    return new PtyAgentProcess(agent.id, pty, dialogDismissTimers);
+    // Boot-dialog handling lives in PtyAgentProcess's output-driven watcher
+    // (issue #193): it answers the dev-channels confirmation with Enter and the
+    // new "Bypass Permissions mode" confirmation by selecting "Yes, I accept"
+    // (Down + Enter). A blind Enter — the previous approach — selects that
+    // dialog's default "No, exit" and kills the agent at boot.
+    return new PtyAgentProcess(agent.id, pty);
   }
 
   private spawnChild(

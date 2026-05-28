@@ -76,20 +76,22 @@ export class PtyAgentProcess implements AgentProcess {
   /** Serializes the write/settle/CR sequence so concurrent prompts can't
    *  interleave in the PTY input buffer (review #141 P1). */
   private writeChain: Promise<void> = Promise.resolve();
-  /** Boot dialog-dismiss CR timers, owned so we can cancel them once a real
-   *  prompt is dispatched (review #141 P2). */
-  private dialogDismissTimers: ReturnType<typeof setTimeout>[];
+  /** Boot-dialog watcher state (issue #193). Claude shows interactive
+   *  confirmation dialogs at startup (the dev-channels prompt, and the newer
+   *  "Bypass Permissions mode" prompt). We answer them by inspecting early PTY
+   *  output and sending the correct key per dialog, then disengage once a real
+   *  prompt is dispatched. */
+  private bootDialogActive = true;
+  private bootDialogBuffer = "";
+  private answeredBypassPrompt = false;
+  private answeredDevChannelsPrompt = false;
 
-  constructor(
-    agent_id: string,
-    pty: PtyHandle,
-    dialogDismissTimers: ReturnType<typeof setTimeout>[] = [],
-  ) {
+  constructor(agent_id: string, pty: PtyHandle) {
     this.agent_id = agent_id;
     this.pty = pty;
     this.pid = pty.pid;
-    this.dialogDismissTimers = dialogDismissTimers;
     pty.onData((chunk) => {
+      if (this.bootDialogActive) this.handleBootDialog(chunk);
       // Crash-signal observation ONLY (spec §5.3). Never parsed as model output.
       for (const h of this.dataHandlers) {
         try {
@@ -125,7 +127,7 @@ export class PtyAgentProcess implements AgentProcess {
     // A real prompt means claude has reached the REPL, so the boot dialog (if
     // any) is already dismissed. Cancel the pending dialog-dismiss CR writes
     // so a late one can't submit this prompt — or a follow-up — mid-turn.
-    this.cancelDialogDismissTimers();
+    this.endBootDialogPhase();
     // Deliver an inbound prompt by typing it into claude's REPL via the PTY.
     //
     // Why not rely on `notifications/claude/channel` (the MCP path)? In a
@@ -157,10 +159,47 @@ export class PtyAgentProcess implements AgentProcess {
     return run;
   }
 
-  /** Cancel any pending boot dialog-dismiss timers. Idempotent. */
-  private cancelDialogDismissTimers(): void {
-    for (const t of this.dialogDismissTimers) clearTimeout(t);
-    this.dialogDismissTimers = [];
+  /** Stop answering boot dialogs — called once a real prompt is dispatched
+   *  (claude has reached the REPL) or on kill. Idempotent. */
+  private endBootDialogPhase(): void {
+    this.bootDialogActive = false;
+    this.bootDialogBuffer = "";
+  }
+
+  /** Answer claude's interactive startup confirmation dialogs by inspecting
+   *  early PTY output (issue #193). Sends the *correct* key per dialog: Enter
+   *  for the dev-channels confirmation (whose default IS the accept option),
+   *  and Down+Enter for the "Bypass Permissions mode" dialog (whose default is
+   *  "No, exit" — a blind Enter would select exit and kill the agent). Matches
+   *  on text unique to each dialog so the REPL footer (which also contains
+   *  "bypass permissions on") cannot false-trigger. */
+  private handleBootDialog(chunk: string): void {
+    this.bootDialogBuffer = (this.bootDialogBuffer + chunk).slice(-4000);
+    const buf = this.bootDialogBuffer;
+    if (!this.answeredBypassPrompt && buf.includes("Yes, I accept")) {
+      this.answeredBypassPrompt = true;
+      try {
+        this.pty.write("\x1b[B"); // move selection to "2. Yes, I accept"
+        setTimeout(() => {
+          try {
+            this.pty.write("\r");
+          } catch {
+            /* pty may have exited — non-fatal */
+          }
+        }, 200);
+      } catch {
+        /* pty may have exited — non-fatal */
+      }
+      return;
+    }
+    if (!this.answeredDevChannelsPrompt && buf.includes("development channels")) {
+      this.answeredDevChannelsPrompt = true;
+      try {
+        this.pty.write("\r");
+      } catch {
+        /* pty may have exited — non-fatal */
+      }
+    }
   }
 
   onExit(handler: ExitHandler): void {
@@ -173,7 +212,7 @@ export class PtyAgentProcess implements AgentProcess {
 
   /** Internal — called by SessionManager.stop(). */
   _kill(signal?: string): void {
-    this.cancelDialogDismissTimers();
+    this.endBootDialogPhase();
     try {
       this.pty.kill(signal);
     } catch {
