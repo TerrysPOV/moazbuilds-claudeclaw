@@ -29,7 +29,13 @@ export const pageScript = String.raw`    const $ = (id) => document.getElementBy
     }
     const _origFetch = window.fetch.bind(window);
     window.fetch = function (input, init) {
-      init = init || {};
+      // Work on a SHALLOW COPY — never mutate the caller's init object.
+      // mutatingFetch reuses its opts object across a CSRF-retry and reads
+      // opts.headers back as a plain object; if we converted that to a
+      // Headers instance in place, its retry bracket-assignment
+      // (opts.headers["X-CSRF-Token"]=…) would silently no-op and re-send
+      // the stale token. Copying keeps the caller's headers untouched.
+      const opts = init ? { ...init } : {};
       const url = typeof input === "string" ? input : (input && input.url) || "";
       const isApi =
         url.indexOf("/api/") === 0 || url.indexOf(window.location.origin + "/api/") === 0;
@@ -37,13 +43,13 @@ export const pageScript = String.raw`    const $ = (id) => document.getElementBy
         const tok = getWebToken();
         if (tok) {
           const h = new Headers(
-            init.headers || (typeof input !== "string" && input.headers) || {},
+            opts.headers || (typeof input !== "string" && input.headers) || {},
           );
           if (!h.has("Authorization")) h.set("Authorization", "Bearer " + tok);
-          init.headers = h;
+          opts.headers = h;
         }
       }
-      return _origFetch(input, init);
+      return _origFetch(input, opts);
     };
 
     // --- CSRF token management for mutating requests ---

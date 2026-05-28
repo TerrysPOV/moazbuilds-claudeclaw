@@ -16,8 +16,8 @@ function tokenFilePath(): string {
  * start (issue #164, ported from upstream #185). Stored at
  * `.claude/claudeclaw/web.token` mode 0600 so a daemon that the operator
  * never gave an explicit `settings.apiToken` still has a strong token to
- * enforce with. PR A (this change) generates + persists it; enforcement
- * on `/api/*` lands in PR B alongside the dashboard auto-token UX.
+ * enforce with. Enforced on every `/api/*` route by `server.ts`; the
+ * dashboard reads it from `?token=` on first load.
  */
 export async function getOrCreateWebToken(): Promise<string> {
   const tokenFile = tokenFilePath();
@@ -38,8 +38,8 @@ export async function getOrCreateWebToken(): Promise<string> {
  * byte lengths (not JS string character lengths) so a non-ASCII
  * `provided` value can never make `timingSafeEqual` throw `RangeError`.
  * Accepts the token via `Authorization: Bearer <t>` or `?token=<t>`
- * (the query-param path is what the dashboard auto-token UX in PR B
- * will use on first load).
+ * (the query-param path is how the dashboard bootstraps on first load
+ * before it strips the token from the URL).
  */
 export function checkToken(req: Request, expected: string): boolean {
   const auth = req.headers.get("authorization") ?? "";
