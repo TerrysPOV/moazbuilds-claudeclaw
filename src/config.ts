@@ -225,8 +225,8 @@ const DEFAULT_SETTINGS: Settings = {
   // an empty default would mount the bus with zero agents — daemon up,
   // channels polling, but nothing behind them ("no agents declared"). This is
   // the *fresh-install* default only: `parseBusAgents` builds from `raw.agents`
-  // and never reads this list (config.ts:1061), so existing installs that omit
-  // `agents` or set `agents: []` are unaffected (#196 / cause #1 of #193).
+  // and never reads this list, so existing installs that omit `agents` or set
+  // `agents: []` are unaffected (#196 / cause #1 of #193).
   agents: [{ id: "default" }],
   plugins: {},
   memorySearch: {},

@@ -81,6 +81,11 @@ describe("parseSettings — runtime field (Sprint 5.4 flip — bus is default)",
 });
 
 describe("parseSettings — agents field (Sprint 5.2a)", () => {
+  // This is the PARSE-path default (an existing settings.json that omits
+  // `agents`), NOT the fresh-install default. `parseBusAgents` returns [] for
+  // a missing/empty field and never reads DEFAULT_SETTINGS.agents — whereas a
+  // brand-new install ships one `{ id: "default" }` via initConfig (#196). See
+  // config-init-default-agent.test.ts for the fresh-install write path.
   it("defaults to empty array when the field is absent", async () => {
     await writeRawSettings({});
     await reloadSettings();
