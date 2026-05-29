@@ -45,35 +45,19 @@ export async function chatCompletion(
   deps: OpenRouterDeps,
 ): Promise<ChatCompletionResponse> {
   const fetchImpl = deps.fetchImpl ?? fetch;
-  const schemaApplied = !!opts.schema;
+  const wantSchema = !!opts.schema;
 
-  const body: Record<string, unknown> = { model, messages: opts.messages };
-  if (opts.maxTokens !== undefined) body.max_tokens = opts.maxTokens;
-  if (opts.providerHint) body.provider = { order: [opts.providerHint] };
-  if (opts.schema) {
-    body.response_format = {
-      type: "json_schema",
-      json_schema: { name: "result", schema: opts.schema },
-    };
-  }
+  let res = await postChat(model, opts, wantSchema, deps, fetchImpl);
+  let schemaApplied = wantSchema;
 
-  let res: Response;
-  try {
-    res = await fetchImpl(`${deps.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${deps.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-    });
-  } catch (err) {
-    // Network-level failure (DNS, connection) — treat as retriable (5xx-like).
-    throw new ProviderError(
-      `network error calling ${model}: ${err instanceof Error ? err.message : String(err)}`,
-      503,
-      model,
-    );
+  // Best-effort structured output (SPEC-DELTA D5). If a schema'd request is
+  // rejected (400/422 — the model/provider doesn't support response_format),
+  // retry ONCE without the schema and report schemaApplied:false, rather than
+  // failing the whole call. A non-schema 400/422 (genuinely bad request) is not
+  // retried here and surfaces below.
+  if (wantSchema && !res.ok && (res.status === 400 || res.status === 422)) {
+    res = await postChat(model, opts, false, deps, fetchImpl);
+    schemaApplied = false;
   }
 
   if (!res.ok) {
@@ -101,6 +85,41 @@ export async function chatCompletion(
     },
     schemaApplied,
   };
+}
+
+/** POST one chat-completion request. `includeSchema` controls whether the
+ *  `response_format` block is sent. Network failures become a retriable 503
+ *  ProviderError; HTTP-status handling is left to the caller. */
+async function postChat(
+  model: string,
+  opts: ChatCompletionOptions,
+  includeSchema: boolean,
+  deps: OpenRouterDeps,
+  fetchImpl: typeof fetch,
+): Promise<Response> {
+  const body: Record<string, unknown> = { model, messages: opts.messages };
+  if (opts.maxTokens !== undefined) body.max_tokens = opts.maxTokens;
+  if (opts.providerHint) body.provider = { order: [opts.providerHint] };
+  if (includeSchema && opts.schema) {
+    body.response_format = {
+      type: "json_schema",
+      json_schema: { name: "result", schema: opts.schema },
+    };
+  }
+  try {
+    return await fetchImpl(`${deps.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${deps.apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch (err) {
+    // Network-level failure (DNS, connection) — treat as retriable (5xx-like).
+    throw new ProviderError(
+      `network error calling ${model}: ${err instanceof Error ? err.message : String(err)}`,
+      503,
+      model,
+    );
+  }
 }
 
 /**

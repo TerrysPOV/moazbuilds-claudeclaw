@@ -76,6 +76,36 @@ describe("chatCompletion", () => {
     expect(body.provider).toEqual({ order: ["groq"] });
   });
 
+  it("degrades when structured output is rejected: retries without schema, reports schemaApplied false (D5)", async () => {
+    const calls: boolean[] = []; // whether each attempt included response_format
+    const fetchImpl = (async (_url: string, init: RequestInit) => {
+      const hadSchema = (init.body as string).includes("response_format");
+      calls.push(hadSchema);
+      if (hadSchema) return jsonResponse({ error: "structured output unsupported" }, 400);
+      return jsonResponse({ model: "a/b", choices: [{ message: { content: "plain" } }] });
+    }) as unknown as typeof fetch;
+    const r = await chatCompletion(
+      "a/b",
+      { messages: [{ role: "user", content: "hi" }], schema: { type: "object" } },
+      deps(fetchImpl),
+    );
+    expect(r.content).toBe("plain");
+    expect(r.schemaApplied).toBe(false);
+    expect(calls).toEqual([true, false]); // tried with schema, then retried without
+  });
+
+  it("does NOT retry a 400 when no schema was requested (genuine bad request)", async () => {
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls++;
+      return jsonResponse({ error: "bad" }, 400);
+    }) as unknown as typeof fetch;
+    await expect(
+      chatCompletion("a/b", { messages: [{ role: "user", content: "hi" }] }, deps(fetchImpl)),
+    ).rejects.toBeInstanceOf(ProviderError);
+    expect(calls).toBe(1);
+  });
+
   it("throws a retriable ProviderError on 429", async () => {
     const fetchImpl = (async () =>
       jsonResponse({ error: "slow down" }, 429)) as unknown as typeof fetch;
