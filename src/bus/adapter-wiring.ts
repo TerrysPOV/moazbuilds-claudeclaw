@@ -8,7 +8,11 @@
  * instantiate every external adapter (Discord / Telegram / Slack /
  * Web UI) whose token AND routing config are both present. Adapters
  * with missing config are silently skipped — operators opt in to
- * specific surfaces by populating both halves.
+ * specific surfaces by populating both halves. Exception (#197):
+ * Telegram mounts on a token alone when a default agent exists — its
+ * `busRouting` is derived (`{ chats: {}, defaultAgentId }`) so a fresh
+ * install (token but no routing block) isn't left silent. Discord/Slack
+ * are channel-routed and keep the both-halves requirement.
  *
  * What this module is NOT:
  *   - Not responsible for `BusCore` / `SessionManager` lifecycle (that's
@@ -52,8 +56,21 @@ export interface WireBusAdaptersResult {
 export interface WireBusAdaptersOptions {
   /** The live BusCore — adapters subscribe and publish through this. */
   bus: BusCore;
-  /** Parsed settings. Adapters only mount when token + busRouting are both present. */
+  /**
+   * Parsed settings. Adapters mount when their token + routing config are both
+   * present — except Telegram, which mounts on a token alone when
+   * `defaultAgentId` is set (busRouting derived; see #197 and the field below).
+   */
   settings: Pick<Settings, "discord" | "telegram" | "slack" | "web">;
+  /**
+   * The bus's default agent id (first spawned agent). When set, the Telegram
+   * adapter can mount on a token alone — `telegram.busRouting` absent derives
+   * `{ chats: {}, defaultAgentId }` so a fresh install (token but no routing
+   * block) still routes inbound to the default agent (#197). Discord/Slack are
+   * channel-routed and unaffected. Omit (or no agent) ⇒ token-only Telegram
+   * still skips, since there is nothing to route to.
+   */
+  defaultAgentId?: string;
   /** Logger override. Defaults to `console`. */
   logger?: Pick<Console, "warn" | "info" | "error">;
 }
@@ -88,7 +105,9 @@ export async function wireBusAdapters(
   };
 
   await tryMount("discord", () => mountDiscord(opts.bus, opts.settings.discord, logger));
-  await tryMount("telegram", () => mountTelegram(opts.bus, opts.settings.telegram, logger));
+  await tryMount("telegram", () =>
+    mountTelegram(opts.bus, opts.settings.telegram, logger, opts.defaultAgentId),
+  );
   await tryMount("slack", () => mountSlack(opts.bus, opts.settings.slack, logger));
   await tryMount("webui", () => mountWebUi(opts.bus, opts.settings.web, logger));
 
@@ -105,10 +124,17 @@ export async function wireBusAdapters(
  */
 export function configuredBusAdapterNames(
   settings: WireBusAdaptersOptions["settings"],
+  defaultAgentId?: string,
 ): MountedAdapter["name"][] {
   const names: MountedAdapter["name"][] = [];
   if (settings.discord?.token && settings.discord?.busRouting) names.push("discord");
-  if (settings.telegram?.token && settings.telegram?.busRouting) names.push("telegram");
+  // Telegram mounts on a token alone when a default agent exists: an absent
+  // busRouting derives `{ chats: {}, defaultAgentId }` in mountTelegram (#197).
+  // The token-only derive is skipped for send-only configs (receiveEnabled:
+  // false) — see mountTelegram — so the banner must not claim telegram there.
+  const tgDerives = !!defaultAgentId && settings.telegram?.receiveEnabled !== false;
+  if (settings.telegram?.token && (settings.telegram?.busRouting || tgDerives))
+    names.push("telegram");
   if (settings.slack?.botToken && settings.slack?.busRouting) names.push("slack");
   if (settings.web?.bus) names.push("webui");
   return names;
@@ -164,14 +190,52 @@ async function mountTelegram(
   bus: BusCore,
   cfg: TelegramConfig,
   logger: Pick<Console, "warn" | "info" | "error">,
+  defaultAgentId?: string,
 ): Promise<MountedAdapter | null> {
-  if (!cfg.token || !cfg.busRouting) return null;
+  if (!cfg.token) return null;
+  // #197: a fresh install sets `telegram.token` but never writes `busRouting`,
+  // which previously left the adapter unmounted ("no adapters") and the bot
+  // silent. When busRouting is absent, derive `{ chats: {}, defaultAgentId }`:
+  // an empty chats map routes every inbound chat to the default agent via
+  // TelegramAdapter.resolveAgent's fall-through. Explicit busRouting wins. With
+  // no default agent to route to, still skip — nothing would consume.
+  let routing = cfg.busRouting;
+  if (!routing) {
+    if (!defaultAgentId) return null;
+    // Respect send-only configs (Codex P2 on #197). TelegramAdapter.start()
+    // unconditionally begins polling for inbound, so deriving a token-only
+    // mount when `receiveEnabled: false` would start consuming messages a
+    // send-only operator explicitly opted out of. The legacy path gates
+    // polling on receiveEnabled (start.ts initTelegram); mirror that here by
+    // not auto-mounting. (Explicit busRouting is left as-is — the bus
+    // adapter's pre-existing receiveEnabled handling is out of scope for #197.)
+    if (cfg.receiveEnabled === false) {
+      logger.info(
+        "[bus-adapters] telegram: token set but receiveEnabled=false and no busRouting — not mounting (send-only).",
+      );
+      return null;
+    }
+    routing = { chats: {}, defaultAgentId };
+    // Surface the derive. When allowedUserIds is empty the adapter accepts
+    // inbound from ANY Telegram user (empty allow-list = allow-all, a
+    // pre-existing policy — see adapters/telegram allow-list gate), so a
+    // token-only mount is open by default; warn so the operator can lock it down.
+    if (cfg.allowedUserIds.length === 0) {
+      logger.warn(
+        `[bus-adapters] telegram: no busRouting configured — routing all inbound chats to default agent "${defaultAgentId}". telegram.allowedUserIds is empty, so ANY Telegram user can reach it; set telegram.allowedUserIds to restrict access.`,
+      );
+    } else {
+      logger.info(
+        `[bus-adapters] telegram: no busRouting configured; routing all inbound chats to default agent "${defaultAgentId}"`,
+      );
+    }
+  }
   const { TelegramAdapter } = await import("../adapters/telegram");
   const adapter = new TelegramAdapter({
     bus,
     token: cfg.token,
     allowedUserIds: cfg.allowedUserIds,
-    routing: cfg.busRouting,
+    routing,
     logger,
   });
   await adapter.start();

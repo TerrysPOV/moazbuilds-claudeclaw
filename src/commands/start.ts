@@ -566,8 +566,13 @@ export async function start(args: string[] = []) {
   // empty at the startup-banner + legacy-skip logs above this point. Use
   // the configured-intent list (same token/busRouting predicates
   // wireBusAdapters uses) so those logs report the right platforms.
+  // #197: pass the declared default agent id so the banner reflects the
+  // token-only Telegram mount (busRouting derived from the default agent).
   const configuredBusAdapters: readonly string[] = busRuntimeHandle
-    ? (await import("../bus/adapter-wiring")).configuredBusAdapterNames(settings)
+    ? (await import("../bus/adapter-wiring")).configuredBusAdapterNames(
+        settings,
+        settings.agents[0]?.id,
+      )
     : [];
 
   let mcpProxyStarted: Promise<void> = Promise.resolve();
@@ -893,6 +898,9 @@ export async function start(args: string[] = []) {
       const { adapters, errors } = await wireBusAdapters({
         bus: busRuntimeHandle.bus,
         settings: currentSettings,
+        // #197: lets the Telegram adapter mount on a token alone by routing to
+        // the bus's default agent when `telegram.busRouting` is unset.
+        defaultAgentId: busRuntimeHandle.spawnedAgentIds[0],
       });
       for (const [name, msg] of Object.entries(errors)) {
         console.warn(`[${ts()}] Bus adapter "${name}" failed to mount: ${msg}`);
