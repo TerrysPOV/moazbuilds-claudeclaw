@@ -68,9 +68,12 @@ describe("PtyAgentProcess.send_prompt_stream", () => {
     await new Promise((r) => setTimeout(r, 260));
     expect(writes).toContain("\r"); // then Enter
 
-    // Once the REPL footer marker appears, the watcher disengages — a later
-    // dialog-looking chunk must be ignored (no keys injected mid-session).
-    dataCb?.("bypass permissions on (shift+tab to cycle)");
+    // Once the REPL footer appears the watcher disengages — and the marker is
+    // mode-independent (Codex P2 #2 on #195): a non-bypass agent shows a
+    // mode-specific footer like "plan mode on", but every mode footer carries
+    // the "shift+tab to cycle" hint. A later dialog-looking chunk must then be
+    // ignored (no keys injected into a live REPL).
+    dataCb?.("⏸ plan mode on (shift+tab to cycle)");
     writes.length = 0;
     dataCb?.("stray redraw with 2. Yes, I accept text");
     await new Promise((r) => setTimeout(r, 60));

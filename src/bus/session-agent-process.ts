@@ -195,8 +195,8 @@ export class PtyAgentProcess implements AgentProcess {
    *  for the dev-channels confirmation (whose default IS the accept option),
    *  and Down+Enter for the "Bypass Permissions mode" dialog (whose default is
    *  "No, exit" — a blind Enter would select exit and kill the agent). Matches
-   *  on text unique to each dialog so the REPL footer (which also contains
-   *  "bypass permissions on") cannot false-trigger. */
+   *  on text unique to each dialog so the REPL footer (which contains the
+   *  "shift+tab to cycle" hint) cannot false-trigger. */
   private handleBootDialog(chunk: string): void {
     this.bootDialogBuffer = (this.bootDialogBuffer + chunk).slice(-4000);
     const buf = this.bootDialogBuffer;
@@ -225,12 +225,17 @@ export class PtyAgentProcess implements AgentProcess {
       }
       return;
     }
-    // REPL-ready marker (issue #193 / Codex P2). The REPL footer shows
-    // "bypass permissions on" once claude has reached the prompt — distinct
-    // from the dialog's "Yes, I accept". Seeing it means any startup dialog is
-    // already dismissed, so disengage the watcher (stops buffering + cancels
-    // the timeout). Writes nothing.
-    if (buf.includes("bypass permissions on")) {
+    // REPL-ready marker (issue #193 / Codex P2 ×2). Every REPL mode footer
+    // ends with the "shift+tab to cycle" mode-cycler hint, regardless of the
+    // agent's permission_mode ("bypass permissions on", "plan mode on",
+    // "accept edits on", etc.). Matching the generic hint — rather than the
+    // bypass-specific footer — means the watcher disengages promptly in ALL
+    // modes, not only bypass. (The bypass-only marker left non-bypass agents
+    // watching until the 15s timeout, during which a stray "Yes, I accept"
+    // model echo could inject Down/Enter into a live REPL.) No dialog contains
+    // this hint, so it cannot false-trigger. Disengaging stops buffering +
+    // cancels the timeout; writes nothing.
+    if (buf.includes("shift+tab to cycle")) {
       this.endBootDialogPhase();
     }
   }
