@@ -109,9 +109,20 @@ export async function chatCompletion(
  */
 export async function listModels(deps: OpenRouterDeps): Promise<OpenRouterModel[]> {
   const fetchImpl = deps.fetchImpl ?? fetch;
-  const res = await fetchImpl(`${deps.baseUrl}/models`, {
-    headers: { Authorization: `Bearer ${deps.apiKey}` },
-  });
+  let res: Response;
+  try {
+    res = await fetchImpl(`${deps.baseUrl}/models`, {
+      headers: { Authorization: `Bearer ${deps.apiKey}` },
+    });
+  } catch (err) {
+    // Mirror chatCompletion: surface a network failure as a retriable ProviderError
+    // rather than a raw TypeError, so callers can handle it uniformly.
+    throw new ProviderError(
+      `network error listing models: ${err instanceof Error ? err.message : String(err)}`,
+      503,
+      "(models)",
+    );
+  }
   if (!res.ok) {
     const detail = await safeText(res);
     throw new ProviderError(

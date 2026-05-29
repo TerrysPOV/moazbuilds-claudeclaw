@@ -42,8 +42,16 @@ catalogue, then either populate `settings.llmRouter.tiers` or pass a per-call
 The standalone stdio server is its own process and cannot share the in-process
 `mcp-bridge` singleton. It instantiates its own `getMcpBridge()` which appends to
 the shared `~/.config/plus/plugin-audit.jsonl`. Events: `llm_call_dispatched`,
-`llm_call_failed`, `llm_call_fallback_taken`, `llm_models_listed` (caller, tier,
-provider, model, latency, token usage). Confirmed acceptable (Terrence, 2026-05-29).
+`llm_call_failed`, `llm_call_fallback_taken`, `llm_models_listed` — each carrying
+tier, provider, model, latency, and token usage. Confirmed acceptable (Terrence,
+2026-05-29).
+
+**`caller` attribution deferred.** The per-agent bearer identity that
+`synthesizeBusMcpConfig` injects is an HTTP-transport artifact; it does not reach
+the shared server over stdio without multiplexer plumbing, which Phase A froze
+out ("zero multiplexer changes"). So audit events omit `caller` for now.
+Per-caller cost attribution is the natural pairing with the cost-accounting
+milestone (#68) and will add the identity plumbing there.
 
 ### D5 — `schema` → `response_format` best-effort (v1)
 When `llm_call({ schema })` is supplied, it's passed as an OpenRouter

@@ -27,6 +27,10 @@ describe("resolveModels", () => {
     expect(resolveModels({ tier: "balanced", messages: [] }, cfg())).toEqual(["a/b", "c/d"]);
   });
 
+  it("prefers an explicit model over a tier when both are given (D2)", () => {
+    expect(resolveModels({ model: "x/y", tier: "balanced", messages: [] }, cfg())).toEqual(["x/y"]);
+  });
+
   it("throws an actionable error for an empty tier", () => {
     expect(() => resolveModels({ tier: "reasoning", messages: [] }, cfg())).toThrow(
       /no models configured/,
@@ -62,6 +66,20 @@ describe("callLlm fallback", () => {
     const r = await callLlm({ tier: "balanced", messages: [] }, cfg(), dispatch);
     expect(r.model).toBe("c/d");
     expect(r.fallbackFrom).toEqual(["a/b"]);
+  });
+
+  it("accumulates the fallback trail across multiple hops in a 3-model tier", async () => {
+    const dispatch: Dispatch = async (model) => {
+      if (model === "m1" || model === "m2") throw new ProviderError("429", 429, model);
+      return okResp(model);
+    };
+    const r = await callLlm(
+      { tier: "reasoning", messages: [] },
+      cfg({ tiers: { fast: [], balanced: [], reasoning: ["m1", "m2", "m3"] } }),
+      dispatch,
+    );
+    expect(r.model).toBe("m3");
+    expect(r.fallbackFrom).toEqual(["m1", "m2"]);
   });
 
   it("aborts immediately on a non-retriable (400) error", async () => {

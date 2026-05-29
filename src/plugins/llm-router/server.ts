@@ -153,13 +153,19 @@ function parseLlmCallArgs(raw: Record<string, unknown>): LlmCallParams {
   if (!Array.isArray(messages) || messages.length === 0) {
     throw new Error("llm_call: `messages` must be a non-empty array.");
   }
+  // An explicit `model` wins over `tier` (resolveModels checks model first), so
+  // only validate the tier when there's no model to fall back on — otherwise a
+  // bogus tier alongside a valid model would error needlessly.
+  const hasModel = typeof raw.model === "string" && raw.model.trim().length > 0;
   const tier = raw.tier;
-  if (tier !== undefined && !TIERS.includes(tier as (typeof TIERS)[number])) {
+  if (!hasModel && tier !== undefined && !TIERS.includes(tier as (typeof TIERS)[number])) {
     throw new Error(`llm_call: invalid tier "${String(tier)}" (expected fast|balanced|reasoning).`);
   }
   return {
-    ...(typeof tier === "string" ? { tier: tier as LlmCallParams["tier"] } : {}),
-    ...(typeof raw.model === "string" ? { model: raw.model } : {}),
+    ...(typeof tier === "string" && TIERS.includes(tier as (typeof TIERS)[number])
+      ? { tier: tier as LlmCallParams["tier"] }
+      : {}),
+    ...(hasModel ? { model: (raw.model as string).trim() } : {}),
     messages: messages as LlmCallParams["messages"],
     ...(raw.schema && typeof raw.schema === "object"
       ? { schema: raw.schema as Record<string, unknown> }
@@ -182,9 +188,17 @@ export async function startLlmRouterServer(): Promise<void> {
   const settings = await loadSettings();
   const config = buildRuntimeConfig(settings as { llmRouter?: Partial<LlmRouterRuntimeConfig> });
   const bridge = getMcpBridge();
+  const apiKey = process.env.OPENROUTER_API_KEY ?? "";
+  if (!apiKey) {
+    // Surface the misconfiguration at launch instead of only on the first call —
+    // a missing key is a near-certain setup error, not a runtime condition.
+    console.error(
+      "[llm-router] WARNING: OPENROUTER_API_KEY is not set; llm_call/llm_models will fail until it is.",
+    );
+  }
   const handlers = createLlmRouterHandlers({
     config,
-    apiKey: process.env.OPENROUTER_API_KEY ?? "",
+    apiKey,
     audit: (event, payload) => bridge.audit(event, payload),
   });
 

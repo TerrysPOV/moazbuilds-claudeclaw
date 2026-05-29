@@ -94,6 +94,49 @@ describe("createLlmRouterHandlers.llmCall", () => {
     const h = createLlmRouterHandlers({ config: config(), apiKey: "k", fetchImpl: routingFetch() });
     await expect(h.llmCall({ tier: "fast", messages: "nope" })).rejects.toThrow(/non-empty array/);
   });
+
+  it("uses an explicit model and ignores a bogus tier when both are given (D2)", async () => {
+    const h = createLlmRouterHandlers({ config: config(), apiKey: "k", fetchImpl: routingFetch() });
+    const r = (await h.llmCall({
+      model: "groq/llama",
+      tier: "not-a-tier",
+      messages: [{ role: "user", content: "hi" }],
+    })) as { content: string };
+    expect(r.content).toBe("answer");
+  });
+
+  it("emits llm_call_fallback_taken when the first tier model fails retriably", async () => {
+    const events: string[] = [];
+    // First model 429s, second succeeds — keyed off the model in the request body.
+    const fetchImpl = (async (url: string, init: RequestInit) => {
+      if (url.endsWith("/chat/completions")) {
+        const model = JSON.parse(init.body as string).model;
+        if (model === "x/down")
+          return new Response(JSON.stringify({ error: "rate" }), { status: 429 });
+        return new Response(
+          JSON.stringify({
+            model,
+            choices: [{ message: { content: "ok" } }],
+            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response("nf", { status: 404 });
+    }) as unknown as typeof fetch;
+
+    const h = createLlmRouterHandlers({
+      config: config({ tiers: { fast: ["x/down", "x/up"], balanced: [], reasoning: [] } }),
+      apiKey: "k",
+      fetchImpl,
+      audit: (e) => events.push(e),
+    });
+    const r = (await h.llmCall({ tier: "fast", messages: [{ role: "user", content: "hi" }] })) as {
+      model: string;
+    };
+    expect(r.model).toBe("x/up");
+    expect(events).toContain("llm_call_fallback_taken");
+  });
 });
 
 describe("createLlmRouterHandlers.llmModels", () => {

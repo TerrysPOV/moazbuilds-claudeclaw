@@ -60,6 +60,22 @@ describe("chatCompletion", () => {
     expect(r.schemaApplied).toBe(true);
   });
 
+  it("serializes maxTokens and providerHint into the request body", async () => {
+    let bodyStr = "";
+    const fetchImpl = (async (_url: string, init: RequestInit) => {
+      bodyStr = init.body as string;
+      return jsonResponse({ model: "a/b", choices: [{ message: { content: "ok" } }] });
+    }) as unknown as typeof fetch;
+    await chatCompletion(
+      "a/b",
+      { messages: [{ role: "user", content: "hi" }], maxTokens: 256, providerHint: "groq" },
+      deps(fetchImpl),
+    );
+    const body = JSON.parse(bodyStr);
+    expect(body.max_tokens).toBe(256);
+    expect(body.provider).toEqual({ order: ["groq"] });
+  });
+
   it("throws a retriable ProviderError on 429", async () => {
     const fetchImpl = (async () =>
       jsonResponse({ error: "slow down" }, 429)) as unknown as typeof fetch;
@@ -126,5 +142,19 @@ describe("listModels", () => {
   it("throws ProviderError on a non-2xx catalogue fetch", async () => {
     const fetchImpl = (async () => jsonResponse({ error: "nope" }, 500)) as unknown as typeof fetch;
     await expect(listModels(deps(fetchImpl))).rejects.toBeInstanceOf(ProviderError);
+  });
+
+  it("maps a network throw to a retriable 503 ProviderError", async () => {
+    const fetchImpl = (async () => {
+      throw new Error("ECONNREFUSED");
+    }) as unknown as typeof fetch;
+    try {
+      await listModels(deps(fetchImpl));
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(ProviderError);
+      expect((err as ProviderError).status).toBe(503);
+      expect((err as ProviderError).retriable).toBe(true);
+    }
   });
 });
