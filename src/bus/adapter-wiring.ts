@@ -130,7 +130,10 @@ export function configuredBusAdapterNames(
   if (settings.discord?.token && settings.discord?.busRouting) names.push("discord");
   // Telegram mounts on a token alone when a default agent exists: an absent
   // busRouting derives `{ chats: {}, defaultAgentId }` in mountTelegram (#197).
-  if (settings.telegram?.token && (settings.telegram?.busRouting || defaultAgentId))
+  // The token-only derive is skipped for send-only configs (receiveEnabled:
+  // false) — see mountTelegram — so the banner must not claim telegram there.
+  const tgDerives = !!defaultAgentId && settings.telegram?.receiveEnabled !== false;
+  if (settings.telegram?.token && (settings.telegram?.busRouting || tgDerives))
     names.push("telegram");
   if (settings.slack?.botToken && settings.slack?.busRouting) names.push("slack");
   if (settings.web?.bus) names.push("webui");
@@ -199,6 +202,19 @@ async function mountTelegram(
   let routing = cfg.busRouting;
   if (!routing) {
     if (!defaultAgentId) return null;
+    // Respect send-only configs (Codex P2 on #197). TelegramAdapter.start()
+    // unconditionally begins polling for inbound, so deriving a token-only
+    // mount when `receiveEnabled: false` would start consuming messages a
+    // send-only operator explicitly opted out of. The legacy path gates
+    // polling on receiveEnabled (start.ts initTelegram); mirror that here by
+    // not auto-mounting. (Explicit busRouting is left as-is — the bus
+    // adapter's pre-existing receiveEnabled handling is out of scope for #197.)
+    if (cfg.receiveEnabled === false) {
+      logger.info(
+        "[bus-adapters] telegram: token set but receiveEnabled=false and no busRouting — not mounting (send-only).",
+      );
+      return null;
+    }
     routing = { chats: {}, defaultAgentId };
     // Surface the derive. When allowedUserIds is empty the adapter accepts
     // inbound from ANY Telegram user (empty allow-list = allow-all, a
