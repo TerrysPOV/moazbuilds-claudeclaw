@@ -54,6 +54,15 @@ export interface WireBusAdaptersOptions {
   bus: BusCore;
   /** Parsed settings. Adapters only mount when token + busRouting are both present. */
   settings: Pick<Settings, "discord" | "telegram" | "slack" | "web">;
+  /**
+   * The bus's default agent id (first spawned agent). When set, the Telegram
+   * adapter can mount on a token alone — `telegram.busRouting` absent derives
+   * `{ chats: {}, defaultAgentId }` so a fresh install (token but no routing
+   * block) still routes inbound to the default agent (#197). Discord/Slack are
+   * channel-routed and unaffected. Omit (or no agent) ⇒ token-only Telegram
+   * still skips, since there is nothing to route to.
+   */
+  defaultAgentId?: string;
   /** Logger override. Defaults to `console`. */
   logger?: Pick<Console, "warn" | "info" | "error">;
 }
@@ -88,7 +97,9 @@ export async function wireBusAdapters(
   };
 
   await tryMount("discord", () => mountDiscord(opts.bus, opts.settings.discord, logger));
-  await tryMount("telegram", () => mountTelegram(opts.bus, opts.settings.telegram, logger));
+  await tryMount("telegram", () =>
+    mountTelegram(opts.bus, opts.settings.telegram, logger, opts.defaultAgentId),
+  );
   await tryMount("slack", () => mountSlack(opts.bus, opts.settings.slack, logger));
   await tryMount("webui", () => mountWebUi(opts.bus, opts.settings.web, logger));
 
@@ -105,10 +116,14 @@ export async function wireBusAdapters(
  */
 export function configuredBusAdapterNames(
   settings: WireBusAdaptersOptions["settings"],
+  defaultAgentId?: string,
 ): MountedAdapter["name"][] {
   const names: MountedAdapter["name"][] = [];
   if (settings.discord?.token && settings.discord?.busRouting) names.push("discord");
-  if (settings.telegram?.token && settings.telegram?.busRouting) names.push("telegram");
+  // Telegram mounts on a token alone when a default agent exists: an absent
+  // busRouting derives `{ chats: {}, defaultAgentId }` in mountTelegram (#197).
+  if (settings.telegram?.token && (settings.telegram?.busRouting || defaultAgentId))
+    names.push("telegram");
   if (settings.slack?.botToken && settings.slack?.busRouting) names.push("slack");
   if (settings.web?.bus) names.push("webui");
   return names;
@@ -164,14 +179,29 @@ async function mountTelegram(
   bus: BusCore,
   cfg: TelegramConfig,
   logger: Pick<Console, "warn" | "info" | "error">,
+  defaultAgentId?: string,
 ): Promise<MountedAdapter | null> {
-  if (!cfg.token || !cfg.busRouting) return null;
+  if (!cfg.token) return null;
+  // #197: a fresh install sets `telegram.token` but never writes `busRouting`,
+  // which previously left the adapter unmounted ("no adapters") and the bot
+  // silent. When busRouting is absent, derive `{ chats: {}, defaultAgentId }`:
+  // an empty chats map routes every inbound chat to the default agent via
+  // TelegramAdapter.resolveAgent's fall-through. Explicit busRouting wins. With
+  // no default agent to route to, still skip — nothing would consume.
+  let routing = cfg.busRouting;
+  if (!routing) {
+    if (!defaultAgentId) return null;
+    routing = { chats: {}, defaultAgentId };
+    logger.info(
+      `[bus-adapters] telegram: no busRouting configured; routing all inbound chats to default agent "${defaultAgentId}"`,
+    );
+  }
   const { TelegramAdapter } = await import("../adapters/telegram");
   const adapter = new TelegramAdapter({
     bus,
     token: cfg.token,
     allowedUserIds: cfg.allowedUserIds,
-    routing: cfg.busRouting,
+    routing,
     logger,
   });
   await adapter.start();

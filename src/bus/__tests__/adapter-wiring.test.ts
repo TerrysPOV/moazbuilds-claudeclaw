@@ -14,7 +14,7 @@
  */
 
 import { describe, it, expect } from "bun:test";
-import { wireBusAdapters, stopBusAdapters } from "../adapter-wiring";
+import { wireBusAdapters, stopBusAdapters, configuredBusAdapterNames } from "../adapter-wiring";
 import type { BusCore } from "../core";
 import type { Settings } from "../../config";
 
@@ -118,7 +118,10 @@ describe("wireBusAdapters — gating", () => {
     expect(result.adapters.find((a) => a.name === "discord")).toBeUndefined();
   });
 
-  it("skips Telegram when routing is absent", async () => {
+  it("skips Telegram when routing AND defaultAgentId are both absent", async () => {
+    // #197: a token alone is enough ONLY when a default agent exists to route
+    // to. With no busRouting and no defaultAgentId there is no consumer, so the
+    // adapter is still skipped (and never imported).
     const result = await wireBusAdapters({
       bus: stubBus(),
       settings: baseSettings({
@@ -130,6 +133,24 @@ describe("wireBusAdapters — gating", () => {
           dmIsolation: "shared",
         },
       }),
+      logger: SILENT_LOGGER,
+    });
+    expect(result.adapters.find((a) => a.name === "telegram")).toBeUndefined();
+  });
+
+  it("skips Telegram when token is absent even if a defaultAgentId is provided", async () => {
+    const result = await wireBusAdapters({
+      bus: stubBus(),
+      settings: baseSettings({
+        telegram: {
+          token: "",
+          allowedUserIds: [],
+          listenChats: [],
+          receiveEnabled: true,
+          dmIsolation: "shared",
+        },
+      }),
+      defaultAgentId: "default",
       logger: SILENT_LOGGER,
     });
     expect(result.adapters.find((a) => a.name === "telegram")).toBeUndefined();
@@ -168,6 +189,39 @@ describe("wireBusAdapters — gating", () => {
       logger: SILENT_LOGGER,
     });
     expect(result.adapters.find((a) => a.name === "webui")).toBeUndefined();
+  });
+});
+
+describe("configuredBusAdapterNames — Telegram token-only mount (#197)", () => {
+  const tgSettings = (token: string, busRouting?: { chats: Record<string, string> }) =>
+    baseSettings({
+      telegram: {
+        token,
+        allowedUserIds: [],
+        listenChats: [],
+        receiveEnabled: true,
+        dmIsolation: "shared",
+        ...(busRouting ? { busRouting } : {}),
+      } as Settings["telegram"],
+    });
+
+  it("counts Telegram when token + defaultAgentId are present (busRouting derived)", () => {
+    expect(configuredBusAdapterNames(tgSettings("123:abc"), "default")).toContain("telegram");
+  });
+
+  it("omits Telegram when token is set but there is no busRouting and no defaultAgentId", () => {
+    expect(configuredBusAdapterNames(tgSettings("123:abc"))).not.toContain("telegram");
+    expect(configuredBusAdapterNames(tgSettings("123:abc"), undefined)).not.toContain("telegram");
+  });
+
+  it("counts Telegram with explicit busRouting even when no defaultAgentId is passed", () => {
+    expect(
+      configuredBusAdapterNames(tgSettings("123:abc", { chats: { "100": "triage" } })),
+    ).toContain("telegram");
+  });
+
+  it("omits Telegram when token is absent even with a defaultAgentId", () => {
+    expect(configuredBusAdapterNames(tgSettings(""), "default")).not.toContain("telegram");
   });
 });
 
