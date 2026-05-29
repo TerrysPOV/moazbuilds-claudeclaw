@@ -220,9 +220,14 @@ const DEFAULT_SETTINGS: Settings = {
   // enterprise deployments where audit, cost-ceiling, or regulatory
   // constraints make API billing the safer or only viable route.
   runtime: "bus",
-  // Default no agents. Operators who opt in to `runtime: "bus"` declare
-  // agents explicitly. Spec §5.3 / §10 Sprint 5.2.
-  agents: [],
+  // One default agent so a fresh install actually mounts something. The
+  // runtime default is `bus`, which spawns one `claude` per `agents[]` entry;
+  // an empty default would mount the bus with zero agents — daemon up,
+  // channels polling, but nothing behind them ("no agents declared"). This is
+  // the *fresh-install* default only: `parseBusAgents` builds from `raw.agents`
+  // and never reads this list (config.ts:1061), so existing installs that omit
+  // `agents` or set `agents: []` are unaffected (#196 / cause #1 of #193).
+  agents: [{ id: "default" }],
   plugins: {},
   memorySearch: {},
 };
@@ -642,7 +647,10 @@ export interface Settings {
    * Bus runtime agent declarations. Only consulted when `runtime: "bus"`;
    * `runtime: "pty"` ignores this field entirely. Empty list = the daemon
    * mounts the Bus stack but spawns no agents (operator wires them via
-   * REST/CLI later). See `BusAgentSettings` for the per-agent shape.
+   * REST/CLI later). A fresh install ships one `{ id: "default" }` entry
+   * (see `DEFAULT_SETTINGS`) so the bus mounts a working agent out of the box;
+   * clearing the list back to `[]` is a deliberate "wire later" opt-out.
+   * See `BusAgentSettings` for the per-agent shape.
    */
   agents: BusAgentSettings[];
   pty: PtyConfig;
