@@ -185,4 +185,33 @@ describe("/api/llm-router/models", () => {
       delete process.env.OPENROUTER_API_KEY;
     }
   });
+
+  it("forwards maxPromptPrice / minContext / limit query params to the catalogue", async () => {
+    // Replace the stub with one that captures params, so we can assert the
+    // route's parseLlmModelsQuery actually reaches catalogue.search (#70).
+    let captured: Record<string, unknown> | null = null;
+    const capturing = {
+      async search(params: Record<string, unknown>) {
+        captured = params;
+        return { models: [], cachedAt: 0 };
+      },
+    };
+    __setLlmRouterCatalogueForTests(capturing as unknown as ModelCatalogue);
+    process.env.OPENROUTER_API_KEY = "test-key";
+    try {
+      const res = await fetch(
+        `${base}/api/llm-router/models?query=foo&maxPromptPrice=0.000005&minContext=32000&limit=10`,
+        { headers: auth },
+      );
+      expect(res.status).toBe(200);
+      expect(captured).toEqual({
+        query: "foo",
+        maxPromptPrice: 0.000005,
+        minContext: 32000,
+        limit: 10,
+      });
+    } finally {
+      delete process.env.OPENROUTER_API_KEY;
+    }
+  });
 });
