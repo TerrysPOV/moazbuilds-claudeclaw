@@ -1870,4 +1870,205 @@ setInterval(loadKanban, 10000);
     }
 
     fetchUsage();
-    setInterval(fetchUsage, 60_000);`;
+    setInterval(fetchUsage, 60_000);
+
+    // --- LLM Router (#70 Phase C) — Settings → 🧠 LLM Router → modal ---
+    (function lrInit() {
+      const lrConfig = $("lr-config");
+      const lrModal = $("lr-modal");
+      const lrModalClose = $("lr-modal-close");
+      const lrSearchInput = $("lr-search-input");
+      const lrSearchStatus = $("lr-search-status");
+      const lrResults = $("lr-results");
+      const lrModalStatus = $("lr-modal-status");
+      const lrCancelBtn = $("lr-cancel-btn");
+      const lrSaveBtn = $("lr-save-btn");
+      const lrInfoEl = $("lr-info");
+      const tierEls = {
+        fast: $("lr-tier-fast"),
+        balanced: $("lr-tier-balanced"),
+        reasoning: $("lr-tier-reasoning"),
+      };
+      if (!lrConfig || !lrModal) return;
+
+      let tiers = { fast: [], balanced: [], reasoning: [] };
+      let dirty = false;
+      let searchAbort = null;
+      let searchDebounce = 0;
+
+      function renderChips() {
+        ["fast", "balanced", "reasoning"].forEach(function(t) {
+          const el = tierEls[t];
+          if (!el) return;
+          el.replaceChildren();
+          (tiers[t] || []).forEach(function(id) {
+            const chip = document.createElement("span");
+            chip.className = "lr-chip";
+            chip.textContent = id;
+            const x = document.createElement("button");
+            x.type = "button";
+            x.className = "lr-chip-x";
+            x.setAttribute("aria-label", "Remove " + id);
+            x.textContent = "×";
+            x.addEventListener("click", function() {
+              tiers[t] = (tiers[t] || []).filter(function(m) { return m !== id; });
+              dirty = true;
+              renderChips();
+            });
+            chip.appendChild(x);
+            el.appendChild(chip);
+          });
+          if (!tiers[t] || tiers[t].length === 0) {
+            const empty = document.createElement("span");
+            empty.className = "lr-empty";
+            empty.textContent = "(none)";
+            el.appendChild(empty);
+          }
+        });
+        const total = (tiers.fast || []).length + (tiers.balanced || []).length + (tiers.reasoning || []).length;
+        if (lrInfoEl) lrInfoEl.textContent = total === 0 ? "No models configured" : (total + " model(s) across tiers");
+      }
+
+      function fmtPrice(p) {
+        if (!p) return "—";
+        // OpenRouter pricing is per-token; show $/Mtok for readability.
+        const perMtok = p * 1_000_000;
+        return "$" + (perMtok < 1 ? perMtok.toFixed(3) : perMtok.toFixed(2)) + "/Mt";
+      }
+
+      function renderResults(models) {
+        if (!lrResults) return;
+        lrResults.replaceChildren();
+        if (!models || models.length === 0) {
+          const empty = document.createElement("div");
+          empty.className = "lr-empty";
+          empty.textContent = "No matches.";
+          lrResults.appendChild(empty);
+          return;
+        }
+        models.forEach(function(m) {
+          const row = document.createElement("div");
+          row.className = "lr-row";
+          const meta = document.createElement("div");
+          meta.className = "lr-row-meta";
+          const id = document.createElement("div");
+          id.className = "lr-row-id";
+          id.textContent = m.id;
+          const sub = document.createElement("div");
+          sub.className = "lr-row-sub";
+          const ctx = m.context_length ? Math.round(m.context_length / 1000) + "k" : "?";
+          sub.textContent = m.name + " · " + ctx + " · " + fmtPrice(m.pricing && m.pricing.prompt);
+          meta.appendChild(id);
+          meta.appendChild(sub);
+          const btns = document.createElement("div");
+          btns.className = "lr-row-btns";
+          ["fast", "balanced", "reasoning"].forEach(function(t) {
+            const b = document.createElement("button");
+            b.type = "button";
+            b.className = "hb-toggle";
+            b.textContent = "+ " + t;
+            b.addEventListener("click", function() {
+              tiers[t] = tiers[t] || [];
+              if (tiers[t].indexOf(m.id) === -1) {
+                tiers[t].push(m.id);
+                dirty = true;
+                renderChips();
+              }
+            });
+            btns.appendChild(b);
+          });
+          row.appendChild(meta);
+          row.appendChild(btns);
+          lrResults.appendChild(row);
+        });
+      }
+
+      async function runSearch() {
+        if (!lrSearchInput) return;
+        const q = (lrSearchInput.value || "").trim();
+        if (lrSearchStatus) lrSearchStatus.textContent = q ? "Searching…" : "Loading catalogue…";
+        if (searchAbort) searchAbort.abort();
+        searchAbort = new AbortController();
+        try {
+          const url = "/api/llm-router/models" + (q ? ("?query=" + encodeURIComponent(q)) : "");
+          const res = await fetch(url, { signal: searchAbort.signal });
+          const data = await res.json();
+          if (!data || data.ok !== true) {
+            if (lrSearchStatus) lrSearchStatus.textContent = (data && data.error) || "Search failed";
+            return;
+          }
+          if (lrSearchStatus) lrSearchStatus.textContent = data.models.length + " result(s)";
+          renderResults(data.models);
+        } catch (err) {
+          if (err && err.name === "AbortError") return;
+          if (lrSearchStatus) lrSearchStatus.textContent = "Search failed";
+        }
+      }
+
+      async function loadCurrent() {
+        try {
+          const res = await fetch("/api/settings/llm-router");
+          const data = await res.json();
+          if (data && data.ok && data.llmRouter && data.llmRouter.tiers) {
+            tiers = {
+              fast: (data.llmRouter.tiers.fast || []).slice(),
+              balanced: (data.llmRouter.tiers.balanced || []).slice(),
+              reasoning: (data.llmRouter.tiers.reasoning || []).slice(),
+            };
+          }
+        } catch (_e) { /* keep defaults */ }
+        renderChips();
+      }
+
+      function openModal() {
+        loadCurrent();
+        runSearch();
+        if (lrModal) {
+          lrModal.setAttribute("aria-hidden", "false");
+          lrModal.classList.add("open");
+        }
+        if (lrModalStatus) lrModalStatus.textContent = "";
+      }
+      function closeModal() {
+        if (lrModal) {
+          lrModal.setAttribute("aria-hidden", "true");
+          lrModal.classList.remove("open");
+        }
+        dirty = false;
+      }
+
+      lrConfig.addEventListener("click", openModal);
+      if (lrModalClose) lrModalClose.addEventListener("click", closeModal);
+      if (lrCancelBtn) lrCancelBtn.addEventListener("click", closeModal);
+      if (lrSearchInput) {
+        lrSearchInput.addEventListener("input", function() {
+          window.clearTimeout(searchDebounce);
+          searchDebounce = window.setTimeout(runSearch, 220);
+        });
+      }
+      if (lrSaveBtn) {
+        lrSaveBtn.addEventListener("click", async function() {
+          if (lrModalStatus) lrModalStatus.textContent = "Saving…";
+          try {
+            const res = await mutatingFetch("/api/settings/llm-router", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ tiers: tiers }),
+            });
+            const data = await res.json();
+            if (data && data.ok) {
+              if (lrModalStatus) lrModalStatus.textContent = "Saved.";
+              dirty = false;
+              renderChips();
+            } else {
+              if (lrModalStatus) lrModalStatus.textContent = (data && data.error) || "Save failed";
+            }
+          } catch (_e) {
+            if (lrModalStatus) lrModalStatus.textContent = "Save failed";
+          }
+        });
+      }
+
+      // Initial info-line load (so the Settings panel shows the count before the modal is opened).
+      loadCurrent();
+    })();`;

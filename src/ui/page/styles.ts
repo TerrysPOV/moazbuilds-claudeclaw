@@ -1914,4 +1914,30 @@ export const pageStyles = String.raw`    :root {
   .usage-td-label { max-width: 110px; }
   .usage-td-cost { min-width: 80px; }
 }
+
+/* --- LLM Router modal (#70 Phase C) — reuses .hb-* for buttons + inputs --- */
+.lr-card { max-width: 720px; }
+.lr-body { display: flex; flex-direction: column; gap: 16px; padding: 16px 18px 18px; }
+.lr-tiers { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.lr-tier { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 8px 10px; min-height: 64px; }
+.lr-tier-head { font-size: 12px; opacity: 0.7; text-transform: lowercase; margin-bottom: 6px; }
+.lr-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.lr-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px 2px 8px; background: rgba(120,160,255,0.12); border: 1px solid rgba(120,160,255,0.28); border-radius: 12px; font-size: 11px; font-family: ui-monospace, monospace; }
+.lr-chip-x { background: transparent; border: 0; color: inherit; cursor: pointer; opacity: 0.6; padding: 0 2px; font-size: 13px; line-height: 1; }
+.lr-chip-x:hover { opacity: 1; }
+.lr-empty { font-size: 11px; opacity: 0.45; font-style: italic; }
+.lr-search { display: flex; flex-direction: column; gap: 6px; }
+.lr-status { font-size: 11px; opacity: 0.6; min-height: 14px; }
+.lr-results { max-height: 280px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; border: 1px solid rgba(255,255,255,0.06); border-radius: 6px; padding: 4px; }
+.lr-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; border-radius: 4px; }
+.lr-row:hover { background: rgba(255,255,255,0.04); }
+.lr-row-meta { min-width: 0; flex: 1; }
+.lr-row-id { font-family: ui-monospace, monospace; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lr-row-sub { font-size: 11px; opacity: 0.6; }
+.lr-row-btns { display: flex; gap: 4px; flex-shrink: 0; }
+.lr-row-btns .hb-toggle { font-size: 10px; padding: 2px 6px; }
+@media (max-width: 600px) {
+  .lr-tiers { grid-template-columns: 1fr; }
+  .lr-row { flex-direction: column; align-items: flex-start; }
+}
 `;
