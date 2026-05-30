@@ -13,7 +13,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { getMcpBridge } from "../mcp-bridge.js";
-import { loadSettings } from "../../config.js";
+import { loadSettings, reloadSettings } from "../../config.js";
 import { chatCompletion, DEFAULT_OPENROUTER_BASE_URL, type OpenRouterDeps } from "./openrouter.js";
 import { ModelCatalogue } from "./catalogue.js";
 import { callLlm, type Dispatch } from "./router.js";
@@ -88,7 +88,14 @@ export function buildRuntimeConfig(settings: {
 }
 
 export interface LlmRouterHandlerDeps {
-  config: LlmRouterRuntimeConfig;
+  /**
+   * Either a static config (back-compat for tests) or a `getConfig` factory
+   * invoked per call (#70 Phase C). The factory lets `startLlmRouterServer`
+   * pick up dashboard tier edits without a daemon restart: it returns
+   * `await reloadSettings()` → `buildRuntimeConfig(settings)` each time.
+   */
+  config?: LlmRouterRuntimeConfig;
+  getConfig?: () => Promise<LlmRouterRuntimeConfig>;
   apiKey: string;
   fetchImpl?: typeof fetch;
   /** Catalogue override for tests. */
@@ -101,9 +108,17 @@ export interface LlmRouterHandlerDeps {
  * Returns the raw result object (the transport layer JSON-stringifies it).
  */
 export function createLlmRouterHandlers(deps: LlmRouterHandlerDeps) {
+  if (!deps.config && !deps.getConfig) {
+    throw new Error("createLlmRouterHandlers requires `config` or `getConfig`.");
+  }
+  const getConfig = deps.getConfig ?? (async () => deps.config as LlmRouterRuntimeConfig);
+  // The catalogue + dispatch only need the API key + base URL — both stable
+  // for the process lifetime — so they're built once. Tier changes go through
+  // `getConfig()` per call, which is the only part dashboard edits affect.
+  const initial = deps.config ?? null;
   const orDeps: OpenRouterDeps = {
     apiKey: deps.apiKey,
-    baseUrl: deps.config.openRouterBaseUrl,
+    baseUrl: initial?.openRouterBaseUrl ?? "https://openrouter.ai/api/v1",
     ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
   };
   const catalogue = deps.catalogue ?? new ModelCatalogue(orDeps);
@@ -113,9 +128,10 @@ export function createLlmRouterHandlers(deps: LlmRouterHandlerDeps) {
   async function llmCall(rawArgs: Record<string, unknown>) {
     if (!deps.apiKey) throw new Error("OPENROUTER_API_KEY is not set in the daemon environment.");
     const params = parseLlmCallArgs(rawArgs);
+    const config = await getConfig();
     const startedAt = Date.now();
     try {
-      const result = await callLlm(params, deps.config, dispatch);
+      const result = await callLlm(params, config, dispatch);
       audit("llm_call_dispatched", {
         tier: params.tier ?? null,
         model: result.model,
@@ -185,8 +201,14 @@ function parseLlmModelsArgs(raw: Record<string, unknown>): LlmModelsParams {
 }
 
 export async function startLlmRouterServer(): Promise<void> {
-  const settings = await loadSettings();
-  const config = buildRuntimeConfig(settings as { llmRouter?: Partial<LlmRouterRuntimeConfig> });
+  // One eager read so we fail-fast on a malformed settings.json at boot, then
+  // re-read on every tool call so dashboard tier edits (#70 Phase C) take
+  // effect without a daemon restart. settings.json is small; cost is ms.
+  await loadSettings();
+  const getConfig = async () => {
+    const settings = await reloadSettings();
+    return buildRuntimeConfig(settings as { llmRouter?: Partial<LlmRouterRuntimeConfig> });
+  };
   const bridge = getMcpBridge();
   const apiKey = process.env.OPENROUTER_API_KEY ?? "";
   if (!apiKey) {
@@ -197,7 +219,7 @@ export async function startLlmRouterServer(): Promise<void> {
     );
   }
   const handlers = createLlmRouterHandlers({
-    config,
+    getConfig,
     apiKey,
     audit: (event, payload) => bridge.audit(event, payload),
   });

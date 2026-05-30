@@ -139,6 +139,43 @@ describe("createLlmRouterHandlers.llmCall", () => {
   });
 });
 
+describe("createLlmRouterHandlers — live-reload via getConfig (#70 Phase C)", () => {
+  it("invokes getConfig per llm_call so dashboard tier edits take effect without restart", async () => {
+    let configCalls = 0;
+    const tierLists: Array<string[]> = [["x/first"], ["x/second"]];
+    const getConfig = async () => {
+      const fast = tierLists[Math.min(configCalls, tierLists.length - 1)];
+      configCalls++;
+      return {
+        tiers: { fast, balanced: [], reasoning: [] },
+        openRouterBaseUrl: "https://or.test/api/v1",
+      };
+    };
+    const seen: string[] = [];
+    const fetchImpl = (async (url: string, init: RequestInit) => {
+      if (url.endsWith("/chat/completions")) {
+        const model = JSON.parse(init.body as string).model;
+        seen.push(model);
+        return new Response(
+          JSON.stringify({
+            model,
+            choices: [{ message: { content: "ok" } }],
+            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response("nf", { status: 404 });
+    }) as unknown as typeof fetch;
+
+    const h = createLlmRouterHandlers({ getConfig, apiKey: "k", fetchImpl });
+    await h.llmCall({ tier: "fast", messages: [{ role: "user", content: "1" }] });
+    await h.llmCall({ tier: "fast", messages: [{ role: "user", content: "2" }] });
+    expect(seen).toEqual(["x/first", "x/second"]); // second call saw the updated tier
+    expect(configCalls).toBeGreaterThanOrEqual(2);
+  });
+});
+
 describe("createLlmRouterHandlers.llmModels", () => {
   it("searches the catalogue and audits", async () => {
     const events: string[] = [];

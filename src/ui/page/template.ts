@@ -74,6 +74,13 @@ ${pageStyles}
       </div>
       <div class="setting-item">
         <div class="setting-main">
+          <div class="settings-label">🧠 LLM Router</div>
+          <div class="settings-meta" id="lr-info">Pick OpenRouter models per tier</div>
+        </div>
+        <button class="hb-config" id="lr-config" type="button">Configure</button>
+      </div>
+      <div class="setting-item">
+        <div class="setting-main">
           <div class="settings-label">🧾 Advanced</div>
           <div class="settings-meta">Technical runtime and JSON files</div>
         </div>
@@ -104,6 +111,45 @@ ${pageStyles}
           </div>
         </div>
       </form>
+    </article>
+  </section>
+  <section class="info-modal" id="lr-modal" aria-live="polite" aria-hidden="true">
+    <article class="hb-card lr-card">
+      <div class="info-head">
+        <span>LLM Router</span>
+        <button class="settings-close" id="lr-modal-close" type="button" aria-label="Close LLM router">×</button>
+      </div>
+      <div class="lr-body">
+        <div class="lr-tiers">
+          <div class="lr-tier">
+            <div class="lr-tier-head">⚡ fast</div>
+            <div class="lr-chips" id="lr-tier-fast" data-tier="fast"></div>
+          </div>
+          <div class="lr-tier">
+            <div class="lr-tier-head">⚖️ balanced</div>
+            <div class="lr-chips" id="lr-tier-balanced" data-tier="balanced"></div>
+          </div>
+          <div class="lr-tier">
+            <div class="lr-tier-head">🧠 reasoning</div>
+            <div class="lr-chips" id="lr-tier-reasoning" data-tier="reasoning"></div>
+          </div>
+        </div>
+        <div class="lr-search">
+          <label class="hb-field" for="lr-search-input">
+            <span class="hb-label">Search OpenRouter models</span>
+            <input class="hb-input" id="lr-search-input" type="search" placeholder="e.g. claude, llama, deepseek" autocomplete="off" />
+          </label>
+          <div class="lr-status" id="lr-search-status"></div>
+          <div class="lr-results" id="lr-results"></div>
+        </div>
+        <div class="hb-actions">
+          <div class="hb-status" id="lr-modal-status"></div>
+          <div class="hb-buttons">
+            <button class="hb-btn ghost" id="lr-cancel-btn" type="button">Cancel</button>
+            <button class="hb-btn solid" id="lr-save-btn" type="button">Save</button>
+          </div>
+        </div>
+      </div>
     </article>
   </section>
   <section class="info-modal" id="info-modal" aria-live="polite" aria-hidden="true">

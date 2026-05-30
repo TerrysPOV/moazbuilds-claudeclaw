@@ -6,6 +6,13 @@ import { checkToken } from "./auth";
 import type { StartWebUiOptions, WebServerHandle } from "./types";
 import { buildState, buildTechnicalInfo, sanitizeSettings } from "./services/state";
 import { readHeartbeatSettings, updateHeartbeatSettings } from "./services/settings";
+import {
+  readLlmRouterSettings,
+  updateLlmRouterSettings,
+  type LlmRouterTiers,
+} from "./services/llm-router-settings";
+import { ModelCatalogue } from "../plugins/llm-router/catalogue";
+import type { LlmModelsParams } from "../plugins/llm-router/types";
 import { createQuickJob, deleteJob } from "./services/jobs";
 import { fireJob } from "../commands/fire";
 import { readLogs } from "./services/logs";
@@ -27,6 +34,49 @@ import { getHttpGateway } from "../plugins/http-gateway.js";
 //   - Per-session CSRF tokens (below) on state-changing routes.
 const CSRF_HEADER_NAME = "X-CSRF-Token";
 const MAX_CSRF_TOKENS = 10000;
+
+// LLM router catalogue cache (#70 Phase C). Lazy module-level singleton —
+// rebuilt only when the API key or base URL changes between requests.
+let _llmRouterCatalogue: { key: string; baseUrl: string; instance: ModelCatalogue } | null = null;
+async function getLlmRouterCatalogue(apiKey: string, baseUrl: string): Promise<ModelCatalogue> {
+  // A test-injected catalogue (key === "__test__") is sticky: routes hit the
+  // stub regardless of the runtime key/baseUrl. Production paths only rebuild
+  // when key or baseUrl changes.
+  if (_llmRouterCatalogue?.key === "__test__") return _llmRouterCatalogue.instance;
+  if (
+    !_llmRouterCatalogue ||
+    _llmRouterCatalogue.key !== apiKey ||
+    _llmRouterCatalogue.baseUrl !== baseUrl
+  ) {
+    _llmRouterCatalogue = {
+      key: apiKey,
+      baseUrl,
+      instance: new ModelCatalogue({ apiKey, baseUrl }),
+    };
+  }
+  return _llmRouterCatalogue.instance;
+}
+
+/** Test seam — reset the singleton between tests (or inject a stub). */
+export function __setLlmRouterCatalogueForTests(instance: ModelCatalogue | null): void {
+  _llmRouterCatalogue = instance ? { key: "__test__", baseUrl: "__test__", instance } : null;
+}
+
+function parseLlmModelsQuery(url: URL): LlmModelsParams {
+  const sp = url.searchParams;
+  const num = (k: string): number | undefined => {
+    const v = sp.get(k);
+    if (v === null || v === "") return undefined;
+    const n = Number.parseFloat(v);
+    return Number.isFinite(n) ? n : undefined;
+  };
+  return {
+    ...(sp.get("query") ? { query: sp.get("query") as string } : {}),
+    ...(num("maxPromptPrice") !== undefined ? { maxPromptPrice: num("maxPromptPrice") } : {}),
+    ...(num("minContext") !== undefined ? { minContext: num("minContext") } : {}),
+    ...(num("limit") !== undefined ? { limit: num("limit") } : {}),
+  };
+}
 
 interface CsrfEntry {
   tokens: Array<{ token: string; expiresAt: number }>;
@@ -351,6 +401,64 @@ export function startWebUi(opts: StartWebUiOptions): WebServerHandle {
         } catch (err) {
           console.error("Heartbeat settings read failed:", err);
           return json({ ok: false, error: "Failed to read heartbeat settings" });
+        }
+      }
+
+      // LLM router settings (#70 Phase C) — read + patch tiers.
+      if (url.pathname === "/api/settings/llm-router" && req.method === "GET") {
+        try {
+          return json({ ok: true, llmRouter: await readLlmRouterSettings() });
+        } catch (err) {
+          console.error("LLM router settings read failed:", err);
+          return json({ ok: false, error: "Failed to read llm-router settings" });
+        }
+      }
+
+      if (url.pathname === "/api/settings/llm-router" && req.method === "POST") {
+        const csrfError = requireCsrf(req);
+        if (csrfError) return csrfError;
+        try {
+          const body = (await req.json()) as { tiers?: Partial<LlmRouterTiers> };
+          const tiersPatch: Partial<LlmRouterTiers> = {};
+          if (body.tiers && typeof body.tiers === "object") {
+            const keys = ["fast", "balanced", "reasoning"] as const;
+            for (const k of keys) {
+              const v = (body.tiers as Record<string, unknown>)[k];
+              if (Array.isArray(v))
+                tiersPatch[k] = v.filter((x): x is string => typeof x === "string");
+            }
+          }
+          if (Object.keys(tiersPatch).length === 0) {
+            return json({ ok: false, error: "no tier fields provided" }, 400);
+          }
+          const next = await updateLlmRouterSettings({ tiers: tiersPatch });
+          return json({ ok: true, llmRouter: next });
+        } catch (err) {
+          console.error("LLM router settings update failed:", err);
+          return json({ ok: false, error: "Failed to update llm-router settings" });
+        }
+      }
+
+      // OpenRouter catalogue proxy backing the dashboard model picker (#70 D3).
+      // Lazy singleton catalogue; reads OPENROUTER_API_KEY at request time so a
+      // late-set env var works without a daemon restart.
+      if (url.pathname === "/api/llm-router/models" && req.method === "GET") {
+        try {
+          const params = parseLlmModelsQuery(url);
+          const apiKey = process.env.OPENROUTER_API_KEY ?? "";
+          if (!apiKey) {
+            return json(
+              { ok: false, error: "OPENROUTER_API_KEY is not set in the daemon environment" },
+              503,
+            );
+          }
+          const settings = await readLlmRouterSettings();
+          const catalogue = await getLlmRouterCatalogue(apiKey, settings.openRouterBaseUrl);
+          const { models, cachedAt } = await catalogue.search(params);
+          return json({ ok: true, models, cachedAt });
+        } catch (err) {
+          console.error("LLM router catalogue search failed:", err);
+          return json({ ok: false, error: "catalogue search failed" }, 502);
         }
       }
 
