@@ -8,7 +8,11 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createReceiptStore, hashPrompt, type ReceiptRecord, type ReceiptStore } from "../receipt";
-import { type AgentProcessLike, createPromptStreamHandler } from "../receipt-wiring";
+import {
+  type AgentProcessLike,
+  createPromptStreamHandler,
+  unwrapChannelText,
+} from "../receipt-wiring";
 
 let tmpDir: string;
 let logPath: string;
@@ -38,6 +42,30 @@ function fakeAgent(pid: number, sendImpl?: (line: string) => Promise<void>): Age
     send_prompt_stream: sendImpl ?? (() => Promise.resolve()),
   };
 }
+
+describe("unwrapChannelText", () => {
+  test("passes through plain text unchanged", () => {
+    expect(unwrapChannelText("hello world")).toBe("hello world");
+  });
+
+  test("extracts inner text from a channel wrapper", () => {
+    const wrapped =
+      '<channel source="webui" chat_id="inject" user_id="webui" ts="2026-05-31T00:00:00Z">hello world</channel>';
+    expect(unwrapChannelText(wrapped)).toBe("hello world");
+  });
+
+  test("decodes XML entities (`<`, `>`, `&`) in the inner text", () => {
+    const wrapped =
+      '<channel source="webui" chat_id="x" user_id="x" ts="t">a &amp; b &lt; c &gt; d</channel>';
+    expect(unwrapChannelText(wrapped)).toBe("a & b < c > d");
+  });
+
+  test("matches hashPrompt of the unwrapped form", () => {
+    const original = "Réponds: ok";
+    const wrapped = `<channel source="webui" chat_id="inject" user_id="webui" ts="2026-05-31T00:00:00Z">${original}</channel>`;
+    expect(hashPrompt(unwrapChannelText(wrapped))).toBe(hashPrompt(original));
+  });
+});
 
 describe("createPromptStreamHandler", () => {
   test("writes to the PTY when no receipt is open (back-compat)", async () => {
@@ -125,6 +153,20 @@ describe("createPromptStreamHandler", () => {
     expect(recs).toHaveLength(1);
     expect(recs[0].final_state).toBe("stale_session");
     expect(recs[0].notes?.reason).toBe("no_send_prompt_stream");
+  });
+
+  test("matches receipt by hash of unwrapped channel text (real bus path)", async () => {
+    // Mirrors what `BusCoreImpl.sendPrompt` actually delivers: the prompt is
+    // wrapped in a <channel ...>...</channel> block. The handler must unwrap
+    // before hashing so the receipt opened with the *raw* prompt hash is
+    // found.
+    const raw = "réponds: ok";
+    const wrapped = `<channel source="webui" chat_id="inject" user_id="webui" ts="t0">${raw}</channel>`;
+    const r = store.open("m-wrap", { agent_id: "alpha", prompt_hash: hashPrompt(raw) });
+    const handler = createPromptStreamHandler(() => fakeAgent(31415), { store });
+    await handler("alpha", wrapped);
+    expect(r.record.process_pid).toBe(31415);
+    expect(r.record.notes?.stdin_written_at).toBeDefined();
   });
 
   test("does not crash when no receipt AND PTY write fails", async () => {

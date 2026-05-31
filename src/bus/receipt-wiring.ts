@@ -8,6 +8,25 @@
  */
 import { getDefaultReceiptStore, hashPrompt, type ReceiptStore } from "./receipt";
 
+/**
+ * Recover the original prompt text from the `<channel source=... chat_id=...
+ * user_id=... ts=...>TEXT</channel>` wrapper that `BusCoreImpl.sendPrompt`
+ * adds before invoking `streamPromptHandler`. Returns the inner text with
+ * XML entities reversed so its `hashPrompt` matches the one the caller
+ * computed on the raw prompt at receipt-open time.
+ *
+ * Idempotent for non-wrapped input — direct callers (no bus wrapper) get
+ * their text back unchanged.
+ */
+export function unwrapChannelText(text: string): string {
+  const m = text.match(/^<channel\s[^>]*>([\s\S]*)<\/channel>$/);
+  if (!m) return text;
+  // Reverse `escapeXmlText` from `bus/core.ts`: text-mode escaping only
+  // covers `&`, `<`, `>`. Decode in reverse application order so an
+  // already-encoded `&amp;` isn't double-unescaped.
+  return m[1].replace(/&gt;/g, ">").replace(/&lt;/g, "<").replace(/&amp;/g, "&");
+}
+
 /** Structural view of the bits an `AgentProcess` exposes that we touch.
  *  Declared here so the helper doesn't drag in `session-agent-process.ts`. */
 export interface AgentProcessLike {
@@ -52,7 +71,11 @@ export function createPromptStreamHandler(
 
   return async (agent_id: string, text: string): Promise<void> => {
     const proc = getAgent(agent_id);
-    const receipt = store.findByPromptHash(hashPrompt(text));
+    // `BusCoreImpl.sendPrompt` wraps the prompt in a `<channel ...>...</channel>`
+    // block before invoking us, so the receipt — keyed on the *raw* prompt at
+    // open time — is found by hashing the unwrapped inner text. Plain
+    // (unwrapped) callers fall through unchanged.
+    const receipt = store.findByPromptHash(hashPrompt(unwrapChannelText(text)));
 
     if (proc && typeof proc.send_prompt_stream === "function") {
       if (receipt) {
