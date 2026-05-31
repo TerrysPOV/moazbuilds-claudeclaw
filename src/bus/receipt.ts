@@ -18,7 +18,7 @@
  */
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync } from "node:fs";
-import { appendFile } from "node:fs/promises";
+import { appendFile, chmod } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -65,7 +65,11 @@ export interface OpenReceipt {
   /** Merge fields into the in-progress record. Idempotent for repeated keys. */
   patch(fields: Partial<ReceiptRecord>): void;
   /** Stamp the final state and append to the receipts log. Idempotent — a
-   *  second `close` call is a no-op (the first one wins). */
+   *  second `close` call is a no-op (the first one wins).
+   *
+   *  `notes` is caller-controlled free-form metadata (latency, error kind,
+   *  retry count, etc.). **Do not put secrets here** — receipts land on disk
+   *  as JSONL for offline analysis. Hash anything sensitive first. */
   close(state: ReceiptFinalState, notes?: Record<string, unknown>): Promise<void>;
 }
 
@@ -118,9 +122,24 @@ export function createReceiptStore(opts: ReceiptStoreOptions = {}): ReceiptStore
     onError(err as Error, "mkdir");
   }
 
+  // Tighten the receipts.jsonl file mode to 0600 once we've written to it.
+  // The default umask leaves it 0664 (group-readable), which is loose for a
+  // log that carries operational metadata (session_id, pid, cwd, prompt hash).
+  // Idempotent — we only need to chmod the first time the file actually exists
+  // on disk for this store.
+  let modeEnsured = false;
+
   async function appendRecord(rec: ReceiptRecord): Promise<void> {
     try {
       await appendFile(logPath, `${JSON.stringify(rec)}\n`, "utf8");
+      if (!modeEnsured) {
+        try {
+          await chmod(logPath, 0o600);
+        } catch (err) {
+          onError(err as Error, "chmod");
+        }
+        modeEnsured = true;
+      }
     } catch (err) {
       onError(err as Error, "append");
     }
@@ -128,16 +147,21 @@ export function createReceiptStore(opts: ReceiptStoreOptions = {}): ReceiptStore
 
   function makeReceipt(message_id: string, fields: Partial<ReceiptRecord>): OpenReceipt {
     const startedAt = now();
+    // Drop any caller-supplied identity / terminal fields up-front so a typo
+    // in `fields` can't change which receipt this is or close it prematurely.
+    const {
+      message_id: _ignoreMessageId,
+      received_at: _ignoreReceivedAt,
+      final_state: _ignoreFinalState,
+      duration_ms: _ignoreDurationMs,
+      ...safeFields
+    } = fields;
     const rec: ReceiptRecord = {
       message_id,
       received_at: startedAt.toISOString(),
       // sentinel — overwritten by close()
       final_state: "message_polled",
-      ...fields,
-      // received_at + message_id from caller's fields are ignored on purpose
-      // so a typo can't change the receipt's identity.
-      ...(fields.message_id ? { message_id } : {}),
-      ...(fields.received_at ? { received_at: startedAt.toISOString() } : {}),
+      ...safeFields,
     };
     let closed = false;
     const receipt: OpenReceipt = {

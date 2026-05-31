@@ -129,6 +129,23 @@ describe("ReceiptStore", () => {
     expect(existsSync(deep)).toBe(true);
   });
 
+  test("receipts.jsonl is tightened to 0600 after the first write", async () => {
+    const { statSync } = await import("node:fs");
+    const store = createReceiptStore({ path: logPath });
+    await store.open("mode").close("turn_observed");
+    const mode = statSync(logPath).mode & 0o777;
+    expect(mode).toBe(0o600);
+  });
+
+  test("patch() cannot inject duration_ms — it's always computed at close", async () => {
+    const store = createReceiptStore({ path: logPath });
+    const r = store.open("dur-protect");
+    r.patch({ duration_ms: 999_999 });
+    await r.close("turn_observed");
+    const [rec] = readReceipts();
+    expect(rec.duration_ms).toBeLessThan(999_999);
+  });
+
   test("write failures surface to onError and never throw", async () => {
     const errs: { err: Error; ctx: string }[] = [];
     const store = createReceiptStore({
